@@ -1,0 +1,13 @@
+.admin-product-visibility-help { margin:0; padding:15px 20px; color:var(--muted-foreground); font-size:11px; line-height:1.8; }
+.admin-product-visibility-table th:last-child,.admin-product-visibility-table td:last-child { text-align:right; }
+.admin-product-visibility-table td strong { font-weight:550; }
+.admin-product-visibility-table td small { display:inline; margin-left:8px; }
+.admin-product-visibility-form { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:8px 12px; padding:18px 20px; border-top:1px solid var(--border); }
+.admin-product-visibility-form label { grid-column:1/-1; font-size:12px; }
+.admin-product-visibility-form>.admin-error,.admin-product-visibility-form>.admin-success { grid-column:1/-1; margin:0; }
+@media(max-width:760px) {
+  .admin-product-visibility-help { padding-inline:14px; }
+  .admin-product-visibility-form { grid-template-columns:1fr; padding:16px 14px; }
+  .admin-product-visibility-form label { grid-column:1; }
+  .admin-product-visibility-form>button { width:100%; }
+}

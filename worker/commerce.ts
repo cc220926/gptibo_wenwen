@@ -28,6 +28,7 @@ import { invoiceRoutes } from './invoices.ts'
 import { publicAnnouncement } from './announcements.ts'
 import { rechargeReminderPreview } from './recharge-reminders.ts'
 import { adminGmailOrder, confirmGmailNotPurchased, fulfillGmail, gmailCheckoutEnabled, gmailProductsRoute, gmailSnapshot, gmailSnapshotStatement } from './account_supplier/service.ts'
+import { platformProductHidden, platformProductVisibility, platformProductVisibilityRoute } from './platform-product-visibility.ts'
 
 type Plan = { delivery_instructions: string; partner_enabled: number; id: string; product_id: string; name: string; price_cents: number; enabled: number; renewal_only: number; version: number }
 type OrderPartnerSource = { id: string; slug: string; name: string; email: string; wechat: string; qq: string }
@@ -97,16 +98,18 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
       const testing = env.ORDER_TESTING_ENABLED === 'true'
       const email = emailCheckoutEnabled(env), gmail = gmailCheckoutEnabled(env), delivery_supplier = delivery_supplierCheckoutEnabled(env)
       const mapped = live ? productMap(env) : {}
-      const [catalog, support, announcement] = await Promise.all([
+      const [catalog, support, announcement, platformVisibility] = await Promise.all([
         partner ? partnerCatalog(env, partner) : plans(env).then(plans => ({ plans })),
         supportContactsSettings(env, partner?.id),
         partner ? publicAnnouncement(env, partner.id) : null,
+        partner ? null : platformProductVisibility(env),
       ])
       // Storefront prices are configured retail prices, independent of supplier latency.
       const offers = (catalog.plans as Plan[]).map(plan => ({ ...plan, enabled: plan.enabled && (
         isXGiftPlan(plan.id) ? xgiftCheckoutEnabled(env) : plan.id === 'gmail-account' ? gmail : isDeliverySupplierPlan(plan.id) ? delivery_supplier : emailProduct(plan.id) ? email : testing || (live && Boolean(mapped[plan.id]))
       ) ? 1 : 0 }))
-      return json({ ...catalog, supportContacts: support.contacts, announcement, plans: offers, mode: live ? 'live' : 'demo', checkoutEnabled: testing || live || email || xgiftCheckoutEnabled(env), testingEnabled: testing }, 200, { 'Server-Timing': `catalog;dur=${(performance.now() - started).toFixed(1)}` })
+      const hiddenProductIds: readonly string[] = platformVisibility?.hiddenProductIds ?? ('hiddenProductIds' in catalog ? catalog.hiddenProductIds : [])
+      return json({ ...catalog, hiddenProductIds, supportContacts: support.contacts, announcement, plans: offers.filter(plan => !hiddenProductIds.includes(plan.product_id)), mode: live ? 'live' : 'demo', checkoutEnabled: testing || live || email || xgiftCheckoutEnabled(env), testingEnabled: testing }, 200, { 'Server-Timing': `catalog;dur=${(performance.now() - started).toFixed(1)}` })
     }
     if (path === '/api/orders/client' && method === 'POST') {
       await body(request)
@@ -158,6 +161,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
       if (partner && plan && !plan.partner_enabled) throw new ApiError('该商品暂未开放代理销售。', 409)
       if (!plan) throw new ApiError('该套餐已暂停销售，请选择其他套餐。', 409)
       if (partner && await env.INTEREST_DB.prepare('SELECT 1 FROM partner_product_order p,json_each(p.hidden_product_ids) h WHERE p.partner_id=? AND h.value=?').bind(partner.id, plan.product_id).first()) throw new ApiError('该商品已被商店下架，请选择其他商品。', 409)
+      if (!partner && await platformProductHidden(env, plan.product_id)) throw new ApiError('该商品已下架，请选择其他商品。', 409)
       const offer = partner ? await env.INTEREST_DB.prepare('SELECT * FROM partner_prices WHERE partner_id=? AND plan=?').bind(partner.id, plan.id).first<{ price_cents: number; cost_cents: number; version: number }>() : null
       if (partner && !offer) throw new ApiError('该代理尚未开通此套餐。', 409)
       if (data.expectedPrice !== (offer?.price_cents ?? plan.price_cents)) throw new ApiError('套餐价格已更新，请刷新后重新确认。', 409)
@@ -170,7 +174,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
       await env.INTEREST_DB.batch([
         partner && offer ? env.INTEREST_DB.prepare("INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,status,created_at,updated_at,last_event_id,customer_email,partner_id,partner_name,cost_cents) SELECT ?,?,?,c.id,c.name,pp.price_cents,'pending',?,?,?,?,p.id,p.name,pp.cost_cents FROM catalog_plans c JOIN partner_prices pp ON pp.plan=c.id JOIN partners p ON p.id=pp.partner_id WHERE c.id=? AND c.enabled=1 AND c.version=? AND pp.version=? AND p.id=? AND p.active=1 AND p.version=? AND c.partner_enabled=1 AND NOT EXISTS(SELECT 1 FROM partner_product_order po,json_each(po.hidden_product_ids) h WHERE po.partner_id=p.id AND h.value=c.product_id) ON CONFLICT(owner_hash,idempotency_key) DO NOTHING")
           .bind(id, ownerHash, data.key, now, now, eventId, email, plan.id, plan.version, offer.version, partner.id, partner.version)
-        : env.INTEREST_DB.prepare("INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,status,created_at,updated_at,last_event_id,customer_email) SELECT ?,?,?,id,name,price_cents,'pending',?,?,?,? FROM catalog_plans WHERE id=? AND enabled=1 AND version=? ON CONFLICT(owner_hash,idempotency_key) DO NOTHING")
+        : env.INTEREST_DB.prepare("INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,status,created_at,updated_at,last_event_id,customer_email) SELECT ?,?,?,c.id,c.name,c.price_cents,'pending',?,?,?,? FROM catalog_plans c WHERE c.id=? AND c.enabled=1 AND c.version=? AND NOT EXISTS(SELECT 1 FROM platform_product_visibility v,json_each(v.hidden_product_ids) h WHERE v.id=1 AND h.value=c.product_id) ON CONFLICT(owner_hash,idempotency_key) DO NOTHING")
           .bind(id, ownerHash, data.key, now, now, eventId, email, plan.id, plan.version),
         env.INTEREST_DB.prepare('UPDATE orders SET purchase_note=(SELECT purchase_note FROM catalog_plans WHERE id=orders.plan) WHERE id=?').bind(id),
         ...(live ? [env.INTEREST_DB.prepare("UPDATE orders SET mode='live' WHERE id=? AND payment_status='unpaid'").bind(id)] : []),
@@ -234,6 +238,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
 
 async function admin(request: Request, env: Env, url: URL): Promise<Response> {
   const path = url.pathname; const method = request.method; const db = env.INTEREST_DB
+  if (path === '/api/admin/product-visibility') return platformProductVisibilityRoute(request, env)
   if (path === '/api/admin/payments/reconcile' && method === 'POST') { await body(request); return json(await reconcilePayments(env)) }
   if (path === '/api/admin/recharge/reconcile' && method === 'POST') { await body(request); return json(await reconcileRecharge(env)) }
   if (path === '/api/admin/overview' && method === 'GET') {
