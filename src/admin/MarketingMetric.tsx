@@ -34,10 +34,10 @@ function MetricForm({ settings }: { settings: Settings }) {
     <label className="admin-marketing-metric-toggle"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} disabled={busy} />启用自定义展示</label>
     <label htmlFor="marketing-metric-text">展示文案</label>
     <Input id="marketing-metric-text" value={displayText} onChange={event => setDisplayText(event.target.value)} maxLength={120} placeholder="例如：活动展示数：{count}" disabled={busy} />
-    <small>用 {'{count}'} 标出数字的位置，必须出现一次。前台会显示“活动展示”提示。</small>
+    <small>用 {'{count}'} 标出数字的位置，必须出现一次。前台会显示“示意数字”提示。</small>
     <label htmlFor="marketing-metric-count">展示数值</label>
     <Input id="marketing-metric-count" type="number" min="0" max="999999" step="1" value={displayCount} onChange={event => setDisplayCount(event.target.value)} disabled={busy} />
-    <div className="admin-marketing-metric-preview">前台预览：{valid ? displayText.replace('{count}', displayCount) : '请填写有效文案和数值'}<small>活动展示</small></div>
+    <div className="admin-marketing-metric-preview">前台预览：{valid ? displayText.replace('{count}', displayCount) : '请填写有效文案和数值'}<small>示意数字</small></div>
     <Button type="submit" disabled={busy || !valid || !changed}>{busy ? '保存中…' : '保存展示设置'}</Button>
     {error && <p className="admin-error" role="alert">{error}</p>}
     {message && <p className="admin-success" role="status">{message}</p>}
