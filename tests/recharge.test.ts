@@ -377,9 +377,9 @@ test('25x automatic purchases require an authorized available product and safe s
   assert.equal((await s.call('/api/orders', payload(), buyer)).status, 409)
   s.products[0].delivery_modes = ['auto_recharge']; s.products[0].supply_price = '4501.00'
   assert.equal((await s.call('/api/orders', payload(), buyer)).status, 409)
-  s.products[0].supply_price = '3250.00'; s.products[0].max_sale_price = '4499.00'
-  assert.equal((await s.call('/api/orders', payload(), buyer)).status, 409)
-  s.products[0].max_sale_price = '5000.00'; s.partner()
+  // The current API no longer enforces the historical maximum-sale field.
+  // Independent compatibility tests cover that change and quote-required SKUs.
+  s.products[0].supply_price = '3250.00'; s.partner()
   s.db.prepare('INSERT INTO partner_prices(partner_id,plan,cost_cents,price_cents) VALUES (?,?,?,?)').run('partner-test', 'pro-25x', 324999, 450000)
   assert.equal((await s.call('/api/orders', { ...payload(), partner: 'partner-test' }, buyer)).status, 409)
   s.db.prepare('UPDATE partner_prices SET cost_cents=330000 WHERE partner_id=? AND plan=?').run('partner-test', 'pro-25x')
@@ -1348,4 +1348,117 @@ test('only platform margins accept signed money, while sale, supply and refunds 
   assert.equal(marginCents('-110.00'), -11000); assert.equal(marginCents('29.00'), 2900)
   for (const value of ['-110.00','-0.01','+1.00','1.1',1,null]) assert.throws(() => moneyCents(value))
   for (const value of ['--1.00','-1.1','-01.00','-Infinity']) assert.throws(() => marginCents(value))
+})
+
+test('API signing preserves a literal plus and uppercases the method', async () => {
+  const url = new URL('https://recharge.example.invalid/v1/orders?search=a+b&tag=%E6%B5%8B%E8%AF%95&search=a%20b')
+  const canonical = ['GET', url.pathname, 'search=a%20b&search=a%2Bb&tag=%E6%B5%8B%E8%AF%95', '1790323200', 'nonce-compat', 'key', '', digest('')].join('\n')
+  assert.equal(await signature(secret, 'get', url, '1790323200', 'nonce-compat', 'key', '', ''), mac(canonical))
+})
+
+test('signed payment-code binds the original order, amount, expiry and idempotency without calling a public cashier', async t => {
+  const s = setup(t); Object.assign(s.env, { RECHARGE_PAYMENT_CODE_ENABLED: 'true' })
+  const remote = { ...s.remoteOrder(), merchant_order_no: 'SHOP-compat' }
+  const valid = { order_id: remote.order_id, merchant_order_no: remote.merchant_order_no, amount: remote.sale_amount, currency: 'CNY', payment_status: 'pending', payment_code_type: 'alipay_precreate', payment_code: 'https://qr.alipay.com/bax01234567890', expires_at: remote.expires_at }
+  let patch: Record<string, unknown> = {}
+  s.override(path => path === '/v1/orders/ord_test/payment-code' ? Response.json({ data: { ...valid, ...patch } }) : undefined)
+  const { paymentQr } = await import('../worker/recharge/client.ts')
+  assert.equal(await paymentQr(s.env, remote.qr_payload, remote), valid.payment_code)
+  assert.equal(await paymentQr(s.env, remote.qr_payload, remote), valid.payment_code)
+  const calls = s.calls.filter(c => c.path === '/v1/orders/ord_test/payment-code')
+  assert.equal(calls.length, 2); assert.equal(calls[0].key, calls[1].key); assert.equal(calls[0].body, '{}'); assert.notEqual(calls[0].nonce, calls[1].nonce)
+  for (const value of [{ order_id: 'other' }, { merchant_order_no: 'other' }, { amount: '1.00' }, { currency: 'USD' }, { payment_code_type: 'link' }, { expires_at: new Date(Date.now() + 60000).toISOString() }, { payment_code: 'https://recharge.example.invalid/payments/ord_test' }]) {
+    patch = value
+    await assert.rejects(paymentQr(s.env, remote.qr_payload, remote))
+  }
+  patch = { payment_status: 'paid' }
+  assert.equal(await paymentQr(s.env, remote.qr_payload, remote), null)
+  assert.equal(s.calls.some(c => c.path.startsWith('/payments/')), false)
+  const count = s.calls.length
+  assert.equal(await paymentQr(s.env, null, remote, Date.now() - 1), null)
+  assert.equal(s.calls.length, count)
+})
+
+test('fixed-price checkout ignores the historical sale ceiling but rejects products requiring a fresh account quote', async t => {
+  const s = setup(t); const buyer = await s.buyer()
+  s.products[0].max_sale_price = '120.00'
+  const order = await s.create(buyer)
+  assert.equal(order.mode, 'live')
+  Object.assign(s.products[0], { supply_price: '0.00', quote_required: true })
+  const before = s.db.prepare('SELECT COUNT(*) n FROM orders').get()!.n
+  const denied = await s.call('/api/orders', { plan: 'plus', expectedPrice: 13900, email: 'buyer@example.test', key: crypto.randomUUID() }, buyer)
+  assert.equal(denied.status, 409)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM orders').get()!.n, before)
+  assert.equal(s.calls.some(c => c.path === '/v1/orders'), false)
+})
+
+test('long Session JSON is accepted by extracted-token size and never persisted', async t => {
+  const s = setup(t); const buyer = await s.buyer(); const order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)
+  const token = 'sensitive-long-token-' + 'x'.repeat(64000)
+  const raw = JSON.stringify({ user: { email: 'buyer@example.test' }, accessToken: token, extra: 'x'.repeat(80000) })
+  const response = await s.submit(order.id, buyer, crypto.randomUUID(), raw)
+  assert.equal(response.status, 200, await response.clone().text())
+  assert.equal(JSON.parse(s.calls.find(c => c.path === '/v1/redemptions')!.body).credential.session, raw)
+  assert.doesNotMatch(await response.text(), /sensitive-long-token/)
+  for (const table of ['orders', 'order_events', 'recharge_orders', 'recharge_redemptions', 'admin_audit']) assert.doesNotMatch(JSON.stringify(s.db.prepare(`SELECT * FROM ${table}`).all()), /sensitive-long-token/)
+})
+
+test('over-limit extracted tokens and request bodies are rejected before forwarding credentials', async t => {
+  const s = setup(t); const buyer = await s.buyer(); const order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)
+  const tooLongToken = JSON.stringify({ user: { email: 'buyer@example.test' }, accessToken: 'x'.repeat(128 * 1024 + 1) })
+  assert.equal((await s.submit(order.id, buyer, crypto.randomUUID(), tooLongToken)).status, 400)
+  const tooLongBody = JSON.stringify({ user: { email: 'buyer@example.test' }, accessToken: 'short-token', extra: 'x'.repeat(256 * 1024) })
+  assert.equal((await s.submit(order.id, buyer, crypto.randomUUID(), tooLongBody)).status, 413)
+  assert.equal(s.calls.some(c => c.path === '/v1/redemptions'), false)
+})
+
+test('supplier-requested read delays persist per account/resource and do not replay requests early', async t => {
+  const s = setup(t); let now = Date.now(); t.mock.method(Date, 'now', () => now)
+  s.override(path => path === '/v1/orders/ord_test' ? Response.json({ data: s.remoteOrder() }, { headers: { 'X-Poll-After': '60', 'X-Poll-Stop': 'true' } }) : undefined)
+  await supplierRequest(s.env, '/orders/ord_test')
+  const before = s.calls.length
+  await assert.rejects(supplierRequest({ ...s.env }, '/orders/ord_test'), e => e instanceof RechargeError && e.retryAfter === 60)
+  assert.equal(s.calls.length, before)
+  // Other resources retain their own window, and server-side reads never create orders.
+  await supplierRequest(s.env, '/products')
+  now += 61000
+  await supplierRequest(s.env, '/orders/ord_test')
+  assert.equal(s.calls.filter(c => c.path === '/v1/orders/ord_test').length, 2)
+  assert.equal(s.calls.some(c => c.path === '/v1/orders'), false)
+})
+
+test('signed checkout exposes only a verified QR and revocation clears it without replacing the order', async t => {
+  const s = setup(t); Object.assign(s.env, { RECHARGE_PAYMENT_CODE_ENABLED: 'true' })
+  const buyer = await s.buyer(); const order = await s.create(buyer)
+  s.override(path => path === '/v1/orders/ord_test/payment-code' ? Response.json({ data: { order_id: 'ord_test', merchant_order_no: order.id, amount: '139.00', currency: 'CNY', payment_status: 'pending', payment_code_type: 'alipay_precreate', payment_code: 'https://qr.alipay.com/bax01234567890', expires_at: s.remoteOrder().expires_at } }) : undefined)
+  const response = await s.query(order.id, buyer)
+  assert.equal(response.status, 200, await response.clone().text())
+  const current = (await response.json()).order
+  assert.equal(current.fulfillment.paymentQr, 'https://qr.alipay.com/bax01234567890')
+  assert.equal(current.fulfillment.paymentUrl, null); assert.equal(current.paymentStatus, 'unpaid')
+  assert.doesNotMatch(JSON.stringify(current), /ord_test|recharge\.example|110\.00/)
+  s.override(path => path.endsWith('/payment-code') ? Response.json({ error: { code: 'direct_payment_code_disabled', retryable: false } }, { status: 403 }) : undefined)
+  assert.equal((await s.query(order.id, buyer)).status, 503)
+  assert.equal(s.db.prepare('SELECT payment_qr FROM recharge_orders').get()!.payment_qr, null)
+  assert.equal(s.db.prepare('SELECT remote_id FROM recharge_orders').get()!.remote_id, 'ord_test')
+  assert.equal(s.calls.filter(c => c.path === '/v1/orders').length, 1)
+  assert.equal(s.calls.some(c => c.path.startsWith('/payments/')), false)
+})
+
+test('429 body retry hints survive key rotation and successful business writes allow a fresh read', async t => {
+  const s = setup(t); let now = Date.now(); t.mock.method(Date, 'now', () => now)
+  s.override(path => path === '/v1/orders/ord_test' ? Response.json({ error: { code: 'api_poll_too_frequent', retryable: true, retry_after: 45 } }, { status: 429 }) : undefined)
+  await assert.rejects(supplierRequest(s.env, '/orders/ord_test'), e => e instanceof RechargeError && e.code === 'api_poll_too_frequent' && e.retryAfter === 45)
+  const before = s.calls.length
+  await assert.rejects(supplierRequest({ ...s.env, RECHARGE_KEY_ID: 'rotated-key' }, '/orders/ord_test'), e => e instanceof RechargeError && e.retryAfter === 45)
+  assert.equal(s.calls.length, before)
+  now += 46000
+  s.override(path => path === '/v1/orders/ord_test' ? Response.json({ data: s.remoteOrder() }, { headers: { 'X-Poll-After': '300' } }) : undefined)
+  await supplierRequest(s.env, '/orders/ord_test')
+  await assert.rejects(supplierRequest(s.env, '/orders/ord_test'))
+  await supplierRequest(s.env, '/redemptions', JSON.stringify({ mode: 'auto_recharge', order_id: 'ord_test' }), 'compat-reset-key')
+  await supplierRequest(s.env, '/orders/ord_test')
+  assert.equal(s.calls.filter(c => c.path === '/v1/orders/ord_test').length, 3)
 })

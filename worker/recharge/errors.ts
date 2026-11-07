@@ -44,6 +44,10 @@ export const requestMessages: Record<string, string> = {
   provider_refund_reconciliation_required: '退款正在核对渠道记录，请查询原退款，勿重复申请。',
   price_out_of_range: '套餐价格已变化，请刷新套餐或联系客服。',
   rate_limited: '查询较频繁，请稍后刷新原订单。',
+  api_poll_too_frequent: '原订单查询较频繁，请稍后刷新，勿重复付款或提交。',
+  api_access_required: '充值服务接口权限尚未开通，请联系客服。',
+  custom_redemption_disabled: '自动充值权限尚未开通，请联系客服。',
+  direct_payment_code_disabled: '当前收款码通道尚未开放，请联系客服。',
   temporarily_unavailable: '充值服务暂不可用，请稍后查询原订单。',
 }
 export function publicCode(value: unknown, codes: Record<string, unknown>) {

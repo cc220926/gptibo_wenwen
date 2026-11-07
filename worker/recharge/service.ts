@@ -1,5 +1,6 @@
 import { categoryMessages, failureMessages, publicCode, resultStages } from './errors.ts'
 import { credentialExpiryProblem } from '../../shared/credential-expiry.ts'
+import { rechargeCredentialToken } from '../../shared/recharge-credential.ts'
 import { ApiError, body, hash, json, type Env, type Statement } from '../platform.ts'
 import { change, getOrder, type Order } from '../order-state.ts'
 import { amountText } from '../payments/types.ts'
@@ -32,7 +33,9 @@ export async function supplierProducts(env: Env) {
   return data
 }
 function eligible(product: Product | undefined, price: number): product is Product {
-  return !!product && product.available === true && product.currency === 'CNY' && product.max_quantity >= 1 && Array.isArray(product.delivery_modes) && product.delivery_modes.includes('auto_recharge') && price >= amountCents(product.supply_price) && price <= amountCents(product.max_sale_price)
+  // Dynamic quotes require the separate account-preflight checkout workflow.
+  // max_sale_price is a historical compatibility field, not a retail ceiling.
+  return !!product && product.available === true && product.quote_required !== true && product.currency === 'CNY' && product.max_quantity >= 1 && Array.isArray(product.delivery_modes) && product.delivery_modes.includes('auto_recharge') && price >= amountCents(product.supply_price)
 }
 export async function supplierCatalog<T extends { id: string; price_cents: number; enabled: number }>(env: Env, plans: T[], partnerId?: string) {
   const products = await supplierProducts(env); const map = productMap(env)
@@ -75,7 +78,7 @@ async function applyRemoteOrder(env: Env, row: SupplierOrder, remote: RemoteOrde
   const expires = Date.parse(remote.expires_at)
   if (!Number.isFinite(expires)) throw new Error('Invalid expiry')
   let paymentUrl: string | null = null; let linkError: unknown
-  try { if (remote.payment_status === 'pending') { const link = paymentLink(env, remote.qr_payload); cashierLink(env, link, remote.order_id); paymentUrl = link } }
+  try { if (remote.payment_status === 'pending' && env.RECHARGE_PAYMENT_CODE_ENABLED !== 'true') { const link = paymentLink(env, remote.qr_payload); cashierLink(env, link, remote.order_id); paymentUrl = link } }
   catch (error) { linkError = error }
   const supply = amountCents(remote.supply_amount); const margin = marginCents(remote.merchant_margin); const refunded = amountCents(remote.refunded_amount ?? '0.00')
   if (supply > order.price_cents || margin < -supply || margin > order.price_cents - refunded || refunded > order.price_cents || (['pending','closed','expired','paid'].includes(remote.payment_status) && refunded > 0) || (remote.payment_status === 'refunded' && refunded !== order.price_cents) || (remote.payment_status === 'partially_refunded' && (refunded === 0 || refunded === order.price_cents))) throw new Error('Supplier financial mismatch')
@@ -114,7 +117,7 @@ async function applyRemoteOrder(env: Env, row: SupplierOrder, remote: RemoteOrde
     let qr: string | null
     try { qr = await paymentQr(env, paymentUrl, remote, deadline) }
     catch (error) {
-      if (!(error instanceof RechargeError) || error.code === 'invalid_payment_response') await env.INTEREST_DB.prepare('UPDATE recharge_orders SET payment_qr=NULL WHERE order_id=? AND remote_id=?').bind(row.order_id, remote.order_id).run()
+      if (!(error instanceof RechargeError) || !error.retryable || ['invalid_payment_response', 'invalid_response'].includes(error.code)) await env.INTEREST_DB.prepare('UPDATE recharge_orders SET payment_qr=NULL WHERE order_id=? AND remote_id=?').bind(row.order_id, remote.order_id).run()
       throw error
     }
     await env.INTEREST_DB.prepare("UPDATE recharge_orders SET payment_qr=? WHERE order_id=? AND remote_id=? AND payment_status='pending' AND expires_at>? AND EXISTS(SELECT 1 FROM orders WHERE id=recharge_orders.order_id AND status='pending' AND payment_status='unpaid' AND redemption_blocked=0 AND refund_hold=0 AND refunded_cents=0 AND created_at>?)").bind(qr, row.order_id, remote.order_id, Date.now(), Date.now() - PAYMENT_WINDOW_MS).run()
@@ -239,7 +242,7 @@ export async function rechargeSummary(env: Env, order: Order) {
 }
 export async function rechargeAction(requestMessage: Request, env: Env, order: Order) {
   if (requestMessage.method !== 'POST') throw new ApiError('请求方式不支持。', 405)
-  const data = await body(requestMessage, 40000)
+  const data = await body(requestMessage, 256 * 1024)
   const row = await findRechargeOrder(env, order.id)
   if (order.mode !== 'live' || !row) throw new ApiError('此订单没有充值通道。', 409)
   if (!(await env.INTEREST_LIMITER.limit({ key: 'recharge:' + order.owner_hash })).success) throw new ApiError('操作较频繁，请稍后重试。', 429)
@@ -247,18 +250,19 @@ export async function rechargeAction(requestMessage: Request, env: Env, order: O
   if (data.action !== 'submit' || typeof data.key !== 'string' || !/^[a-f0-9-]{36}$/.test(data.key) || data.customerConfirmedEmail !== true) throw new ApiError('请确认账号并重新提交。')
   const credential = data.credential as Record<string, unknown> | undefined
   let normalized: { mode: string; session?: string; access_token?: string }
-  if (credential?.mode === 'session' && typeof credential.session === 'string' && credential.session.length > 0 && credential.session.length <= 32000) {
-    let session: { user?: { email?: unknown }; accessToken?: unknown }
-    try { session = JSON.parse(credential.session) } catch { throw new ApiError('请粘贴完整的 Session JSON。') }
-    if (!session || typeof session.user?.email !== 'string' || typeof session.accessToken !== 'string' || !session.accessToken) throw new ApiError('Session 中缺少账号邮箱或 Access Token。')
+  if (credential?.mode === 'session' && typeof credential.session === 'string') {
     normalized = { mode: 'session', session: credential.session }
-  } else if (credential?.mode === 'access_token' && typeof credential.access_token === 'string' && credential.access_token.trim().length > 0 && credential.access_token.length <= 32000) normalized = { mode: 'access_token', access_token: credential.access_token }
+  } else if (credential?.mode === 'access_token' && typeof credential.access_token === 'string') normalized = { mode: 'access_token', access_token: credential.access_token }
   else throw new ApiError('请选择 Session 或 Access Token，并填写有效凭据。')
+  let extracted: ReturnType<typeof rechargeCredentialToken>
+  try { extracted = rechargeCredentialToken(normalized.session ?? normalized.access_token!, normalized.mode as 'session' | 'access_token') }
+  catch { throw new ApiError('登录资料不完整或令牌过长，请重新获取完整内容。') }
   await locked(env, row, async () => {
     const current = await getOrder(env, order.id); const ready = await findRechargeOrder(env, order.id)
     if (current.redemption_blocked) throw new ApiError('本订单已禁止再次兑换，请联系支持。', 409)
     if (!ready?.remote_id || ready.financial_hold || ready.payment_status !== 'paid' || current.payment_status !== 'paid' || current.refund_hold || current.refunded_cents || current.status === 'success') throw new ApiError('当前订单不能提交充值，请先刷新付款和售后状态。', 409)
     const raw = JSON.stringify({ mode: 'auto_recharge', order_id: ready.remote_id, credential: normalized, customer_confirmed_email: true })
+    if (new TextEncoder().encode(raw).byteLength > 256 * 1024) throw new ApiError('提交内容过长，请仅提交本次充值所需的账号资料。', 413)
     const digest = await hash(raw); let attempt = await latestAttempt(env, order.id)
     if (attempt && attempt.id === data.key) {
       if (unknownExpired(attempt)) throw new ApiError('原提交已超过幂等保护期，请联系客服核对，不能再次提交。', 409)
@@ -266,8 +270,7 @@ export async function rechargeAction(requestMessage: Request, env: Env, order: O
       if (attempt.remote_id || terminal(attempt.status)) return
     } else {
       if (attempt && attempt.status !== 'rejected' && !attempt.fallback) throw new ApiError('原充值结果尚未确认，请查询原任务，勿重复提交。', 409)
-      const sessionInput = normalized.mode === 'session' ? JSON.parse(normalized.session!) : null
-      const expiryProblem = credentialExpiryProblem(sessionInput?.accessToken ?? normalized.access_token!, sessionInput?.expires)
+      const expiryProblem = credentialExpiryProblem(extracted.token, extracted.expires)
       if (expiryProblem) throw new ApiError(expiryProblem)
       const now = Date.now(); const event = crypto.randomUUID()
       await env.INTEREST_DB.batch([

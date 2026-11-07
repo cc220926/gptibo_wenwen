@@ -4,15 +4,20 @@ import { publicCode, requestMessages } from './errors.ts'
 const encoder = new TextEncoder()
 const hex = (bytes: ArrayBuffer) => Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join('')
 const encode = (s: string) => encodeURIComponent(s).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase())
-export function canonicalQuery(params: URLSearchParams) {
-  return Array.from(params, ([k, v]) => [encode(k), encode(v)]).sort(([ak, av], [bk, bv]) => ak < bk ? -1 : ak > bk ? 1 : av < bv ? -1 : av > bv ? 1 : 0).map(([k, v]) => `${k}=${v}`).join('&')
+export function canonicalQuery(params: URLSearchParams | string) {
+  // URLSearchParams treats a literal + as a space; the API signs RFC 3986 bytes.
+  const pairs = typeof params === 'string' ? params.replace(/^\?/, '').split('&').filter(Boolean).map(part => {
+    const index = part.indexOf('=')
+    return [decodeURIComponent(index < 0 ? part : part.slice(0, index)), decodeURIComponent(index < 0 ? '' : part.slice(index + 1))]
+  }) : Array.from(params)
+  return pairs.map(([k, v]) => [encode(k), encode(v)]).sort(([ak, av], [bk, bv]) => ak < bk ? -1 : ak > bk ? 1 : av < bv ? -1 : av > bv ? 1 : 0).map(([k, v]) => `${k}=${v}`).join('&')
 }
 export async function hmac(secret: string, text: string) {
   const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
   return hex(await crypto.subtle.sign('HMAC', key, encoder.encode(text)))
 }
 export async function signature(secret: string, method: string, url: URL, timestamp: string, nonce: string, keyId: string, idempotency: string, rawBody: string) {
-  return hmac(secret, [method, url.pathname, canonicalQuery(url.searchParams), timestamp, nonce, keyId, idempotency, await hash(rawBody)].join('\n'))
+  return hmac(secret, [method.toUpperCase(), url.pathname, canonicalQuery(url.search), timestamp, nonce, keyId, idempotency, await hash(rawBody)].join('\n'))
 }
 export function config(env: Env) {
   const base = new URL(env.RECHARGE_API_BASE ?? 'https://recharge.example.invalid/v1')
@@ -67,10 +72,15 @@ function requestId(value: unknown) {
 }
 export async function request<T>(env: Env, path: string, rawBody?: string, idempotency = ''): Promise<T> {
   const c = config(env)
-  if (!/^\/[a-z0-9][A-Za-z0-9_/?=&%.-]*$/.test(path)) throw new Error('Invalid Recharge path')
+  if (!/^\/[a-z0-9][A-Za-z0-9_/?=&%+.-]*$/.test(path)) throw new Error('Invalid Recharge path')
   const url = new URL(c.base + path)
   const method = rawBody === undefined ? 'GET' : 'POST'
   if (method === 'POST' && (idempotency.length < 8 || idempotency.length > 128)) throw new Error('Invalid idempotency key')
+  const trackedRead = method === 'GET' && /^\/(orders|redemptions|refunds)\/[A-Za-z0-9_-]+$/.test(path)
+  if (trackedRead) {
+    const wait = await env.INTEREST_DB.prepare('SELECT next_allowed_at FROM recharge_api_reads WHERE account=? AND resource=?').bind(c.account, path).first<{ next_allowed_at: number }>()
+    if (wait && wait.next_allowed_at > Date.now()) throw new RechargeError('rate_limited', true, { retryAfter: Math.ceil((wait.next_allowed_at - Date.now()) / 1000) })
+  }
   const timestamp = String(Math.floor(Date.now() / 1000)); const nonce = crypto.randomUUID()
   const headers: Record<string, string> = { 'X-Partner-Id': c.partner, 'X-Key-Id': c.key, 'X-Timestamp': timestamp, 'X-Nonce': nonce, 'X-Signature': await signature(c.secret, method, url, timestamp, nonce, c.key, idempotency, rawBody ?? ''), Accept: 'application/json' }
   if (rawBody !== undefined) { headers['Content-Type'] = 'application/json'; headers['Idempotency-Key'] = idempotency }
@@ -79,10 +89,27 @@ export async function request<T>(env: Env, path: string, rawBody?: string, idemp
   catch { throw new RechargeError('transport_unknown', true) }
   if (response.status >= 300 && response.status < 400) throw new RechargeError('redirect_rejected', true)
   const details = { requestId: requestId(response.headers.get('X-Request-Id')), retryAfter: retryDelay(response.headers.get('Retry-After')), upstreamStatus: response.status }
-  let result: { data?: T; error?: { code?: unknown; retryable?: unknown; request_id?: unknown } }
+  const pollAfter = retryDelay(response.headers.get('X-Poll-After'))
+  const waitSeconds = Math.max(pollAfter ?? (response.headers.get('X-Poll-Stop') === 'true' ? 300 : 0), response.status === 429 ? details.retryAfter ?? 5 : 0)
+  if (trackedRead && waitSeconds > 0) await env.INTEREST_DB.prepare('INSERT INTO recharge_api_reads(account,resource,next_allowed_at) VALUES (?,?,?) ON CONFLICT(account,resource) DO UPDATE SET next_allowed_at=MAX(next_allowed_at,excluded.next_allowed_at)').bind(c.account, path, Math.min(Number.MAX_SAFE_INTEGER, Date.now() + waitSeconds * 1000)).run()
+  let result: { data?: T; error?: { code?: unknown; retryable?: unknown; request_id?: unknown; retry_after?: unknown } }
   try { result = JSON.parse(await readRaw(response, 256000)) } catch { throw new RechargeError('invalid_response', true, details) }
+  const retryAfter = result?.error?.retry_after
+  if (response.status === 429 && details.retryAfter === null && typeof retryAfter === 'number' && Number.isSafeInteger(retryAfter) && retryAfter >= 0) {
+    details.retryAfter = retryAfter
+    if (trackedRead && retryAfter > waitSeconds) await env.INTEREST_DB.prepare('INSERT INTO recharge_api_reads(account,resource,next_allowed_at) VALUES (?,?,?) ON CONFLICT(account,resource) DO UPDATE SET next_allowed_at=MAX(next_allowed_at,excluded.next_allowed_at)').bind(c.account, path, Math.min(Number.MAX_SAFE_INTEGER, Date.now() + retryAfter * 1000)).run()
+  }
   if (!response.ok) throw new RechargeError(publicCode(result?.error?.code, requestMessages) ?? 'request_rejected', result?.error?.retryable === true || [429, 502, 503, 504].includes(response.status), { ...details, requestId: details.requestId ?? requestId(result?.error?.request_id) })
   if (!result || result.error || result.data == null) throw new RechargeError('invalid_response', true, details)
+  // A successful business write permits a fresh read of this order/task.
+  // This clears timing metadata only; it never retries a financial write.
+  if (method === 'POST' && result.data && typeof result.data === 'object') {
+    const record = result.data as Record<string, unknown>
+    for (const [field, resource] of [['order_id', 'orders'], ['redemption_id', 'redemptions'], ['refund_id', 'refunds']] as const) {
+      const id = record[field]
+      if (typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id)) await env.INTEREST_DB.prepare('DELETE FROM recharge_api_reads WHERE account=? AND resource=?').bind(c.account, '/' + resource + '/' + id).run()
+    }
+  }
   return result.data
 }
 export async function readRaw(message: Request | Response, limit: number) {
@@ -121,6 +148,16 @@ export function cashierLink(env: Env, link: string | null, orderId: string) {
 // The platform's own /payments/:id page uses these endpoints for 当面付.
 // Its signed order still returns the cashier URL, never the Alipay QR payload.
 export async function paymentQr(env: Env, link: string | null, remote: RemoteOrder, deadline = Date.parse(remote.expires_at)) {
+  if (env.RECHARGE_PAYMENT_CODE_ENABLED === 'true') {
+    if (deadline <= Date.now() || remote.payment_status !== 'pending') return null
+    if (!/^[A-Za-z0-9_-]{1,100}$/.test(remote.order_id)) throw new Error('Invalid payment order')
+    const data = await request<{ order_id: string; merchant_order_no: string; amount: string; currency: string; payment_status: string; payment_code_type: string; payment_code: string; expires_at: string }>(env, '/orders/' + remote.order_id + '/payment-code', '{}', 'payment-code:' + remote.order_id)
+    if (!data || data.order_id !== remote.order_id || data.merchant_order_no !== remote.merchant_order_no || data.currency !== 'CNY' || moneyCents(data.amount) !== moneyCents(remote.sale_amount) || data.payment_code_type !== 'alipay_precreate' || !Number.isFinite(Date.parse(data.expires_at)) || Date.parse(data.expires_at) !== Date.parse(remote.expires_at)) throw new Error('Supplier payment-code mismatch')
+    if (data.payment_status !== 'pending' || Math.min(deadline, Date.parse(data.expires_at)) <= Date.now()) return null
+    const qr = alipayQr(data.payment_code)
+    if (!qr) throw new Error('Missing supplier payment code')
+    return qr
+  }
   // Keep historical payment-page contracts intact. Never turn a cashier URL into a QR.
   const url = cashierLink(env, link, remote.order_id)
   if (!url || deadline <= Date.now()) return null
@@ -142,7 +179,7 @@ export async function paymentQr(env: Env, link: string | null, remote: RemoteOrd
   if (data.status !== 'pending' || data.expired || Math.min(deadline, Date.parse(data.expires_at)) <= Date.now()) return null
   return alipayQr(data.qr_code)
 }
-export type Product = { product_code: string; supply_price: string; max_sale_price: string; currency: string; max_quantity: number; available: boolean; delivery_modes: string[] }
+export type Product = { product_code: string; supply_price: string; max_sale_price?: string; currency: string; max_quantity: number; available: boolean; delivery_modes: string[]; quote_required?: boolean }
 export type RemoteOrder = { order_id: string; merchant_order_no: string; product_code: string; quantity: number; currency: string; collection_mode: string; payment_scope: string; delivery_mode: string; payment_channel?: string; sale_amount: string; supply_amount: string; merchant_margin: string; refunded_amount?: string; payment_status: string; fulfillment_status?: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | null; qr_payload: string | null; expires_at: string }
 export type Redemption = { redemption_id: string; order_id: string; status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'; failure_code: string | null; error_category?: string | null; result_code?: string | null; fallback_recharge_available: boolean; account_email_masked: string | null; finished_at: string | null; progress_stage?: string | null; progress_version?: number; progress_updated_at?: string | null; attempt_no?: number; retry_allowed?: boolean; next_action?: 'wait' | 'resubmit' | 'none'; recovery_action?: 'retry' | 'refund' | null }
 export type RemoteRefund = { refund_id: string; order_id: string; merchant_refund_no: string; amount: string; status: string }

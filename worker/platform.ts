@@ -62,6 +62,7 @@ export interface Env {
   RECHARGE_PRODUCT_MAP?: string
   RECHARGE_COLLECTION_MODE?: string
   RECHARGE_CHECKOUT_ENABLED?: string
+  RECHARGE_PAYMENT_CODE_ENABLED?: string
   XGIFT_API_BASE?: string
   XGIFT_USER_ID?: string
   XGIFT_KEY_ID?: string
