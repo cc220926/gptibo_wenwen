@@ -20,6 +20,10 @@ FEISHU_PAYOUT_RECIPIENT= # Configure locally; never commit a real value.
 # Nonfinancial purchase flow testing; disable before real fulfillment.
 ORDER_TESTING_ENABLED="true"
 
+# Self-owned inventory / manual service delivery (Workers only; disabled by default).
+SERVICE_CHECKOUT_ENABLED="false"
+CDK_ENCRYPTION_KEY= # Independent base64 32-byte key. Keep it with private backups.
+
 # Payment adapter. This switch alone cannot turn test orders into real payments.
 PAYMENT_PROVIDER="alipay"
 PAYMENT_CHECKOUT_ENABLED="false"

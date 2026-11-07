@@ -11,6 +11,7 @@
   "vars": {
     "ORDER_TESTING_ENABLED": "false",
     "EMAIL_PRODUCTS_ENABLED": "false",
+    "SERVICE_CHECKOUT_ENABLED": "false",
     "XGIFT_CHECKOUT_ENABLED": "false",
     "PAYMENT_CHECKOUT_ENABLED": "false",
     "PAYMENT_TEST_ENABLED": "false",

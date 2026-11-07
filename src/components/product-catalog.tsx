@@ -1,10 +1,11 @@
+import '@/styles/service-product.css'
 import { useStorefrontI18n } from '@/lib/storefront-i18n'
 import { normalizeProductOrder } from '../../shared/product-order'
 import { XPremiumScene } from './x-premium'
 import { MembershipScene } from './membership-scene'
 import { EMAIL_PRODUCTS } from '../../shared/email-products'
 import { useState, type MouseEvent, type ReactNode } from 'react'
-import { ChevronRight, CircleHelp, Clock3, LayoutGrid, Mail, ReceiptText, Search, Sparkles, Terminal } from 'lucide-react'
+import { ChevronRight, CircleHelp, Clock3, LayoutGrid, Package, Mail, ReceiptText, Search, Sparkles, Terminal } from 'lucide-react'
 import { LaunchInterestDialog, type InterestProduct } from './launch-interest-dialog'
 import { ProductMark } from './brand'
 import { SubscriptionDeck } from './subscription-deck'
@@ -40,6 +41,9 @@ export function ProductCatalog({ onHelp, onOrders, onNavigate, offers, catalogRe
   const [query, setQuery] = useState('')
   const [interest, setInterest] = useState<InterestProduct>()
   const [interestOpen, setInterestOpen] = useState(false)
+  const serviceOffers = offers.filter(p => p.delivery_type === 'stock' || p.delivery_type === 'manual')
+  const serviceCategory = (name: string) => categories.find(c => c.name === name)?.id ?? 'service:' + name
+  const categoryOptions = [...categories, ...[...new Set(serviceOffers.map(p => p.category ?? '其他商品'))].filter(name => !categories.some(c => c.name === name)).map(name => ({ id: serviceCategory(name), name, icon: Package }))]
   const plans = catalogSubscriptionPlans(offers)
   const startingPrice = catalogStartingPrice(offers)
   const matches = (group: string, text: string) => (category === 'all' || category === group) && text.toLowerCase().includes(query.trim().toLowerCase())
@@ -64,8 +68,16 @@ export function ProductCatalog({ onHelp, onOrders, onNavigate, offers, catalogRe
     ...upcoming.map(product => ({ id: product.id, compact: true, node: <Button key={product.id} variant="ghost" className="store-compact" onClick={() => { setInterest(product); setInterestOpen(true) }}><ProductMark small productId={product.id} /><span><strong>{product.name}</strong><small>{t('待上架')}</small></span><ChevronRight size={16} /></Button> })),
     { id: 'codex-sms', compact: true, node: sms && <a className="store-compact" href={storefrontHref('product/codex-sms')} onClick={e => navigate(e, 'product/codex-sms')}><ProductMark small productId="codex-sms" /><span><strong>{t('Codex 接码')}</strong><small>{t(offers.some(o => o.product_id === 'codex-sms' && o.enabled) ? '按次服务' : '暂停售卖')}</small></span><ChevronRight size={16} /></a> },
   ]
+  for (const id of [...new Set(serviceOffers.map(p => p.product_id))]) {
+    const variants = serviceOffers.filter(p => p.product_id === id)
+    const first = variants[0]
+    if (!matches(serviceCategory(first.category ?? '其他商品'), (first.product_name ?? '') + ' ' + (first.description ?? ''))) continue
+    const available = variants.filter(p => p.enabled)
+    const minimum = Math.min(...(available.length ? available : variants).map(p => p.price_cents))
+    cards.push({ id, node: <article className="store-product"><div className="store-product-heading"><h3>{first.product_name}</h3>{!available.length && <span>暂不可购买</span>}</div><p className="store-spec">{first.category} · {variants.some(p => p.delivery_type === 'stock') ? '库存自动交付' : '人工服务'}</p><div className="service-catalog-visual"><Package size={76} strokeWidth={1} /></div><div className="store-product-bottom"><span className="store-starting-price">¥{(minimum / 100).toFixed(2)}<small> 起</small></span><a className="store-detail-link" href={storefrontHref('product/' + id)} onClick={e => navigate(e, 'product/' + id)}>查看商品<ChevronRight size={15} /></a></div></article> })
+  }
   const groups: typeof cards[] = []
-  for (const id of normalizeProductOrder(productOrder)) {
+  for (const id of [...normalizeProductOrder(productOrder), ...serviceOffers.map(p => p.product_id).filter((id, index, ids) => ids.indexOf(id) === index)]) {
     const card = cards.find(item => item.id === id)
     if (!card?.node || hiddenProductIds.includes(id)) continue
     const last = groups.at(-1)
@@ -76,11 +88,11 @@ export function ProductCatalog({ onHelp, onOrders, onNavigate, offers, catalogRe
   return <section id="catalog-products" className="store-home page-width" aria-label={t('商品目录')}>
     <aside className="store-sidebar" aria-label={t('商品分类')}>
       <span className="store-sidebar-label">{t('浏览商品')}</span>
-      <div className="store-categories" role="group" aria-label={t('按品类筛选')}>{categories.map(({ id, name, icon: Icon }) => <Button key={id} variant="ghost" aria-pressed={category === id} onClick={() => setCategory(id)}><Icon size={16} />{t(name)}</Button>)}</div>
+      <div className="store-categories" role="group" aria-label={t('按品类筛选')}>{categoryOptions.map(({ id, name, icon: Icon }) => <Button key={id} variant="ghost" aria-pressed={category === id} onClick={() => setCategory(id)}><Icon size={16} />{t(name)}</Button>)}</div>
       <div className="store-sidebar-links"><Button variant="ghost" onClick={onOrders}><Clock3 size={16} />{t('继续我的订单')}</Button><Button variant="ghost" onClick={onHelp}><CircleHelp size={16} />{t('购买帮助')}</Button></div>
     </aside>
     <div className="store-content" aria-busy={!catalogReady && !error}>
-      <div className="store-toolbar"><h2>{t(query ? '搜索结果' : category === 'all' ? '为你精选。' : categories.find(c => c.id === category)!.name)}</h2><label className="store-search"><Search size={15} /><Input aria-label={t('搜索商品')} placeholder={t('搜索商品')} value={query} onChange={e => setQuery(e.target.value)} /></label></div>
+      <div className="store-toolbar"><h2>{t(query ? '搜索结果' : category === 'all' ? '为你精选。' : categoryOptions.find(c => c.id === category)?.name ?? '商品')}</h2><label className="store-search"><Search size={15} /><Input aria-label={t('搜索商品')} placeholder={t('搜索商品')} value={query} onChange={e => setQuery(e.target.value)} /></label></div>
       {!catalogReady ? error ? <p className="store-empty" role="status">{t('商品暂时加载失败，请点击上方重试。')}</p> : <>
         <span className="sr-only" role="status">{t('正在加载商品')}</span><CatalogSkeleton />
       </> : <>

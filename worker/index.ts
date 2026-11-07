@@ -1,3 +1,4 @@
+import { reconcileServices } from './fulfillment/service.ts'
 import { telegramWebhook, retryTelegramInvitations } from './telegram.ts'
 import { reconcileXGift } from './xgift/service.ts'
 import { reconcileDeliverySupplier } from './delivery_supplier/service.ts'
@@ -31,6 +32,7 @@ export default {
     await retryTelegramInvitations(env).catch(() => { console.error('Telegram invitation queue temporarily unavailable') })
     // Durable transactional email must continue even when supplier polling fails.
     await sendDueOrderNotifications(env).catch(() => { console.error('Order notification queue temporarily unavailable') })
+    await reconcileServices(env).catch(() => { console.error('Service delivery queue temporarily unavailable') })
     // Cosmetic activity statistics must not interrupt financial reconciliation.
     await expireCheckoutPresence(env).catch(() => { console.error('Checkout activity cleanup temporarily unavailable') })
     // Reminders run every minute; preserve the existing five-minute reconciliation cadence.

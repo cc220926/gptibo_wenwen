@@ -1,3 +1,5 @@
+import { isServicePlan } from '../../shared/fulfillment.ts'
+import { fulfillService, serviceCheckoutEnabled, taskFor } from '../fulfillment/service.ts'
 import { isXGiftPlan } from '../../shared/xgift-products.ts'
 import { fulfillXGift, xgiftCheckoutEnabled } from '../xgift/service.ts'
 import { isDeliverySupplierPlan } from '../delivery_supplier/client.ts'
@@ -12,7 +14,7 @@ import type { PaymentOrder, PaymentResult, PaymentProvider } from './types.ts'
 
 export type Payment = { order_id: string; provider: string; account: string; amount_cents: number; state: 'pending' | 'paid' | 'closed'; trade_no: string | null; qr: string | null; expires_at: number; lease_token: string | null; lease_until: number; notified_at: number | null }
 export const findPayment = (env: Env, id: string) => env.INTEREST_DB.prepare('SELECT * FROM payments WHERE order_id=?').bind(id).first<Payment>()
-const details = (p: Payment, o: Order): PaymentOrder => ({ id: p.order_id, amountCents: p.amount_cents, subject: o.is_test ? 'GPTibo · 支付联调测试（不交付商品）' : `GPTibo · ${emailProduct(o.plan)?.name ?? (isXGiftPlan(o.plan) ? o.plan_name : o.plan === 'codex-sms-once' ? 'Codex 接码' : 'ChatGPT ' + o.plan_name)}`, expiresAt: p.expires_at })
+const details = (p: Payment, o: Order): PaymentOrder => ({ id: p.order_id, amountCents: p.amount_cents, subject: o.is_test ? 'GPTibo · 支付联调测试（不交付商品）' : `GPTibo · ${isServicePlan(o.plan) ? o.plan_name : emailProduct(o.plan)?.name ?? (isXGiftPlan(o.plan) ? o.plan_name : o.plan === 'codex-sms-once' ? 'Codex 接码' : 'ChatGPT ' + o.plan_name)}`, expiresAt: p.expires_at })
 function providerFor(env: Env, p: Payment) {
   const provider = paymentProvider(env, p.provider)
   if (provider.account !== p.account) throw new ApiError('支付商户配置已变化，请恢复该订单原渠道配置后处理。', 503)
@@ -43,6 +45,9 @@ export async function applyPaymentResult(env: Env, p: Payment, result: PaymentRe
   ])
   const current = await findPayment(env, p.order_id)
   if (result.tradeNo && current?.trade_no && result.tradeNo !== current.trade_no) throw new ApiError('支付流水冲突。', 409)
+  if (paid && isServicePlan(order.plan)) {
+    try { await fulfillService(env, order.id) } catch { /* Confirmed payment persists; the task is reconciled later. */ }
+  }
   if (paid && isXGiftPlan(order.plan)) {
     try { await fulfillXGift(env, order.id) } catch { /* Keep confirmed payment; cron reconciles the original gift. */ }
   }
@@ -89,19 +94,22 @@ async function sync(env: Env, p: Payment, o: Order, close: boolean) {
 export async function paymentAction(request: Request, env: Env, order: Order, adminTest = false) {
   if (request.method !== 'POST') throw new ApiError('请通过订单发起支付操作。', 405)
   const data = await body(request)
-  if (!['create', 'query', 'close'].includes(String(data.action))) throw new ApiError('支付操作无效。')
+  if (!['create', 'query', 'close', 'options'].includes(String(data.action))) throw new ApiError('支付操作无效。')
   if (order.redemption_blocked && data.action === 'create') throw new ApiError('本订单已禁止再次兑换，请联系支持。', 409)
   if (order.mode !== 'live') throw new ApiError('历史测试记录不能发起收款。', 409)
-  const canCreate = (isXGiftPlan(order.plan) ? xgiftCheckoutEnabled(env) : order.plan === 'gmail-account' ? gmailCheckoutEnabled(env) : isDeliverySupplierPlan(order.plan) ? delivery_supplierCheckoutEnabled(env) : emailProduct(order.plan) ? emailCheckoutEnabled(env) : env.PAYMENT_CHECKOUT_ENABLED === 'true') || (adminTest && order.is_test === 1 && order.price_cents === 1 && !order.partner_id && env.PAYMENT_TEST_ENABLED === 'true')
+  const canCreate = (isServicePlan(order.plan) ? await serviceCheckoutEnabled(env) : isXGiftPlan(order.plan) ? xgiftCheckoutEnabled(env) : order.plan === 'gmail-account' ? gmailCheckoutEnabled(env) : isDeliverySupplierPlan(order.plan) ? delivery_supplierCheckoutEnabled(env) : emailProduct(order.plan) ? emailCheckoutEnabled(env) : env.PAYMENT_CHECKOUT_ENABLED === 'true') || (adminTest && order.is_test === 1 && order.price_cents === 1 && !order.partner_id && env.PAYMENT_TEST_ENABLED === 'true')
   if (!(await env.INTEREST_LIMITER.limit({ key: 'payment:' + order.owner_hash })).success) throw new ApiError('操作较频繁，请稍后再试。', 429)
   let payment = await findPayment(env, order.id)
+  if (data.action === 'options') return json({ payment: payment ? { provider: payment.provider, status: payment.state, qr: null, expiresAt: payment.expires_at } : null, methods: canCreate ? [{ method: 'alipay', name: '支付宝', feeBps: 0 }] : [] })
   if (!payment && data.action === 'create') {
     if (!canCreate) throw new ApiError('真实收款尚未开放。', 503)
-    const provider = paymentProvider(env, emailProduct(order.plan) || isXGiftPlan(order.plan) ? 'alipay' : env.PAYMENT_PROVIDER ?? '')
+    const provider = paymentProvider(env, isServicePlan(order.plan) || emailProduct(order.plan) || isXGiftPlan(order.plan) ? 'alipay' : env.PAYMENT_PROVIDER ?? '')
     notifyUrl(env, provider.id)
     const now = Date.now()
-    await env.INTEREST_DB.prepare("INSERT INTO payments(order_id,provider,account,amount_cents,expires_at,created_at,updated_at) SELECT id,?,?,price_cents,?,?,? FROM orders WHERE id=? AND mode='live' AND payment_status='unpaid' AND status='pending' AND redemption_blocked=0 AND refund_hold=0 AND refunded_cents=0 ON CONFLICT(order_id) DO NOTHING")
-      .bind(provider.id, provider.account, now + 15 * 60000, now, now, order.id).run()
+    const task = isServicePlan(order.plan) ? await taskFor(env, order.id) : null
+    if (isServicePlan(order.plan) && (!task || task.state !== 'reserved' || task.expires_at <= now)) throw new ApiError('库存预留已到期，请重新下单；如已付款请核对原订单。', 409)
+    await env.INTEREST_DB.prepare("INSERT INTO payments(order_id,provider,account,amount_cents,expires_at,created_at,updated_at) SELECT id,?,?,price_cents,?,?,? FROM orders WHERE id=? AND mode='live' AND payment_status='unpaid' AND status='pending' AND redemption_blocked=0 AND refund_hold=0 AND refunded_cents=0 AND (NOT EXISTS(SELECT 1 FROM fulfillment_tasks t WHERE t.order_id=orders.id) OR EXISTS(SELECT 1 FROM fulfillment_tasks t WHERE t.order_id=orders.id AND t.state='reserved' AND t.expires_at>?)) ON CONFLICT(order_id) DO NOTHING")
+      .bind(provider.id, provider.account, task?.expires_at ?? now + 15 * 60000, now, now, order.id, now).run()
     payment = await findPayment(env, order.id)
   }
   if (!payment) throw new ApiError('该订单没有可用的支付记录。', 409)

@@ -15,5 +15,5 @@ export const UPCOMING_PRODUCTS = [
   { id: 'grok', name: 'Grok', category: 'AI 订阅', description: 'Grok 订阅服务，暂未开放购买。', tags: ['套餐待公布', '交付方式待公布'] },
 ] as const
 export function productPlans(id: ProductId) { return PLANS.filter(plan => plan.productId === id) }
-export function productForPlan(planId: PlanId) { return PRODUCTS.find(product => product.id === ORDER_PLANS.find(plan => plan.id === planId)!.productId)! }
+export function productForPlan(planId: PlanId) { return PRODUCTS.find(product => product.id === ORDER_PLANS.find(plan => plan.id === planId)?.productId) ?? { ...PRODUCTS[0], id: 'custom' as const, name: '商品', quantity: '1 份' } }
 export { readStorefrontPage as readPage } from './storefront-routing'

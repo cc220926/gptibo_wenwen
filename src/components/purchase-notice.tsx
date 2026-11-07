@@ -36,13 +36,13 @@ function fulfillmentNotice(plan: PlanId) {
 }
 
 // Render inside PurchaseFlow's existing popup so continuing never swaps focus traps.
-export function PurchaseNotice({ plan, purchaseNote, supportsWarranty = true, titleRef, onCancel, onContinue }: { plan: PlanId; purchaseNote?: string; supportsWarranty?: boolean; titleRef: RefObject<HTMLHeadingElement | null>; onCancel: () => void; onContinue: () => void }) {
+export function PurchaseNotice({ service, plan, purchaseNote, supportsWarranty = true, titleRef, onCancel, onContinue }: { service?: { name: string; planName: string; kind: 'stock' | 'manual' }; plan: PlanId; purchaseNote?: string; supportsWarranty?: boolean; titleRef: RefObject<HTMLHeadingElement | null>; onCancel: () => void; onContinue: () => void }) {
   const product = productForPlan(plan)
-  const notice = fulfillmentNotice(plan)
+  const notice = service ? { emphasis: service.kind === 'stock' ? '付款确认后交付一份商品，需按说明自行使用或兑换。' : '本商品由工作人员提供服务，请确认适用范围与处理时间。', steps: ['核对规格、价格和购买说明，填写可收件的下单邮箱。', service.kind === 'stock' ? '付款确认后在原订单领取，同一份内容也会发送到邮箱。' : '付款后在原订单查看处理进度与交付结果。'] } : fulfillmentNotice(plan)
   return <>
       <DialogHeader>
         <DialogTitle ref={titleRef} tabIndex={-1}>下单须知</DialogTitle>
-        <DialogDescription>{product.name} · {ORDER_PLANS.find(item => item.id === plan)?.name}</DialogDescription>
+        <DialogDescription>{service?.name ?? product.name} · {service?.planName ?? ORDER_PLANS.find(item => item.id === plan)?.name}</DialogDescription>
       </DialogHeader>
       <div className="purchase-notice-body">
         <div className="purchase-notice-emphasis"><Info size={16} aria-hidden="true" /><strong>{notice.emphasis}</strong></div>

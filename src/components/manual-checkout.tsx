@@ -81,17 +81,17 @@ export function ManualCheckout({ order, open, onUpdated, onOrderUpdated, onOrder
       </>}
       {xgift && payment && order.status === 'pending' && <Button variant="ghost" disabled={busy} onClick={() => void refresh('close')}>关闭未付款订单</Button>}
       {!xgift && order.paymentStatus === 'paid' && <PaymentConfirmed>付款已确认，无需重复支付。</PaymentConfirmed>}
-      {!xgift && !order.delivery?.value && ['session', 'processing'].includes(order.status) && <PaymentMessage state="idle" title={emailDelivery ? order.status === 'processing' ? '发货处理中' : '等待邮件发货' : order.status === 'processing' ? '正在人工开通' : '等待人工开通'}>{emailDelivery ? <>付款已确认，{automatic ? '系统将自动交付领取资料至订单页，并同步发送至' : gmail ? '系统将自动发送账号资料及使用说明至' : <>工作人员将把{order.delivery?.kind === 'link' ? '领取链接' : '兑换 CDK'}与说明发送至</>} <strong>{order.customerEmail}</strong>。请留意收件箱与垃圾邮件。</> : '请通过下方支持入口联系工作人员，提供订单号及要开通的账号。处理结果会更新到本订单。'}</PaymentMessage>}
+      {!xgift && !order.delivery?.value && ['session', 'processing'].includes(order.status) && <PaymentMessage state="idle" title={order.serviceDelivery?.kind === 'manual' ? '等待服务交付' : emailDelivery ? order.status === 'processing' ? '发货处理中' : '等待邮件发货' : order.status === 'processing' ? '正在人工开通' : '等待人工开通'}>{order.serviceDelivery?.kind === 'manual' ? <>付款已确认，工作人员将按购买说明处理，交付结果会展示在本订单并发送到邮箱。</> : emailDelivery ? <>付款已确认，{automatic ? '系统将自动交付领取资料至订单页，并同步发送至' : gmail ? '系统将自动发送账号资料及使用说明至' : <>工作人员将把{order.delivery?.kind === 'link' ? '领取链接' : '兑换 CDK'}与说明发送至</>} <strong>{order.customerEmail}</strong>。请留意收件箱与垃圾邮件。</> : '请通过下方支持入口联系工作人员，提供订单号及要开通的账号。处理结果会更新到本订单。'}</PaymentMessage>}
       {order.delivery?.value && <section className="membership-direct-delivery" aria-label="领取资料">
         <h3>商品已发货</h3>
-        <p>{claimUrl ? '专属领取链接' : '兑换 CDK'}</p>
+        <p>{order.serviceDelivery?.kind === 'manual' ? '服务交付结果' : claimUrl ? '专属领取链接' : '兑换 CDK'}</p>
         <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', userSelect: 'text' }}>{order.delivery.value}</pre>
         <div className="membership-delivery-actions">
           {claimUrl && <Button size="sm" nativeButton={false} render={<a href={claimUrl} target="_blank" rel="noopener noreferrer" />}>立即领取 <ExternalLink size={13} /></Button>}
-          <CopyButton variant="outline" value={order.delivery.value} label={claimUrl ? '复制领取链接' : '复制 CDK'} />
+          <CopyButton variant="outline" value={order.delivery.value} label={order.serviceDelivery?.kind === 'manual' ? '复制交付内容' : claimUrl ? '复制领取链接' : '复制 CDK'} />
         </div>
         <p style={{ whiteSpace: 'pre-line' }}>{order.delivery.instructions}</p>
-        <p>{order.delivery.status === 'sent' ? '同一份资料已发送至' : '同一份资料正在同步发送至'} <strong>{order.customerEmail}</strong>。请妥善保管，勿转发他人。</p>
+        {order.serviceDelivery?.mailState === 'review' ? <p>商品已在本订单交付。邮件通知需要客服核查，请通过原订单联系支持。</p> : <p>{order.delivery.status === 'sent' ? '同一份资料已提交邮件服务，收件邮箱为' : '同一份资料正在同步发送至'} <strong>{order.customerEmail}</strong>。请妥善保管，勿转发他人。</p>}
       </section>}
       {!xgift && !order.delivery?.value && order.status === 'success' && <PaymentMessage state="success" title={emailDelivery ? '商品已邮件发货' : '人工开通已完成'}>{emailDelivery ? <>发货邮件已提交邮件服务。请在 <strong>{order.customerEmail}</strong> 查收，并按邮件说明领取。若未收到，请联系支持核对。</> : '请前往 ChatGPT 查看订阅。'}</PaymentMessage>}
       {xgift && (order.status === 'session' || order.status === 'processing' || order.status === 'success' || order.status === 'failed') && <XRechargeStatus status={order.status} state={xgift.state} />}

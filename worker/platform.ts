@@ -12,6 +12,9 @@ export interface Database {
   batch(statements: Statement[]): Promise<unknown[]>
 }
 export interface Env {
+  /** Independent base64-encoded 32-byte key; retain securely with database backups. */
+  CDK_ENCRYPTION_KEY?: string
+  SERVICE_CHECKOUT_ENABLED?: string
   ASSETS: { fetch(request: Request): Promise<Response> }
   INTEREST_DB: Database
   INTEREST_LIMITER: { limit(options: { key: string }): Promise<{ success: boolean }> }

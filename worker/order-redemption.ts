@@ -12,9 +12,10 @@ export async function setRedemptionBlocked(env: Env, order: Order, blocked: bool
       WHERE id=? AND version=? AND redemption_blocked<>?
       AND NOT EXISTS(SELECT 1 FROM recharge_orders t WHERE t.order_id=orders.id AND t.lease_until>?)
       AND NOT EXISTS(SELECT 1 FROM email_deliveries d WHERE d.order_id=orders.id AND d.lease_until>?)
+      AND NOT EXISTS(SELECT 1 FROM fulfillment_tasks f WHERE f.order_id=orders.id AND f.lease_until>?)
       AND NOT EXISTS(SELECT 1 FROM account_supplier_orders k WHERE k.order_id=orders.id AND (k.lease_until>? OR k.state IN ('creating','unknown'))) AND NOT EXISTS(SELECT 1 FROM delivery_supplier_orders n WHERE n.order_id=orders.id AND (n.lease_until>? OR n.state IN ('creating','unknown','pending'))) AND NOT EXISTS(SELECT 1 FROM xgift_purchases x WHERE x.order_id=orders.id AND (x.lease_until>? OR x.state IN ('creating','unknown','pending')))
       AND NOT EXISTS(SELECT 1 FROM payments p WHERE p.order_id=orders.id AND p.lease_until>?)`)
-      .bind(Number(blocked), now, event, order.id, order.version, Number(blocked), now, now, now, now, now, now),
+      .bind(Number(blocked), now, event, order.id, order.version, Number(blocked), now, now, now, now, now, now, now),
     env.INTEREST_DB.prepare(`INSERT INTO order_events(id,order_id,actor,action,from_status,to_status,note,order_version,created_at)
       SELECT ?,id,?,?,status,status,?,version,? FROM orders WHERE id=? AND last_event_id=?`)
       .bind(event, 'admin:' + env.ADMIN_USERNAME, action, (blocked ? '已禁止再次兑换：' : '已解除禁止兑换：') + note, now, order.id, event),

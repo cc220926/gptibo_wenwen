@@ -50,7 +50,7 @@ function FlowStage({ stage, children }: { stage: string; children: ReactNode }) 
   return <div ref={viewport} className="flow-viewport"><div ref={content} className="flow-stage">{children}</div></div>
 }
 
-type Props = CheckoutProps & { presenceOthers?: number | null; marketingMetric?: MarketingMetric | null; onPresenceActivityChange?: (active: boolean) => void; couponAvailable?: boolean; shopSlug?: string; onCloseComplete?: () => void; notice?: { supportsWarranty?: boolean; purchaseNote?: string; onContinue: () => void }; emailMode: boolean; paymentMethods?: PaymentMethodOption[]; draft: { plan: PlanId; price: number }; initialEmail?: string | null; onSubmitEmail: (email: string, username?: string, preflightToken?: string, paymentMethod?: string, expectedFeeBps?: number, turnstileToken?: string, couponCode?: string, couponPrice?: number) => Promise<void>; children?: ReactNode | ((refreshTarget: HTMLElement | null) => ReactNode) }
+type Props = CheckoutProps & { presenceOthers?: number | null; marketingMetric?: MarketingMetric | null; onPresenceActivityChange?: (active: boolean) => void; couponAvailable?: boolean; shopSlug?: string; onCloseComplete?: () => void; notice?: { supportsWarranty?: boolean; purchaseNote?: string; onContinue: () => void }; emailMode: boolean; paymentMethods?: PaymentMethodOption[]; draft: { plan: PlanId; price: number; productId?: string; productName?: string; planName?: string; deliveryType?: 'stock' | 'manual' }; initialEmail?: string | null; onSubmitEmail: (email: string, username?: string, preflightToken?: string, paymentMethod?: string, expectedFeeBps?: number, turnstileToken?: string, couponCode?: string, couponPrice?: number) => Promise<void>; children?: ReactNode | ((refreshTarget: HTMLElement | null) => ReactNode) }
 export function PurchaseFlow({ presenceOthers = null, marketingMetric, onPresenceActivityChange, couponAvailable = false, shopSlug, notice, onCloseComplete, emailMode, paymentMethods, draft, initialEmail, onSubmitEmail, children, ...checkout }: Props) {
   const { order, open, onOpenChange, busy, error } = checkout
   const [refreshTarget, setRefreshTarget] = useState<HTMLDivElement | null>(null)
@@ -110,20 +110,22 @@ export function PurchaseFlow({ presenceOthers = null, marketingMetric, onPresenc
     requestAnimationFrame(() => salesTrigger.current?.focus({ preventScroll: true }))
   }
   const current = emailMode || !order ? draft : order
-  const plan = ORDER_PLANS.find(p => p.id === current.plan)!
+  const service = current.plan.startsWith('custom-')
+  const plan = ORDER_PLANS.find(p => p.id === current.plan) ?? { id: current.plan, productId: !emailMode && order?.serviceDelivery?.productId || draft.productId || 'custom', name: !emailMode && order?.planName || draft.planName || '商品', renewalOnly: false }
+  const serviceName = !emailMode && order?.serviceDelivery?.productName || draft.productName || '商品'
   const emailProductInfo = emailProduct(current.plan)
-  const automaticDelivery = order?.delivery?.automatic || emailMode && ['gemini-pro-18m', 'duolingo-12m'].includes(current.plan)
+  const automaticDelivery = service && emailMode && draft.deliveryType === 'stock' || order?.delivery?.automatic || emailMode && ['gemini-pro-18m', 'duolingo-12m'].includes(current.plan)
   const xgift = plan.productId === 'x-premium'
   const sms = plan.productId === 'codex-sms'
-  const manual = !emailMode && order?.manualFulfillment === true
+  const manual = !emailMode && order?.manualFulfillment === true || service && emailMode && draft.deliveryType === 'manual'
   const paused = !emailMode && order && ((order.redemptionBlocked && order.status !== 'success') || order.refundHold || (order.refundedCents ?? 0) >= Math.round(order.price * 100))
   const reconnect = !sms && order?.mode === 'live' && order.fulfillment?.canSubmit
   const step = emailMode ? 0 : order?.status === 'pending' || order?.status === 'cancelled' ? 1 : order?.status === 'session' || (manual || xgift) && order?.status === 'processing' || reconnect || (!sms && order?.status === 'failed' && order.mode === 'demo') ? sms && order.smsPhone ? 3 : 2 : 3
   const completed = !emailMode && order?.status === 'success' && !paused
-  const steps = [xgift ? '填写账号' : '下单邮箱', '确认付款', xgift ? '充值处理' : automaticDelivery ? '自动发货' : emailProductInfo ? '邮件发货' : sms ? '获取号码' : manual ? '人工开通' : '连接账号', xgift ? '查看结果' : automaticDelivery ? '领取商品' : emailProductInfo ? '查收邮件' : sms ? '查询结果' : '开通结果']
+  const steps = [xgift ? '填写账号' : '下单邮箱', '确认付款', xgift ? '充值处理' : service && !automaticDelivery ? '服务处理' : automaticDelivery ? '自动发货' : emailProductInfo ? '邮件发货' : sms ? '获取号码' : manual ? '人工开通' : '连接账号', xgift ? '查看结果' : service && !automaticDelivery ? '查看交付' : automaticDelivery ? '领取商品' : emailProductInfo ? '查收邮件' : sms ? '查询结果' : '开通结果']
   const archived = !emailMode && order?.mode !== 'live' && !checkout.testingEnabled
   const result = !emailMode && (archived || !reconnect && ['processing', 'success', 'failed', 'cancelled'].includes(order?.status ?? '') || (sms && step === 2))
-  const title = emailMode ? xgift ? '为哪个账号开通？' : '填写下单邮箱' : archived ? '订单已归档' : paused ? orderLabel(order!) : result ? orderLabel(order!) : step === 1 ? '确认本次付款' : step === 2 ? xgift ? '等待充值' : automaticDelivery ? '等待自动发货' : emailProductInfo ? '等待邮件发货' : manual ? '等待人工开通' : '连接你的账号' : '查询接码结果'
+  const title = emailMode ? xgift ? '为哪个账号开通？' : '填写下单邮箱' : archived ? '订单已归档' : paused ? orderLabel(order!) : result ? orderLabel(order!) : step === 1 ? '确认本次付款' : step === 2 ? xgift ? '等待充值' : automaticDelivery ? '等待自动发货' : emailProductInfo ? '等待邮件发货' : service ? '等待服务交付' : manual ? '等待人工开通' : '连接你的账号' : '查询接码结果'
   const stage = emailMode ? 'email' : `${order?.id}-${order?.status}-${Boolean(order?.smsPhone)}-${Boolean(paused)}`
   const presenceDeadline = !emailMode && order ? paymentDeadline(order.createdAt, order.fulfillment?.expiresAt) : null
   const presenceActive = Boolean(open && plan.productId === 'chatgpt' && !showingNotice && !showingSales && !paused && !checkout.testingEnabled && (emailMode || (order?.mode === 'live' && !order.isTest && order.paymentStatus === 'unpaid' && order.status === 'pending' && !order.fulfillment?.paymentExpired && presenceDeadline! > presenceClock)))
@@ -141,7 +143,7 @@ export function PurchaseFlow({ presenceOthers = null, marketingMetric, onPresenc
   const close = (value: boolean) => { if (busy || salesBusy) return; if (!value && showingSales) closeSales(); else onOpenChange(value) }
   return <OrderSupportGuideContext.Provider value={showSupportGuide}><Dialog open={open} disablePointerDismissal onOpenChange={close} onOpenChangeComplete={value => { if (!value) { setSalesOpen(false); setSalesOrder(null); setSalesHeight(null); setDismissedSupportReason(null); onCloseComplete?.() } }}>
     <DialogContent data-checkout-presence-active={presenceActive} ref={popupRef} style={{ height: !emailMode && salesHeight?.orderId === order?.id ? salesHeight?.height : undefined }} className={showingNotice ? 'motion-dialog purchase-notice' : `motion-dialog purchase-flow${xgift ? ' x-purchase-flow' : ''}`} data-sales-open={showingSales} showCloseButton={showingNotice} initialFocus={titleRef}>
-      {notice ? <PurchaseNotice plan={draft.plan} purchaseNote={notice.purchaseNote} supportsWarranty={notice.supportsWarranty} titleRef={titleRef} onCancel={() => close(false)} onContinue={notice.onContinue} /> : <>
+      {notice ? <PurchaseNotice service={service ? { name: serviceName, planName: plan.name, kind: draft.deliveryType ?? 'stock' } : undefined} plan={draft.plan} purchaseNote={notice.purchaseNote} supportsWarranty={notice.supportsWarranty} titleRef={titleRef} onCancel={() => close(false)} onContinue={notice.onContinue} /> : <>
       <header className="flow-ticket">
         <div className="flow-ticket-meta"><span className="flow-ticket-label">{emailMode && xgift ? '确认订单' : '订单编号'}</span>{!emailMode && order ? <span className="flow-order-id" title={order.id}>{order.id}</span> : !(emailMode && xgift) && <span className="flow-ticket-draft">待生成</span>}</div>
         <div className="flow-ticket-actions">{!emailMode && order && <CopyButton key={order.id} iconOnly variant="ghost" value={order.id} label="复制订单号" />}<Button className="flow-close" variant="ghost" size="icon-sm" aria-label={showingSales ? '收起售后，返回订单' : '关闭下单窗口'} disabled={busy || salesBusy} onClick={() => close(false)}><X size={17} /></Button></div>
@@ -149,8 +151,8 @@ export function PurchaseFlow({ presenceOthers = null, marketingMetric, onPresenc
       <div className="flow-layout">
       <div className="flow-main" inert={salesBusy || showingSales && compact} aria-hidden={showingSales && compact || undefined}>
       <header className="flow-header">
-        <div className="flow-product"><ProductMark small productId={plan.productId} /><div className="flow-product-main"><strong>{productNameForId(plan.productId)}</strong><p>{!emailMode && order ? order.planName : plan.name}{!xgift && <> · {emailProductInfo ? emailProductInfo.duration + ' · 邮件发货' : sms ? '1 次服务' : plan.renewalOnly ? '按月续费' : '按月订阅'}</>}</p></div><div className="flow-product-meta"><strong className="flow-price"><small>¥</small>{(!emailMode && order?.paymentSummary ? order.paymentSummary.amountCents / 100 : current.price).toFixed(2)}</strong><span className="flow-product-qty">数量 × 1</span></div></div>
-        <DialogDescription className="sr-only">{xgift ? '填写用户名与邮箱，验证账号后付款。' : current.plan === 'gmail-account' ? '填写收件邮箱并确认付款，账号资料自动邮件发货。' : emailProductInfo ? '填写收件邮箱并确认付款，自动发货后可在订单页与邮箱领取。' : sms ? '填写邮箱，确认付款后获取手机号，再查询接码结果。' : manual ? '填写邮箱并确认付款，联系支持人工开通后查看结果。' : '填写邮箱并确认付款，连接账号后查看开通结果。'}</DialogDescription>
+        <div className="flow-product"><ProductMark small productId={plan.productId} /><div className="flow-product-main"><strong>{service ? serviceName : productNameForId(plan.productId)}</strong><p>{!emailMode && order ? order.planName : plan.name}{!xgift && <> · {service ? '1 份 · ' + (automaticDelivery ? '自动交付' : '人工服务') : emailProductInfo ? emailProductInfo.duration + ' · 邮件发货' : sms ? '1 次服务' : plan.renewalOnly ? '按月续费' : '按月订阅'}</>}</p></div><div className="flow-product-meta"><strong className="flow-price"><small>¥</small>{(!emailMode && order?.paymentSummary ? order.paymentSummary.amountCents / 100 : current.price).toFixed(2)}</strong><span className="flow-product-qty">数量 × 1</span></div></div>
+        <DialogDescription className="sr-only">{service ? '填写下单邮箱并确认付款，在原订单查看交付内容与处理进度。' : xgift ? '填写用户名与邮箱，验证账号后付款。' : current.plan === 'gmail-account' ? '填写收件邮箱并确认付款，账号资料自动邮件发货。' : emailProductInfo ? '填写收件邮箱并确认付款，自动发货后可在订单页与邮箱领取。' : sms ? '填写邮箱，确认付款后获取手机号，再查询接码结果。' : manual ? '填写邮箱并确认付款，联系支持人工开通后查看结果。' : '填写邮箱并确认付款，连接账号后查看开通结果。'}</DialogDescription>
         <ol className="flow-steps" aria-label="下单进度">{steps.map((label, i) => <li key={label} data-state={i < step || completed ? 'done' : i === step ? 'current' : 'next'} aria-current={!completed && i === step ? 'step' : undefined}><span>{i < step || completed ? <Check size={12} /> : i + 1}</span><span>{label}</span></li>)}</ol>
         {presenceActive && <CheckoutPresence others={presenceOthers} metric={marketingMetric} />}
       </header>

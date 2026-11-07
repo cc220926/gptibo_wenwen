@@ -1,3 +1,6 @@
+import { inventoryAdmin } from './fulfillment/admin.ts'
+import { createServiceOrder, fulfillService, serviceCatalog, serviceCheckoutEnabled, serviceOrderSummary } from './fulfillment/service.ts'
+import { isServicePlan } from '../shared/fulfillment.ts'
 import { isDeliverySupplierPlan } from './delivery_supplier/client.ts'
 import { isXGiftPlan, xUsername } from '../shared/xgift-products.ts'
 import { recoverXGift, fulfillXGift, preflightXGift, xgiftCheckoutEnabled, xgiftSnapshot, xgiftSnapshotStatement, xgiftSummary } from './xgift/service.ts'
@@ -36,16 +39,16 @@ type OrderPartnerSource = { id: string; slug: string; name: string; email: strin
 const statuses: Status[] = ['pending', 'session', 'processing', 'success', 'failed', 'cancelled']
 const publicOrder = (o: Order) => ({ purchaseNote: o.purchase_note ?? '', isTest: Boolean(o.is_test), customerEmail: o.customer_email, refundedCents: o.refunded_cents, refundHold: Boolean(o.refund_hold), redemptionBlocked: Boolean(o.redemption_blocked), id: o.id, plan: o.plan, planName: o.plan_name, partnerName: o.partner_name ?? undefined, price: o.price_cents / 100, mode: o.mode, paymentStatus: o.payment_status, status: o.status, createdAt: o.created_at, updatedAt: o.updated_at, startedAt: o.started_at ?? undefined, smsPhone: o.sms_phone ?? undefined, version: o.version })
 type AdminOrder = Order & { settlement_status: 'pending' | 'paid' | null }
-const adminOrder = async (env: Env, o: AdminOrder) => ({ ...(await customerOrder(env, o)), platformStatus: await platformOrderStatus(env, o), settlementStatus: o.settlement_status })
+const adminOrder = async (env: Env, o: AdminOrder) => ({ ...(await customerOrder(env, o, undefined, false, false)), platformStatus: await platformOrderStatus(env, o), settlementStatus: o.settlement_status })
 const plans = async (env: Env) => (await env.INTEREST_DB.prepare('SELECT * FROM catalog_plans ORDER BY rowid').all<Plan>()).results
-const customerOrder = async (env: Env, o: Order, contacts = new Map<string, Promise<SupportContactsSettings>>(), syncError = false) => {
+const customerOrder = async (env: Env, o: Order, contacts = new Map<string, Promise<SupportContactsSettings>>(), syncError = false, reveal = true) => {
   o = await expireRechargeOrder(env, o)
   const owner = o.partner_id ?? 'platform'
   const settings = contacts.get(owner) ?? supportContactsSettings(env, owner)
   contacts.set(owner, settings)
   const [support, fulfillment] = await Promise.all([settings, rechargeSummary(env, o)])
   if (fulfillment) Object.assign(fulfillment, { syncError })
-  return { ...publicOrder(o), xgift: await xgiftSummary(env, o), manualFulfillment: isLegacyManualOrder(o, Boolean(fulfillment)) || Boolean(emailProduct(o.plan)), delivery: await emailDeliverySummary(env, o), supportContacts: support.contacts, refundHold: !!o.refund_hold || !!fulfillment?.financialHold, fulfillment }
+  return { ...publicOrder(o), xgift: await xgiftSummary(env, o), manualFulfillment: isLegacyManualOrder(o, Boolean(fulfillment)) || Boolean(emailProduct(o.plan)), delivery: await emailDeliverySummary(env, o), supportContacts: support.contacts, refundHold: !!o.refund_hold || !!fulfillment?.financialHold, fulfillment, ...await serviceOrderSummary(env, o, reveal) }
 }
 async function orderPartnerSource(env: Env, order: Order): Promise<OrderPartnerSource | null> {
   if (!order.partner_id) return null
@@ -78,6 +81,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
     if (path.startsWith('/api/partner/')) return await partnerRoutes(request, env, url)
     if (path.startsWith('/api/admin/')) {
       await requireAdmin(request, env)
+      if (path === '/api/admin/inventory' || path.startsWith('/api/admin/inventory/')) return await inventoryAdmin(request, env, url)
       if (path.startsWith('/api/admin/xgift/')) return await xgiftAdmin(request, env, url)
       if (path === '/api/admin/account_supplier' || path.startsWith('/api/admin/account_supplier/')) return await gmailProductsRoute(request, env, url)
       if (path === '/api/admin/recharge-reminders/preview') return await rechargeReminderPreview(request, env)
@@ -107,11 +111,13 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
         partner ? null : platformMarketingMetric(env),
       ])
       // Storefront prices are configured retail prices, independent of supplier latency.
-      const offers = (catalog.plans as Plan[]).map(plan => ({ ...plan, enabled: plan.enabled && (
+      const customOffers = partner ? [] : await serviceCatalog(env) as (Plan & { stock_available: number; delivery_type: string })[]
+      const customOpen = await serviceCheckoutEnabled(env)
+      const offers = (catalog.plans as Plan[]).filter(plan => !isServicePlan(plan.id)).map(plan => ({ ...plan, enabled: plan.enabled && (
         isXGiftPlan(plan.id) ? xgiftCheckoutEnabled(env) : plan.id === 'gmail-account' ? gmail : isDeliverySupplierPlan(plan.id) ? delivery_supplier : emailProduct(plan.id) ? email : testing || (live && Boolean(mapped[plan.id]))
       ) ? 1 : 0 }))
       const hiddenProductIds: readonly string[] = platformVisibility?.hiddenProductIds ?? ('hiddenProductIds' in catalog ? catalog.hiddenProductIds : [])
-      return json({ ...catalog, hiddenProductIds, marketingMetric: marketingMetric && { enabled: marketingMetric.enabled, displayText: marketingMetric.displayText, displayCount: marketingMetric.displayCount }, supportContacts: support.contacts, announcement, plans: offers.filter(plan => !hiddenProductIds.includes(plan.product_id)), mode: live ? 'live' : 'demo', checkoutEnabled: testing || live || email || xgiftCheckoutEnabled(env), testingEnabled: testing }, 200, { 'Server-Timing': `catalog;dur=${(performance.now() - started).toFixed(1)}` })
+      return json({ ...catalog, hiddenProductIds, marketingMetric: marketingMetric && { enabled: marketingMetric.enabled, displayText: marketingMetric.displayText, displayCount: marketingMetric.displayCount }, supportContacts: support.contacts, announcement, plans: [...offers, ...customOffers.map(plan => ({ ...plan, enabled: plan.enabled && customOpen && (plan.delivery_type !== 'stock' || plan.stock_available > 0) ? 1 : 0 }))].filter(plan => !hiddenProductIds.includes(plan.product_id)), mode: live ? 'live' : 'demo', checkoutEnabled: testing || live || email || xgiftCheckoutEnabled(env) || customOpen, testingEnabled: testing }, 200, { 'Server-Timing': `catalog;dur=${(performance.now() - started).toFixed(1)}` })
     }
     if (path === '/api/orders/client' && method === 'POST') {
       await body(request)
@@ -133,6 +139,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
       const syncErrors = new Set<string>()
       const settled = await Promise.all(rows.map(async row => {
         let current = await settle(env, row)
+        if (isServicePlan(row.plan)) { await fulfillService(env, row.id); current = await getOrder(env, row.id) }
         if (isXGiftPlan(row.plan) && synced++ < 5) { await fulfillXGift(env, row.id); current = await getOrder(env, row.id) }
         if (row.mode === 'live' && ['pending','processing'].includes(row.status) && synced++ < 5) {
           try { current = await syncRechargeOrder(env, current) } catch { syncErrors.add(row.id) /* Keep last confirmed state on a provider outage. */ }
@@ -155,6 +162,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
         if (isXGiftPlan(existing.plan) && (await xgiftSummary(env, existing))?.username !== xUsername(data.username)) throw new ApiError('请求编号已绑定其他接收账号。', 409)
         return json({ order: await customerOrder(env, existing) })
       }
+      if (isServicePlan(data.plan)) return json({ order: await customerOrder(env, await createServiceOrder(env, ownerHash, email, data)) }, 201)
       const emailDelivery = Boolean(emailProduct(data.plan))
       const live = isXGiftPlan(data.plan) ? xgiftCheckoutEnabled(env) : data.plan === 'gmail-account' ? gmailCheckoutEnabled(env) : isDeliverySupplierPlan(data.plan) ? delivery_supplierCheckoutEnabled(env) : emailDelivery ? emailCheckoutEnabled(env) : supplierCheckoutEnabled(env)
       if (emailDelivery && !live) throw new ApiError('邮件交付商品暂未开放购买。', 409)
@@ -206,6 +214,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
       if (match[2] === '/refunds') return await customerRefunds(request, env, o)
       if (!match[2] && method === 'GET') {
         o = await settle(env, o)
+        if (isServicePlan(o.plan)) { await fulfillService(env, o.id); o = await getOrder(env, o.id) }
         if (isXGiftPlan(o.plan)) { await fulfillXGift(env, o.id); o = await getOrder(env, o.id) }
         let syncError = false
         try { o = await syncRechargeOrder(env, o) } catch { syncError = true /* Never replace a confirmed result with a network failure. */ }
@@ -333,6 +342,7 @@ async function admin(request: Request, env: Env, url: URL): Promise<Response> {
   if (path === '/api/admin/plans' && method === 'GET') return json({ plans: await plans(env) })
   const planMatch = path.match(/^\/api\/admin\/plans\/([a-z0-9-]+)$/)
   if (planMatch && method === 'POST') {
+    if (isServicePlan(planMatch[1])) throw new ApiError('请在自有商品与库存中编辑该规格。', 409)
     const data = await body(request); const note = requiredNote(data)
     if (!Number.isSafeInteger(data.priceCents) || Number(data.priceCents) < 1 || Number(data.priceCents) > 10000000 || typeof data.enabled !== 'boolean' || !Number.isInteger(data.version)) throw new ApiError('价格或商品状态无效。')
     if (data.partnerEnabled !== undefined && typeof data.partnerEnabled !== 'boolean') throw new ApiError('代理销售设置无效。')
