@@ -1,9 +1,17 @@
 import { UsersRound } from 'lucide-react'
 import { useStorefrontI18n } from '@/lib/storefront-i18n'
 import '@/styles/checkout-presence.css'
+import type { MarketingMetric } from '../../shared/marketing-metric'
 
-export function CheckoutPresence({ others, compact = false }: { others: number | null; compact?: boolean }) {
+export function CheckoutPresence({ others, compact = false, metric }: { others: number | null; compact?: boolean; metric?: MarketingMetric | null }) {
   const { locale } = useStorefrontI18n()
+  if (metric?.enabled) {
+    const [before, after] = metric.displayText.split('{count}')
+    return <div className={compact ? 'checkout-presence checkout-presence--compact' : 'checkout-presence'}>
+      <UsersRound size={14} aria-hidden="true" />
+      <span>{before}<strong>{metric.displayCount}</strong>{after}<small>{locale === 'en' ? 'Merchant-set display · Not a live sales count' : '商家设置的展示信息 · 非实时成交统计'}</small></span>
+    </div>
+  }
   if (others === null || !Number.isSafeInteger(others) || others < 0) return null
   const english = locale === 'en'
   const explanation = english

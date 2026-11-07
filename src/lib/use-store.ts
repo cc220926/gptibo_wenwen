@@ -7,6 +7,7 @@ import type { DemoOrder, OrderAction, PlanId } from './demo-orders'
 import { storefrontShopSlug } from './storefront-routing'
 import type { SupportContacts } from '../../shared/support-contacts'
 import type { AnnouncementSettings } from '../../shared/announcements'
+import type { MarketingMetric } from '../../shared/marketing-metric'
 import { readStoreResources } from './store-reads'
 
 export type ServerOrder = DemoOrder & { supportsWarranty?: boolean; paymentSummary?: { amountCents: number; feeCents: number; feeBps: number; refundedFeeCents: number } | null; xgift?: { username: string; state: string; receipt: string | null; failureCode: string | null; message: string } | null; delivery?: DeliverySummary; purchaseNote?: string; manualFulfillment?: boolean; isTest?: boolean; version: number; mode: 'demo' | 'live'; paymentStatus: string; planName: string; partnerName?: string; settlementStatus?: 'pending' | 'paid' | null; partnerSource?: { id: string; slug: string; name: string; email: string; wechat: string; qq: string } | null; supportContacts?: SupportContacts; updatedAt: number; fulfillment?: { precheckRequired?: boolean; syncError?: boolean; financialHold?: boolean; paymentUrl: string | null; paymentQr?: string | null; paymentKind?: 'qr' | 'link' | null; expiresAt: number | null; paymentExpired?: boolean; rechargeStatus: string | null; failureCode?: string | null; errorCategory?: string | null; resultCode?: string | null; progressStage?: string | null; progressVersion?: number; progressUpdatedAt?: number | null; attemptNo?: number | null; retryKey: string | null; retryMode: 'session' | 'access_token' | null; canSubmit: boolean; message: string | null; accountEmailMasked: string | null; finishedAt: number | null } }
@@ -19,6 +20,7 @@ export function useStore(page: string) {
   const [orders, setOrders] = useState<ServerOrder[]>([])
   const [recoveryEmail, setRecoveryEmail] = useState<string | null>(null)
   const [hiddenProductIds, setHiddenProductIds] = useState<StorefrontProductId[]>([])
+  const [marketingMetric, setMarketingMetric] = useState<MarketingMetric | null>(null)
   const [productOrder, setProductOrder] = useState<StorefrontProductId[]>([])
   const [completedOrdersByProduct, setCompletedOrdersByProduct] = useState<Record<string, number>>({})
   const [catalog, setCatalog] = useState<CatalogPlan[]>([])
@@ -48,9 +50,9 @@ export function useStore(page: string) {
       const [list, offers] = await readStoreResources({
         initialize: initializeClient,
         orders: () => api<{ orders: ServerOrder[]; recoveryEmail: string | null }>('/api/orders'),
-        catalog: () => api<{ completedOrdersByProduct?: Record<string, number>; plans: CatalogPlan[]; paymentMethods?: PaymentMethodOption[]; productOrder?: StorefrontProductId[]; hiddenProductIds?: StorefrontProductId[]; supportContacts: SupportContacts; announcement?: AnnouncementSettings | null; checkoutEnabled?: boolean; testingEnabled?: boolean; partner?: { name: string; slug: string; brandName?: string; logo?: string; pageTitle?: string; headline?: string; description?: string } }>('/api/catalog' + (shopSlug ? '?partner=' + encodeURIComponent(shopSlug) : '')),
+        catalog: () => api<{ completedOrdersByProduct?: Record<string, number>; plans: CatalogPlan[]; paymentMethods?: PaymentMethodOption[]; productOrder?: StorefrontProductId[]; hiddenProductIds?: StorefrontProductId[]; marketingMetric?: MarketingMetric | null; supportContacts: SupportContacts; announcement?: AnnouncementSettings | null; checkoutEnabled?: boolean; testingEnabled?: boolean; partner?: { name: string; slug: string; brandName?: string; logo?: string; pageTitle?: string; headline?: string; description?: string } }>('/api/catalog' + (shopSlug ? '?partner=' + encodeURIComponent(shopSlug) : '')),
         onOrders: value => { if (generation.current === current) { setOrders(value.orders); setRecoveryEmail(value.recoveryEmail) } },
-        onCatalog: value => { if (generation.current === current) { setCatalog(value.plans); setCompletedOrdersByProduct(value.completedOrdersByProduct ?? {}); setPaymentMethods(value.paymentMethods ?? []); setProductOrder(value.productOrder ?? []); setHiddenProductIds(value.hiddenProductIds ?? []); setSupportContacts(value.supportContacts); setAnnouncement(value.announcement ?? null); setCheckoutEnabled(value.checkoutEnabled === true); setTestingEnabled(value.testingEnabled === true); setPartner(value.partner); setCatalogReady(true); setShopUnavailable(false) } },
+        onCatalog: value => { if (generation.current === current) { setCatalog(value.plans); setCompletedOrdersByProduct(value.completedOrdersByProduct ?? {}); setPaymentMethods(value.paymentMethods ?? []); setProductOrder(value.productOrder ?? []); setHiddenProductIds(value.hiddenProductIds ?? []); setMarketingMetric(value.marketingMetric ?? null); setSupportContacts(value.supportContacts); setAnnouncement(value.announcement ?? null); setCheckoutEnabled(value.checkoutEnabled === true); setTestingEnabled(value.testingEnabled === true); setPartner(value.partner); setCatalogReady(true); setShopUnavailable(false) } },
         onReady: () => { if (generation.current === current) setReady(true) },
       })
       if (generation.current === current) {
@@ -102,5 +104,5 @@ export function useStore(page: string) {
       return old && old.version > order.version ? previous : [order, ...previous.filter(item => item.id !== order.id)].sort((a,b) => b.createdAt-a.createdAt).slice(0,100)
     })
   }
-  return { orders, recoveryEmail, catalog, completedOrdersByProduct, paymentMethods, productOrder, hiddenProductIds, checkoutEnabled, testingEnabled, partner, catalogReady, supportContacts, announcement, shopUnavailable, ready, busy, pendingAction, error, refresh, create, action, acceptOrder }
+  return { orders, recoveryEmail, catalog, completedOrdersByProduct, paymentMethods, productOrder, hiddenProductIds, marketingMetric, checkoutEnabled, testingEnabled, partner, catalogReady, supportContacts, announcement, shopUnavailable, ready, busy, pendingAction, error, refresh, create, action, acceptOrder }
 }

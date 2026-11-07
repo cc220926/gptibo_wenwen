@@ -15,6 +15,7 @@ import { OrderSupportButton } from './order-support-button'
 import { OrderSupportGuideContext } from '@/lib/order-support-guide'
 import { ORDER_PLANS, orderLabel, type PlanId } from '@/lib/demo-orders'
 import '@/styles/purchase-flow.css'
+import type { MarketingMetric } from '../../shared/marketing-metric'
 
 // Keep the popup and its focus scope mounted while only the step content changes.
 function FlowStage({ stage, children }: { stage: string; children: ReactNode }) {
@@ -49,8 +50,8 @@ function FlowStage({ stage, children }: { stage: string; children: ReactNode }) 
   return <div ref={viewport} className="flow-viewport"><div ref={content} className="flow-stage">{children}</div></div>
 }
 
-type Props = CheckoutProps & { presenceOthers?: number | null; onPresenceActivityChange?: (active: boolean) => void; couponAvailable?: boolean; shopSlug?: string; onCloseComplete?: () => void; notice?: { supportsWarranty?: boolean; purchaseNote?: string; onContinue: () => void }; emailMode: boolean; paymentMethods?: PaymentMethodOption[]; draft: { plan: PlanId; price: number }; initialEmail?: string | null; onSubmitEmail: (email: string, username?: string, preflightToken?: string, paymentMethod?: string, expectedFeeBps?: number, turnstileToken?: string, couponCode?: string, couponPrice?: number) => Promise<void>; children?: ReactNode | ((refreshTarget: HTMLElement | null) => ReactNode) }
-export function PurchaseFlow({ presenceOthers = null, onPresenceActivityChange, couponAvailable = false, shopSlug, notice, onCloseComplete, emailMode, paymentMethods, draft, initialEmail, onSubmitEmail, children, ...checkout }: Props) {
+type Props = CheckoutProps & { presenceOthers?: number | null; marketingMetric?: MarketingMetric | null; onPresenceActivityChange?: (active: boolean) => void; couponAvailable?: boolean; shopSlug?: string; onCloseComplete?: () => void; notice?: { supportsWarranty?: boolean; purchaseNote?: string; onContinue: () => void }; emailMode: boolean; paymentMethods?: PaymentMethodOption[]; draft: { plan: PlanId; price: number }; initialEmail?: string | null; onSubmitEmail: (email: string, username?: string, preflightToken?: string, paymentMethod?: string, expectedFeeBps?: number, turnstileToken?: string, couponCode?: string, couponPrice?: number) => Promise<void>; children?: ReactNode | ((refreshTarget: HTMLElement | null) => ReactNode) }
+export function PurchaseFlow({ presenceOthers = null, marketingMetric, onPresenceActivityChange, couponAvailable = false, shopSlug, notice, onCloseComplete, emailMode, paymentMethods, draft, initialEmail, onSubmitEmail, children, ...checkout }: Props) {
   const { order, open, onOpenChange, busy, error } = checkout
   const [refreshTarget, setRefreshTarget] = useState<HTMLDivElement | null>(null)
   const [supportReason, setSupportReason] = useState<string | null>(null)
@@ -151,7 +152,7 @@ export function PurchaseFlow({ presenceOthers = null, onPresenceActivityChange, 
         <div className="flow-product"><ProductMark small productId={plan.productId} /><div className="flow-product-main"><strong>{productNameForId(plan.productId)}</strong><p>{!emailMode && order ? order.planName : plan.name}{!xgift && <> · {emailProductInfo ? emailProductInfo.duration + ' · 邮件发货' : sms ? '1 次服务' : plan.renewalOnly ? '按月续费' : '按月订阅'}</>}</p></div><div className="flow-product-meta"><strong className="flow-price"><small>¥</small>{(!emailMode && order?.paymentSummary ? order.paymentSummary.amountCents / 100 : current.price).toFixed(2)}</strong><span className="flow-product-qty">数量 × 1</span></div></div>
         <DialogDescription className="sr-only">{xgift ? '填写用户名与邮箱，验证账号后付款。' : current.plan === 'gmail-account' ? '填写收件邮箱并确认付款，账号资料自动邮件发货。' : emailProductInfo ? '填写收件邮箱并确认付款，自动发货后可在订单页与邮箱领取。' : sms ? '填写邮箱，确认付款后获取手机号，再查询接码结果。' : manual ? '填写邮箱并确认付款，联系支持人工开通后查看结果。' : '填写邮箱并确认付款，连接账号后查看开通结果。'}</DialogDescription>
         <ol className="flow-steps" aria-label="下单进度">{steps.map((label, i) => <li key={label} data-state={i < step || completed ? 'done' : i === step ? 'current' : 'next'} aria-current={!completed && i === step ? 'step' : undefined}><span>{i < step || completed ? <Check size={12} /> : i + 1}</span><span>{label}</span></li>)}</ol>
-        {presenceActive && <CheckoutPresence others={presenceOthers} />}
+        {presenceActive && <CheckoutPresence others={presenceOthers} metric={marketingMetric} />}
       </header>
       <FlowStage stage={stage}>
         <DialogTitle ref={titleRef} tabIndex={-1} data-stage-title className={(xgift && !emailMode) || (result && !paused) || step === 1 ? 'sr-only' : 'flow-title'}>{title}</DialogTitle>

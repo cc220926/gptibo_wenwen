@@ -1,0 +1,11 @@
+.admin-marketing-metric { display:grid; gap:10px; padding:18px 20px; }
+.admin-marketing-metric p { margin:0 0 5px; color:var(--muted-foreground); font-size:12px; line-height:1.7; }
+.admin-marketing-metric label { font-size:12px; font-weight:550; }
+.admin-marketing-metric-toggle { display:flex; align-items:center; gap:8px; margin:4px 0; }
+.admin-marketing-metric-toggle input { width:16px; height:16px; }
+.admin-marketing-metric small { color:var(--muted-foreground); font-size:11px; line-height:1.6; }
+.admin-marketing-metric-preview { padding:11px; border:1px solid var(--border); border-radius:9px; background:var(--muted); overflow-wrap:anywhere; }
+.admin-marketing-metric-preview small { display:block; margin-top:3px; }
+.admin-marketing-metric>button { justify-self:start; }
+.admin-marketing-metric .admin-error,.admin-marketing-metric .admin-success { margin:0; }
+@media(max-width:760px) { .admin-marketing-metric { padding:16px 14px; } .admin-marketing-metric>button { width:100%; } }

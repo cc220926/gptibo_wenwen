@@ -29,6 +29,7 @@ import { publicAnnouncement } from './announcements.ts'
 import { rechargeReminderPreview } from './recharge-reminders.ts'
 import { adminGmailOrder, confirmGmailNotPurchased, fulfillGmail, gmailCheckoutEnabled, gmailProductsRoute, gmailSnapshot, gmailSnapshotStatement } from './account_supplier/service.ts'
 import { platformProductHidden, platformProductVisibility, platformProductVisibilityRoute } from './platform-product-visibility.ts'
+import { platformMarketingMetric, platformMarketingMetricRoute } from './platform-marketing-metric.ts'
 
 type Plan = { delivery_instructions: string; partner_enabled: number; id: string; product_id: string; name: string; price_cents: number; enabled: number; renewal_only: number; version: number }
 type OrderPartnerSource = { id: string; slug: string; name: string; email: string; wechat: string; qq: string }
@@ -98,18 +99,19 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
       const testing = env.ORDER_TESTING_ENABLED === 'true'
       const email = emailCheckoutEnabled(env), gmail = gmailCheckoutEnabled(env), delivery_supplier = delivery_supplierCheckoutEnabled(env)
       const mapped = live ? productMap(env) : {}
-      const [catalog, support, announcement, platformVisibility] = await Promise.all([
+      const [catalog, support, announcement, platformVisibility, marketingMetric] = await Promise.all([
         partner ? partnerCatalog(env, partner) : plans(env).then(plans => ({ plans })),
         supportContactsSettings(env, partner?.id),
         partner ? publicAnnouncement(env, partner.id) : null,
         partner ? null : platformProductVisibility(env),
+        partner ? null : platformMarketingMetric(env),
       ])
       // Storefront prices are configured retail prices, independent of supplier latency.
       const offers = (catalog.plans as Plan[]).map(plan => ({ ...plan, enabled: plan.enabled && (
         isXGiftPlan(plan.id) ? xgiftCheckoutEnabled(env) : plan.id === 'gmail-account' ? gmail : isDeliverySupplierPlan(plan.id) ? delivery_supplier : emailProduct(plan.id) ? email : testing || (live && Boolean(mapped[plan.id]))
       ) ? 1 : 0 }))
       const hiddenProductIds: readonly string[] = platformVisibility?.hiddenProductIds ?? ('hiddenProductIds' in catalog ? catalog.hiddenProductIds : [])
-      return json({ ...catalog, hiddenProductIds, supportContacts: support.contacts, announcement, plans: offers.filter(plan => !hiddenProductIds.includes(plan.product_id)), mode: live ? 'live' : 'demo', checkoutEnabled: testing || live || email || xgiftCheckoutEnabled(env), testingEnabled: testing }, 200, { 'Server-Timing': `catalog;dur=${(performance.now() - started).toFixed(1)}` })
+      return json({ ...catalog, hiddenProductIds, marketingMetric: marketingMetric && { enabled: marketingMetric.enabled, displayText: marketingMetric.displayText, displayCount: marketingMetric.displayCount }, supportContacts: support.contacts, announcement, plans: offers.filter(plan => !hiddenProductIds.includes(plan.product_id)), mode: live ? 'live' : 'demo', checkoutEnabled: testing || live || email || xgiftCheckoutEnabled(env), testingEnabled: testing }, 200, { 'Server-Timing': `catalog;dur=${(performance.now() - started).toFixed(1)}` })
     }
     if (path === '/api/orders/client' && method === 'POST') {
       await body(request)
@@ -239,6 +241,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
 async function admin(request: Request, env: Env, url: URL): Promise<Response> {
   const path = url.pathname; const method = request.method; const db = env.INTEREST_DB
   if (path === '/api/admin/product-visibility') return platformProductVisibilityRoute(request, env)
+  if (path === '/api/admin/marketing-metric') return platformMarketingMetricRoute(request, env)
   if (path === '/api/admin/payments/reconcile' && method === 'POST') { await body(request); return json(await reconcilePayments(env)) }
   if (path === '/api/admin/recharge/reconcile' && method === 'POST') { await body(request); return json(await reconcileRecharge(env)) }
   if (path === '/api/admin/overview' && method === 'GET') {
