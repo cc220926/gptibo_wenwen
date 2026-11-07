@@ -30,6 +30,7 @@
     "cn": "^0.4.0",
     "date-fns": "^4.4.0",
     "exceljs": "^4.4.0",
+    "fast-png": "^8.0.0",
     "lottie-web": "^5.13.0",
     "lucide-react": "^1.48.0",
     "qrcode": "^1.5.4",

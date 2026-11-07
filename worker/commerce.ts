@@ -1,3 +1,4 @@
+import { platformBranding, platformAnnouncement, platformBrandingRoute, platformAnnouncementRoute } from './platform-store-settings.ts'
 import { inventoryAdmin } from './fulfillment/admin.ts'
 import { createServiceOrder, fulfillService, serviceCatalog, serviceCheckoutEnabled, serviceOrderSummary } from './fulfillment/service.ts'
 import { isServicePlan } from '../shared/fulfillment.ts'
@@ -81,6 +82,8 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
     if (path.startsWith('/api/partner/')) return await partnerRoutes(request, env, url)
     if (path.startsWith('/api/admin/')) {
       await requireAdmin(request, env)
+      if (path === '/api/admin/branding' || path === '/api/admin/branding/logo') return await platformBrandingRoute(request, env, path.endsWith('/logo'))
+      if (path === '/api/admin/announcement') return await platformAnnouncementRoute(request, env)
       if (path === '/api/admin/inventory' || path.startsWith('/api/admin/inventory/')) return await inventoryAdmin(request, env, url)
       if (path.startsWith('/api/admin/xgift/')) return await xgiftAdmin(request, env, url)
       if (path === '/api/admin/account_supplier' || path.startsWith('/api/admin/account_supplier/')) return await gmailProductsRoute(request, env, url)
@@ -103,12 +106,13 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
       const testing = env.ORDER_TESTING_ENABLED === 'true'
       const email = emailCheckoutEnabled(env), gmail = gmailCheckoutEnabled(env), delivery_supplier = delivery_supplierCheckoutEnabled(env)
       const mapped = live ? productMap(env) : {}
-      const [catalog, support, announcement, platformVisibility, marketingMetric] = await Promise.all([
+      const [catalog, support, announcement, platformVisibility, marketingMetric, branding] = await Promise.all([
         partner ? partnerCatalog(env, partner) : plans(env).then(plans => ({ plans })),
         supportContactsSettings(env, partner?.id),
-        partner ? publicAnnouncement(env, partner.id) : null,
+        partner ? publicAnnouncement(env, partner.id) : platformAnnouncement(env).then(value => value.enabled ? value : null),
         partner ? null : platformProductVisibility(env),
         partner ? null : platformMarketingMetric(env),
+        partner ? null : platformBranding(env),
       ])
       // Storefront prices are configured retail prices, independent of supplier latency.
       const customOffers = partner ? [] : await serviceCatalog(env) as (Plan & { stock_available: number; delivery_type: string })[]
@@ -117,7 +121,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
         isXGiftPlan(plan.id) ? xgiftCheckoutEnabled(env) : plan.id === 'gmail-account' ? gmail : isDeliverySupplierPlan(plan.id) ? delivery_supplier : emailProduct(plan.id) ? email : testing || (live && Boolean(mapped[plan.id]))
       ) ? 1 : 0 }))
       const hiddenProductIds: readonly string[] = platformVisibility?.hiddenProductIds ?? ('hiddenProductIds' in catalog ? catalog.hiddenProductIds : [])
-      return json({ ...catalog, hiddenProductIds, marketingMetric: marketingMetric && { enabled: marketingMetric.enabled, displayText: marketingMetric.displayText, displayCount: marketingMetric.displayCount }, supportContacts: support.contacts, announcement, plans: [...offers, ...customOffers.map(plan => ({ ...plan, enabled: plan.enabled && customOpen && (plan.delivery_type !== 'stock' || plan.stock_available > 0) ? 1 : 0 }))].filter(plan => !hiddenProductIds.includes(plan.product_id)), mode: live ? 'live' : 'demo', checkoutEnabled: testing || live || email || xgiftCheckoutEnabled(env) || customOpen, testingEnabled: testing }, 200, { 'Server-Timing': `catalog;dur=${(performance.now() - started).toFixed(1)}` })
+      return json({ ...catalog, platformBranding: branding, hiddenProductIds, marketingMetric: marketingMetric && { enabled: marketingMetric.enabled, displayText: marketingMetric.displayText, displayCount: marketingMetric.displayCount }, supportContacts: support.contacts, announcement, plans: [...offers, ...customOffers.map(plan => ({ ...plan, enabled: plan.enabled && customOpen && (plan.delivery_type !== 'stock' || plan.stock_available > 0) ? 1 : 0 }))].filter(plan => !hiddenProductIds.includes(plan.product_id)), mode: live ? 'live' : 'demo', checkoutEnabled: testing || live || email || xgiftCheckoutEnabled(env) || customOpen, testingEnabled: testing }, 200, { 'Server-Timing': `catalog;dur=${(performance.now() - started).toFixed(1)}` })
     }
     if (path === '/api/orders/client' && method === 'POST') {
       await body(request)

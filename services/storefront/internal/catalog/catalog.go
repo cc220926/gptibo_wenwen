@@ -65,7 +65,16 @@ type Announcement struct {
 	Content   string `json:"content"`
 	Version   int64  `json:"version"`
 }
+type StoreBranding struct {
+	Name        string `json:"name"`
+	Logo        string `json:"logo"`
+	PageTitle   string `json:"pageTitle"`
+	Headline    string `json:"headline"`
+	Description string `json:"description"`
+	Version     int64  `json:"version"`
+}
 type Response struct {
+	PlatformBranding         *StoreBranding   `json:"platformBranding,omitempty"`
 	CompletedOrdersByProduct map[string]int64 `json:"completedOrdersByProduct"`
 	HiddenProductIDs         []string         `json:"hiddenProductIds"`
 	PaymentMethods           []PaymentMethod  `json:"paymentMethods"`
@@ -196,6 +205,21 @@ func (s Service) Read(ctx context.Context, slug string) (Response, error) {
 	err = tx.QueryRow(ctx, "SELECT wechat,qq,email FROM support_contacts WHERE owner=$1", owner).Scan(&out.SupportContacts.Wechat, &out.SupportContacts.QQ, &out.SupportContacts.Email)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return out, err
+	}
+	if out.Partner == nil {
+		b := &StoreBranding{}
+		err = tx.QueryRow(ctx, `SELECT name,logo,page_title,headline,description,version FROM platform_branding WHERE id=1`).Scan(&b.Name, &b.Logo, &b.PageTitle, &b.Headline, &b.Description, &b.Version)
+		if err != nil {
+			return out, err
+		}
+		out.PlatformBranding = b
+		a := &Announcement{Enabled: true}
+		err = tx.QueryRow(ctx, `SELECT placement,title,content,version FROM platform_announcements WHERE id=1 AND enabled`).Scan(&a.Placement, &a.Title, &a.Content, &a.Version)
+		if err == nil {
+			out.Announcement = a
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return out, err
+		}
 	}
 	if out.Partner != nil {
 		a := &Announcement{Enabled: true}

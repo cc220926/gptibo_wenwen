@@ -8,6 +8,7 @@ import (
 
 func registerWorkspace(admin, partner *gin.RouterGroup, m management.Service, token func(*gin.Context, string) string) {
 	registerTickets(admin, partner, m, token)
+	registerPlatformSettings(admin, m, token)
 	own := func(c *gin.Context) string { return c.MustGet("principal").(auth.Principal).Subject }
 	respond := func(c *gin.Context, out any, e error) {
 		if e != nil {

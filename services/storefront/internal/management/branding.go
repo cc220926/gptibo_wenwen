@@ -67,6 +67,10 @@ func (s Service) PrepareLogo(ctx context.Context, owner, logo string) (PreparedL
 	if e := s.Auth.Limit(ctx, "partner-logo:"+owner, 20, 3600); e != nil {
 		return PreparedLogo{}, e
 	}
+	return prepareLogo(owner, logo)
+}
+
+func prepareLogo(owner, logo string) (PreparedLogo, error) {
 	var in PreparedLogo
 	const maxBytes = 256 * 1024
 	if len(logo) > 350000 {
