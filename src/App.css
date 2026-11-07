@@ -254,13 +254,16 @@ h1 { font-size:clamp(30px,3.4vw,43px); line-height:1.35; font-weight:600; letter
 /* Touch-friendly purchase action remains reachable on small screens. */
 .mobile-purchase-bar { display:none; }
 @media(max-width:760px) {
-  body:has(.mobile-purchase-bar) { padding-bottom:82px; }
-  .mobile-purchase-bar { display:flex; align-items:center; justify-content:space-between; gap:15px; position:fixed; bottom:0; left:0; right:0; z-index:25; padding:12px 20px calc(12px + env(safe-area-inset-bottom)); background:var(--header-surface); backdrop-filter:blur(20px); border-top:1px solid var(--border); }
-  .mobile-purchase-bar>div { display:flex; flex-direction:column; gap:3px; }
-  .mobile-purchase-bar strong { font-size:23px; font-weight:550; line-height:1.2; letter-spacing:-.7px; }
-  .mobile-purchase-bar small { font-size:14px; }
+  body:has(.mobile-purchase-bar) { padding-bottom:var(--mobile-purchase-bar-height, calc(82px + env(safe-area-inset-bottom))); }
+  .mobile-purchase-bar { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:7px 15px; position:fixed; bottom:0; left:0; right:0; z-index:25; padding:12px 20px calc(12px + env(safe-area-inset-bottom)); background:var(--header-surface); backdrop-filter:blur(20px); border-top:1px solid var(--border); }
+  .mobile-purchase-bar>div { display:flex; flex-direction:column; gap:3px; min-width:0; }
+  .mobile-purchase-bar>div>strong { font-size:23px; font-weight:550; line-height:1.2; letter-spacing:-.7px; }
+  .mobile-purchase-bar>div>strong>small { font-size:14px; }
   .mobile-purchase-bar>div>span { font-size:9px; color:var(--muted-foreground); }
   .mobile-purchase-bar>button { height:43px; padding-inline:19px; font-size:12px; }
+  .mobile-purchase-bar>.checkout-presence--compact { grid-column:1/-1; flex-direction:row; gap:6px; margin:0; padding:7px 0 0; border:0; border-top:1px solid var(--border); border-radius:0; background:transparent; }
+  .mobile-purchase-bar>.checkout-presence--compact>span { font-size:11px; line-height:1.5; overflow-wrap:anywhere; }
+  .mobile-purchase-bar>.checkout-presence--compact small { margin-top:1px; font-size:9px; }
   .header-actions .theme-button { min-width:36px; min-height:44px; }
 }
 @media(max-width:380px) {
