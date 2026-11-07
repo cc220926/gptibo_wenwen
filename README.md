@@ -85,11 +85,27 @@ npm run preview:worker
 
 默认访问 `http://127.0.0.1:8787`。需要前端热更新时，另开终端运行 `npm run dev`，访问 `http://127.0.0.1:5173`；API 请求会转发到本地 Worker。
 
-`.dev.vars` 保存本地配置，不应提交。远程部署时需创建自己的 Cloudflare 资源，并替换 `wrangler.jsonc` 中的占位配置。
+`.dev.vars` 保存本地配置，不应提交。`wrangler.jsonc` 用于本地环境；正式部署使用独立的 `wrangler.production.jsonc`。
 
 两种后端的功能范围不同。Workers 代理工作台提供单店商品定价、上下架、排序、公告和联系方式；多店、自定义域名、工单及订单通知设置目前仅在 Go 后端提供。前端根据后台能力显示入口。Workers 使用邮箱验证码、TOTP 与限流，验证配置接口会明确返回未启用 Turnstile。
 
 升级现有 Workers 安装时，先备份 D1，再应用全部迁移。`0045` 增加独立的平台充值尝试序号与查询水位，`0046` 增加代理收款账户。绑定账户后，提现按账户版本校验并保存收款人快照，修改账户仅影响后续新申请。
+
+### 正式域名部署
+
+将 `wrangler.production.example.jsonc` 复制为被 Git 忽略的 `wrangler.production.jsonc`，填入自己的正式域名、账户 ID 和独立 D1 数据库 ID。此配置使用单独的 Worker，并每分钟触发后台任务；本地开发继续使用 `wrangler.jsonc`。切换域名前保存当前绑定，保留旧站点及数据库以便回退，不要把本地测试库当作正式业务库。
+
+```sh
+cp wrangler.production.example.jsonc wrangler.production.jsonc
+# 填写生产配置，并在所属账号创建独立数据库后执行：
+npm run build
+npx wrangler deploy --dry-run -c wrangler.production.jsonc --outdir artifacts/domain-deploy/bundle
+# 数据库名称替换为生产配置中实际的 database_name：
+npx wrangler d1 migrations apply gptibo-production --remote -c wrangler.production.jsonc
+npx wrangler deploy -c wrangler.production.jsonc
+```
+
+生产配置初始关闭模拟下单与全部真实交易，商城展示商品但不开放购买。管理员、邮件和充值密钥通过该 Worker 的 Secrets 单独配置；`.dev.vars` 不会作为生产秘密上传。平台回调使用正式 HTTPS 域名下的 `/api/recharge/webhook`，核验登录、回调与交易流程后再开启所需通道。真实域名、云资源配置及回退记录保存在本地，不随公开源码发布。
 
 ### 页面入口
 

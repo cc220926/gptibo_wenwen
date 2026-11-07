@@ -56,3 +56,6 @@ artifacts/*
 *.tar.gz
 .open-source-release/
 coverage/
+
+# Account-specific production routing and resource IDs.
+wrangler.production.jsonc

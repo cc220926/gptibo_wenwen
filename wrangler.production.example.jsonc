@@ -1,0 +1,56 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gptibo-production",
+  // Copy to ignored wrangler.production.jsonc and use your own production resources.
+  "account_id": "00000000000000000000000000000000",
+  "compatibility_date": "2026-09-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "main": "worker/index.ts",
+  "vars": {
+    "ORDER_TESTING_ENABLED": "false",
+    "EMAIL_PRODUCTS_ENABLED": "false",
+    "XGIFT_CHECKOUT_ENABLED": "false",
+    "PAYMENT_CHECKOUT_ENABLED": "false",
+    "PAYMENT_TEST_ENABLED": "false",
+    "RECHARGE_CHECKOUT_ENABLED": "false",
+    "ACCOUNT_SUPPLIER_CHECKOUT_ENABLED": "false",
+    "DELIVERY_SUPPLIER_CHECKOUT_ENABLED": "false",
+    "PAYMENT_NOTIFY_ORIGIN": "https://shop.example.invalid",
+    "RECHARGE_NOTIFY_URL": "https://shop.example.invalid/api/recharge/webhook"
+  },
+  "d1_databases": [
+    {
+      "binding": "INTEREST_DB",
+      "database_name": "gptibo-production",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "INTEREST_LIMITER",
+      "namespace_id": "16881001",
+      "simple": { "limit": 30, "period": 60 }
+    },
+    {
+      "name": "API_LIMITER",
+      "namespace_id": "16881002",
+      "simple": { "limit": 120, "period": 60 }
+    },
+    {
+      "name": "EXPENSIVE_LIMITER",
+      "namespace_id": "16881003",
+      "simple": { "limit": 90, "period": 60 }
+    }
+  ],
+  "assets": {
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"],
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  },
+  "triggers": { "crons": ["* * * * *"] },
+  "routes": [{ "pattern": "shop.example.invalid", "custom_domain": true }]
+}
