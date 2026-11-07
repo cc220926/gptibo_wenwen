@@ -1,4 +1,4 @@
-export const PRESENCE_WINDOW_MS = 60_000
+export const PRESENCE_WINDOW_MS = 10 * 60_000
 export const PRESENCE_POLL_MS = 30_000
 
 type Page = Pick<Document, 'hidden' | 'hasFocus' | 'addEventListener' | 'removeEventListener'>

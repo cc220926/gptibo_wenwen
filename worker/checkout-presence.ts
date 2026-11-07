@@ -1,7 +1,7 @@
 import { ApiError, body, hash, json, owner, type Env } from './platform.ts'
 import { resolvePartner } from './partners.ts'
 
-export const CHECKOUT_PRESENCE_WINDOW_MS = 60_000
+export const CHECKOUT_PRESENCE_WINDOW_MS = 10 * 60_000
 // A closed activity ID is never reused by the browser. Keep its tombstone beyond
 // the fetch timeout so a heartbeat arriving after a leave cannot revive it.
 const CLOSED_RETENTION_MS = 5 * 60_000

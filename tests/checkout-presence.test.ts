@@ -16,7 +16,7 @@ async function setup() {
     assert.equal(r.headers.get('Cache-Control'), 'no-store')
     const result = await r.json()
     assert.deepEqual(Object.keys(result).sort(), ['others', 'windowSeconds'])
-    assert.equal(result.windowSeconds, 60)
+    assert.equal(result.windowSeconds, 600)
     return result.others as number
   }
   return { ...s, buyer, count }
@@ -24,16 +24,18 @@ async function setup() {
 
 test('presence GET does not add visitors and distinct buyers see each other, excluding themselves', async t => {
   const s = await setup(); t.after(() => s.db.close())
-  const a = await s.buyer(), b = await s.buyer()
+  const a = await s.buyer(), b = await s.buyer(), c = await s.buyer(), d = await s.buyer()
   assert.equal(await s.count(a), 0)
   assert.equal(s.db.prepare('SELECT COUNT(*) n FROM checkout_presence').get()!.n, 0)
   const first = await s.request(path, pulse(crypto.randomUUID()), a)
   assert.equal(first.status, 200)
-  assert.deepEqual(await first.json(), { others: 0, windowSeconds: 60 })
+  assert.deepEqual(await first.json(), { others: 0, windowSeconds: 600 })
   assert.equal(await s.count(b), 1)
   assert.equal((await s.request(path, pulse(crypto.randomUUID()), b)).status, 200)
   assert.equal(await s.count(a), 1)
   assert.equal(await s.count(b), 1)
+  for (const buyer of [c, d]) assert.equal((await s.request(path, pulse(crypto.randomUUID()), buyer)).status, 200)
+  assert.equal(await s.count(a), 3)
   assert.equal(s.db.prepare('SELECT COUNT(*) n FROM orders').get()!.n, 0)
 })
 
@@ -68,15 +70,15 @@ test('closed activity IDs cannot be resurrected by delayed heartbeats or another
   assert.equal(await s.count(viewer), 1)
 })
 
-test('presence expires at the server sixty-second boundary and ignores supplied timestamps or counts', async t => {
+test('presence expires at the server ten-minute boundary and ignores supplied timestamps or counts', async t => {
   const s = await setup(); t.after(() => s.db.close())
   const a = await s.buyer(), viewer = await s.buyer(), tab = crypto.randomUUID()
   const now = Date.now(); t.mock.method(Date, 'now', () => now)
   await s.request(path, { ...pulse(tab), seenAt: now + 1e9, others: 9999 }, a)
   assert.equal(await s.count(viewer), 1)
-  s.db.prepare('UPDATE checkout_presence SET last_seen_at=?').run(now - 59_999)
+  s.db.prepare('UPDATE checkout_presence SET last_seen_at=?').run(now - 599_999)
   assert.equal(await s.count(viewer), 1)
-  s.db.prepare('UPDATE checkout_presence SET last_seen_at=?').run(now - 60_000)
+  s.db.prepare('UPDATE checkout_presence SET last_seen_at=?').run(now - 600_000)
   assert.equal(await s.count(viewer), 0)
   await s.request(path, pulse(tab), a)
   assert.equal(await s.count(viewer), 1)
@@ -137,8 +139,8 @@ test('cleanup removes expired activity but preserves recent closed IDs against l
   const stale = crypto.randomUUID(), current = crypto.randomUUID(), closed = crypto.randomUUID(), oldClosed = crypto.randomUUID()
   for (const id of [stale, current]) await s.request(path, pulse(id), a)
   for (const id of [closed, oldClosed]) await s.request(path, pulse(id, false), a)
-  s.db.prepare('UPDATE checkout_presence SET last_seen_at=? WHERE tab_id=?').run(now - 60_000, stale)
-  s.db.prepare('UPDATE checkout_presence SET last_seen_at=? WHERE tab_id=?').run(now - 59_999, current)
+  s.db.prepare('UPDATE checkout_presence SET last_seen_at=? WHERE tab_id=?').run(now - 600_000, stale)
+  s.db.prepare('UPDATE checkout_presence SET last_seen_at=? WHERE tab_id=?').run(now - 599_999, current)
   s.db.prepare('UPDATE checkout_presence SET closed_at=? WHERE tab_id=?').run(now - 299_999, closed)
   s.db.prepare('UPDATE checkout_presence SET closed_at=? WHERE tab_id=?').run(now - 300_000, oldClosed)
   await expireCheckoutPresence(s.env)
