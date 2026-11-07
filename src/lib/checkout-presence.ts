@@ -61,7 +61,7 @@ export function checkoutPresence({ enabled, checkout: initiallyCheckingOut, requ
         hide()
         // A late response cannot extend a stale observation's display lifetime.
         const remaining = PRESENCE_WINDOW_MS - (now() - started)
-        if (validPresence(result) && result.others > 0 && remaining > 0) {
+        if (validPresence(result) && remaining > 0) {
           publish(result.others)
           expiryTimer = setTimeout(hide, remaining)
         }

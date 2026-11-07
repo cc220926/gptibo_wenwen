@@ -101,7 +101,7 @@ test('an initially hidden checkout stays idle on focus until a fresh checkout in
   assert.equal(f.calls.at(-1)!.active, true)
 })
 
-test('failures and zero counts hide the indicator; old data expires during a slow refresh', async t => {
+test('zero counts are displayed while failures and expired data hide the indicator', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = fixture()
   let requests = 0, finish!: (value: unknown) => void
@@ -124,7 +124,7 @@ test('failures and zero counts hide the indicator; old data expires during a slo
   f.advance(30_000); t.mock.timers.tick(30_000); await flush()
   assert.equal(f.values.at(-1), null)
   f.advance(30_000); t.mock.timers.tick(30_000); await flush()
-  assert.equal(f.values.at(-1), null)
+  assert.equal(f.values.at(-1), 0)
 })
 
 test('late active responses cannot restore display after checkout is closed or page stopped', async () => {

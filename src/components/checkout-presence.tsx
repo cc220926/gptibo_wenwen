@@ -4,7 +4,7 @@ import '@/styles/checkout-presence.css'
 
 export function CheckoutPresence({ others }: { others: number | null }) {
   const { locale } = useStorefrontI18n()
-  if (!Number.isSafeInteger(others) || !others || others < 0) return null
+  if (others === null || !Number.isSafeInteger(others) || others < 0) return null
   const english = locale === 'en'
   const explanation = english
     ? 'Other browsers active in the ChatGPT checkout during the past minute. Deduplicated by browser; this is not a paid-order count.'
