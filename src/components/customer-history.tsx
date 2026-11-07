@@ -72,7 +72,7 @@ export function CustomerHistory() {
     <div className="customer-history-window" style={{ height: 'var(--customer-history-row-height)' }}>
       <ul className={'customer-history-list' + (moving ? ' is-moving' : '')} aria-live="off" style={{ animationPlayState: shouldPause ? 'paused' : 'running' }}
         onAnimationEnd={event => { if (event.target === event.currentTarget && event.animationName === 'customer-history-step') next() }}>
-        {view.emails.map((email, index) => <li key={`${index}:${email}`} aria-hidden={index >= 1 || undefined}><Mail size={14} aria-hidden="true" /><span title={email}>{email}</span></li>)}
+        {view.emails.map((email, index) => <li key={`${index}:${email}`} aria-hidden={index >= 1 || undefined}><Mail size={14} aria-hidden="true" /><span className="customer-history-email" title={email}>{email}</span><span className="customer-history-plan">ChatGPT Plus</span></li>)}
       </ul>
     </div>
     {view.canAdvance && <div className="customer-history-controls">
