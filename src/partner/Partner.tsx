@@ -1,6 +1,8 @@
 import TicketWorkspace, { TicketCreator, TicketDetail } from '@/components/ticket-workspace'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
 import { StoresWorkspace } from './StoresWorkspace'
+import { AnnouncementSettingsPanel } from '@/components/announcement-settings'
+import { SupportContactsPanel } from '@/components/support-contacts'
 import { useAuthVerification } from '@/components/use-auth-verification'
 import { RECHARGE_STAGES, rechargeStage } from '../../shared/recharge-progress'
 import { ProductManagement } from './ProductManagement'
@@ -272,7 +274,7 @@ function PartnerOrderDetail({ order, path, revision, labels, onClose }: { order:
   return <PartnerOrderDetailDialog order={resource.data?.order ?? order} events={resource.data?.events} onClose={onClose} labels={labels} loading={resource.loading} detailError={resource.error} onRefresh={() => setRefresh(value => value + 1)} />
 }
 
-export function PartnerOrders({ path, revision }: { path: string; revision: number }) {
+export function PartnerOrders({ path, revision, ticketsEnabled = true }: { path: string; revision: number; ticketsEnabled?: boolean }) {
   const [ticketOrder, setTicketOrder] = useState<string>()
   const [ticket, setTicket] = useState<string>()
   const [page, setPage] = useState(1)
@@ -296,7 +298,7 @@ export function PartnerOrders({ path, revision }: { path: string; revision: numb
           <TableCell className="partner-order-money" data-label="订单金额"><strong>{money(o.price_cents)}</strong><small>供货价 {money(o.cost_cents)}</small></TableCell>
           <TableCell className="partner-order-money" data-label="收益"><strong className={o.profit_cents > 0 ? 'partner-profit' : ''}>{money(o.profit_cents)}</strong><small>{profitLabel(o)}</small></TableCell>
           <TableCell className="partner-order-state" data-label="订单状态"><div className="partner-order-state-badges"><Badge variant={o.status === 'failed' && !o.refund_hold ? 'destructive' : 'secondary'} className="partner-order-status" data-state={status === '已完成' ? 'success' : undefined}>{status}</Badge><SettlementBadge status={o.payout_status} /></div></TableCell>
-          <TableCell className="partner-order-action" data-label="订单详情"><Button variant="outline" size="sm" onClick={() => setSelected(o)}>查看详情</Button>{path === '/api/partner/orders' && <Button variant="ghost" size="sm" onClick={() => setTicketOrder(o.id)}>提交工单</Button>}</TableCell>
+          <TableCell className="partner-order-action" data-label="订单详情"><Button variant="outline" size="sm" onClick={() => setSelected(o)}>查看详情</Button>{ticketsEnabled && path === '/api/partner/orders' && <Button variant="ghost" size="sm" onClick={() => setTicketOrder(o.id)}>提交工单</Button>}</TableCell>
         </TableRow>
       })}</TableBody>
     </Table></div> : <div className="admin-empty"><h3>{query || status ? '没有符合条件的订单' : '还没有推广订单'}</h3><p>{query || status ? '试试其他订单号、邮箱或状态。' : '客户通过你的链接下单后，订单会显示在这里。'}</p></div>}<Pagination page={page} total={data.total} onPage={setPage} /></>}
@@ -416,7 +418,7 @@ function Workspace({
     },
     ...(!preview
       ? [
-          { id: 'tickets', title: '我的工单', description: '提交订单问题、查看平台回复与处理进度', icon: CircleHelp },
+          ...(data?.capabilities?.tickets === false ? [] : [{ id: 'tickets', title: '我的工单', description: '提交订单问题、查看平台回复与处理进度', icon: CircleHelp }]),
           {
             id: 'customers',
             title: '我的客户',
@@ -451,7 +453,7 @@ function Workspace({
     {
       id: 'settings',
       title: '账号设置',
-      description: '订单通知与工作台显示偏好',
+      description: data?.capabilities?.notifications === false ? '工作台显示偏好' : '订单通知与工作台显示偏好',
       icon: Settings2,
     },
   ]
@@ -470,7 +472,19 @@ function Workspace({
   const content: Record<string, ReactNode> = data
     ? {
         tickets: <TicketWorkspace revision={revision} active={current.id === 'tickets'} />,
-        stores: (
+        stores: data.capabilities?.multiStore === false ? (
+          <>
+            <div className="partner-section-heading">
+              <div><h2>{data.partner.name}的商店</h2><p>通过专属链接分享商店，管理商品价格与客户联系方式。</p></div>
+              <CopyButton value={url} label="复制商店链接" />
+            </div>
+            <WorkspaceTabs label="商店管理" items={[
+              { value: 'products', label: '商品管理', content: <ProductManagement endpoint={prefix + '/product-order'} plans={data.plans} readOnly={Boolean(preview)} disabled={loading || Boolean(error)} onSaved={saved} storeUrl={url} /> },
+              { value: 'contacts', label: '联系方式', content: <SupportContactsPanel endpoint={prefix + '/support-contacts'} revision={revision} title="联系方式" description="客户在你的专属商店点击“联系支持”时显示。" readOnly={Boolean(preview)} /> },
+              { value: 'announcement', label: '商店公告', content: <AnnouncementSettingsPanel endpoint={prefix + '/announcement'} revision={revision} readOnly={Boolean(preview)} /> },
+            ]} />
+          </>
+        ) : (
           <StoresWorkspace
             prefix={prefix}
             revision={revision}
@@ -509,6 +523,7 @@ function Workspace({
                     <PartnerOrders
                       path={prefix + '/orders'}
                       revision={revision}
+                      ticketsEnabled={data.capabilities?.tickets !== false}
                     />
                   ),
                 },
@@ -593,7 +608,7 @@ function Workspace({
           <WorkspaceTabs
             label="账号设置"
             items={[
-              {
+              ...(data.capabilities?.notifications === false ? [] : [{
                 value: 'notifications',
                 label: '订单通知',
                 content: (
@@ -603,7 +618,7 @@ function Workspace({
                     readOnly={Boolean(preview)}
                   />
                 ),
-              },
+              }]),
               {
                 value: 'appearance',
                 label: '外观与动效',

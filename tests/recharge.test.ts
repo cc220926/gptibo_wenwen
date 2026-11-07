@@ -36,7 +36,7 @@ function setup(t: Context) {
       },
       async batch(statements) {
         db.exec('BEGIN')
-        try { const results = statements.map(s => { const state = bound.get(s)!; return db.prepare(state.sql).run(...state.values) }); db.exec('COMMIT'); return results }
+        try { const results = statements.map(s => { const state = bound.get(s)!; const query = db.prepare(state.sql); return /^\s*SELECT\b/i.test(state.sql) ? { results: query.all(...state.values) } : query.run(...state.values) }); db.exec('COMMIT'); return results }
         catch (e) { db.exec('ROLLBACK'); throw e }
       },
     },
@@ -56,7 +56,7 @@ function setup(t: Context) {
   const calls: { path: string; body: string; key: string; nonce: string }[] = []
   const products = [{ product_code: 'demo_plus', supply_price: '110.00', max_sale_price: '159.00', currency: 'CNY', max_quantity: 1, available: true, delivery_modes: ['auto_recharge', 'cdk'] }]
   const remoteOrder = () => ({ order_id: 'ord_test', merchant_order_no: merchant, product_code: products[0].product_code, quantity: 1, sale_amount: retail, supply_amount: products[0].supply_price, merchant_margin: Math.max(0, Number(retail) - Number(products[0].supply_price) - (refundStatus === 'succeeded' ? Number(refundAmount) : 0)).toFixed(2), currency: 'CNY', collection_mode: 'platform_collect', payment_scope: 'retail', delivery_mode: 'auto_recharge', payment_status: payment, qr_payload: faceToFace ? 'https://recharge.example.invalid/payments/ord_test?token=public-test-token-123456' : 'https://recharge.example.invalid/pay/example', expires_at: expiry, refunded_amount: refundStatus === 'succeeded' ? refundAmount : '0.00' })
-  const redemption = () => ({ redemption_id: redemptionId, order_id: 'ord_test', status: taskStatus, failure_code: taskStatus === 'failed' ? 'session_invalid' : null, fallback_recharge_available: fallback, retry_allowed: fallback, next_action: fallback ? 'resubmit' : ['queued','running'].includes(taskStatus) ? 'wait' : 'none', account_email_masked: 't***@example.test', finished_at: ['succeeded','failed'].includes(taskStatus) ? new Date().toISOString() : null, message: 'PRIVATE-TOKEN-NOT-FOR-STORAGE' })
+  const redemption = () => ({ redemption_id: redemptionId, attempt_no: Math.max(1, redemptionKeys.size), order_id: 'ord_test', status: taskStatus, failure_code: taskStatus === 'failed' ? 'session_invalid' : null, fallback_recharge_available: fallback, retry_allowed: fallback, next_action: fallback ? 'resubmit' : ['queued','running'].includes(taskStatus) ? 'wait' : 'none', account_email_masked: 't***@example.test', finished_at: ['succeeded','failed'].includes(taskStatus) ? new Date().toISOString() : null, message: 'PRIVATE-TOKEN-NOT-FOR-STORAGE' })
   const remoteRefund = () => ({ refund_id: 'rf_test', order_id: 'ord_test', merchant_refund_no: refundNo, amount: refundAmount, status: refundStatus })
   let override: ((path: string, raw: string) => Response | Promise<Response | undefined> | undefined) | undefined
   t.mock.method(globalThis, 'fetch', async (input: string, options: RequestInit) => {
@@ -1061,7 +1061,9 @@ test('unmatched supplier refund freezes customer operations and its pending payo
   assert.ok(dashboard.totals.pending > 0)
   const overview = (await (await s.call('/api/admin/overview',undefined,admin)).json())
   assert.equal(overview.stats.paid_amount,14900); assert.equal(overview.stats.refund_amount,1000); assert.equal(overview.recent[0].refundHold,true)
-  const orders = (await (await s.call('/api/partner/orders',undefined,partner)).json()).rows
+  const response = await s.call('/api/partner/orders',undefined,partner)
+  assert.equal(response.status,200,await response.clone().text())
+  const orders = (await response.json()).rows
   assert.equal(orders[0].refund_hold,1); assert.equal(orders[0].profit_cents,3900)
   assert.equal(s.db.prepare('SELECT COUNT(*) n FROM refund_cases').get()!.n,0)
 })
@@ -1098,7 +1100,9 @@ test('partial Recharge refund caps profit at actual supplier margin and claws ba
   assert.equal(s.db.prepare('SELECT amount_cents FROM partner_debits').get()!.amount_cents,1000)
   const dashboard = (await (await s.call('/api/partner/dashboard',undefined,partner)).json())
   assert.equal(dashboard.stats.debt,1000); assert.equal(dashboard.stats.withdrawalHeld,false)
-  assert.equal((await (await s.call('/api/partner/orders',undefined,partner)).json()).rows[0].profit_cents,3900)
+  const response = await s.call('/api/partner/orders',undefined,partner)
+  assert.equal(response.status,200,await response.clone().text())
+  assert.equal((await response.json()).rows[0].profit_cents,3900)
   await reconcileRechargeRefunds(s.env)
   assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_debits').get()!.n,1)
 })
@@ -1203,7 +1207,9 @@ test('platform query confirms manual completion despite failed historical tasks 
   assert.equal(detail.fulfillment.failureCode, null); assert.equal(detail.fulfillment.message, null)
   assert.deepEqual(s.db.prepare('SELECT * FROM recharge_redemptions').get(), historical)
   assert.equal((await s.submit(order.id, buyer)).status, 409)
-  const rows = (await (await s.call('/api/partner/orders', undefined, agent)).json()).rows
+  const partnerResponse = await s.call('/api/partner/orders', undefined, agent)
+  assert.equal(partnerResponse.status, 200, await partnerResponse.clone().text())
+  const rows = (await partnerResponse.json()).rows
   assert.equal(rows[0].status, 'success')
   const version = (await getOrder(s.env, order.id)).version
   assert.equal((await s.call(path, {}, admin)).status, 200)
@@ -1287,7 +1293,9 @@ test('platform query records full refunds with negative margins and shares the c
   assert.equal(orderLabel(list[0]), '已退款'); assert.deepEqual(list[0].platformStatus, snapshot)
   const recent = (await (await s.call('/api/admin/overview', undefined, admin)).json()).recent
   assert.equal(orderLabel(recent.find(o => o.id === order.id)), '已退款')
-  const rows = (await (await s.call('/api/partner/orders', undefined, agent)).json()).rows
+  const partnerResponse = await s.call('/api/partner/orders', undefined, agent)
+  assert.equal(partnerResponse.status, 200, await partnerResponse.clone().text())
+  const rows = (await partnerResponse.json()).rows
   assert.equal(rows.length, 1); assert.equal(rows[0].platform_payment_status, 'refunded')
   assert.equal(rows[0].platform_refunded_cents, 13900); assert.equal(rows[0].platform_checked_at, snapshot.checkedAt)
   assert.equal(rows[0].profit_cents, 0); assert.equal(rows[0].refund_hold, 1)
@@ -1461,4 +1469,179 @@ test('429 body retry hints survive key rotation and successful business writes a
   await supplierRequest(s.env, '/redemptions', JSON.stringify({ mode: 'auto_recharge', order_id: 'ord_test' }), 'compat-reset-key')
   await supplierRequest(s.env, '/orders/ord_test')
   assert.equal(s.calls.filter(c => c.path === '/v1/orders/ord_test').length, 3)
+})
+
+test('API-rejected request must not shift upstream attempt numbering', async t => {
+  const s = setup(t); const buyer = await s.buyer(); const order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)
+  s.override(path => path === '/v1/redemptions' ? Response.json({ error: { code: 'invalid_credential', retryable: false } }, { status: 400 }) : undefined)
+  assert.equal((await s.submit(order.id, buyer)).status, 503)
+  s.override(path => path === '/v1/redemptions' ? Response.json({ data: { ...s.redemption(), attempt_no: 1 } }, { status: 202 }) : undefined)
+  const response = await s.submit(order.id, buyer)
+  assert.equal(response.status, 200)
+})
+test('signed payment QR survives a transient refresh error', async t => {
+  const s = setup(t); s.env.RECHARGE_PAYMENT_CODE_ENABLED = 'true'
+  const buyer = await s.buyer(); const order = await s.create(buyer)
+  s.override(path => path.endsWith('/payment-code') ? Response.json({ data: { order_id: 'ord_test', merchant_order_no: order.id, amount: '139.00', currency: 'CNY', payment_status: 'pending', payment_code_type: 'alipay_precreate', payment_code: 'https://qr.alipay.com/bax01234567890', expires_at: s.remoteOrder().expires_at } }) : undefined)
+  assert.equal((await s.query(order.id, buyer)).status, 200)
+  assert.equal(s.db.prepare('SELECT payment_qr FROM recharge_orders').get()!.payment_qr, 'https://qr.alipay.com/bax01234567890')
+  s.override(path => path.endsWith('/payment-code') ? Response.json({ error: { code: 'temporarily_unavailable', retryable: true } }, { status: 503 }) : undefined)
+  assert.equal((await s.query(order.id, buyer)).status, 503)
+  assert.equal(s.db.prepare('SELECT payment_qr FROM recharge_orders').get()!.payment_qr, 'https://qr.alipay.com/bax01234567890')
+})
+test('successful redemption read is applied even while financial read is under backoff', async t => {
+  const s = setup(t); let now = Date.now(); t.mock.method(Date, 'now', () => now)
+  const buyer = await s.buyer(); const order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer); await s.submit(order.id, buyer)
+  s.override(path => path === '/v1/orders/ord_test' ? Response.json({ data: s.remoteOrder() }, { headers: { 'X-Poll-After': '300' } }) : undefined)
+  assert.equal((await s.query(order.id, buyer)).status, 200)
+  now += 5000; s.setTask('succeeded')
+  const response = await s.query(order.id, buyer)
+  assert.equal(response.status, 200)
+  assert.equal(s.db.prepare('SELECT status FROM recharge_redemptions').get()!.status, 'succeeded')
+})
+test('desynchronized terminal backoffs must not permanently discard both success snapshots', async t => {
+  const s = setup(t); let now = Date.now(); t.mock.method(Date, 'now', () => now)
+  const buyer = await s.buyer(); const order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer); await s.submit(order.id, buyer)
+  s.setTask('succeeded'); let initialOrderRead = true
+  s.override(path => {
+    if (path === '/v1/orders/ord_test') {
+      if(initialOrderRead) { initialOrderRead = false; throw new Error('one transient timeout') }
+      return Response.json({ data: {...s.remoteOrder(), fulfillment_status:'succeeded'} }, { headers: { 'X-Poll-After': '300', 'X-Poll-Stop': 'true' } })
+    }
+    if(path.startsWith('/v1/redemptions/')) return Response.json({ data:s.redemption() }, { headers: { 'X-Poll-After': '300', 'X-Poll-Stop': 'true' } })
+  })
+  const start = s.calls.length; const codes: Record<number, number>={}
+  for(let i=0;i<181;i++) { if(i) now+=5000; const r=await s.query(order.id,buyer); codes[r.status]=(codes[r.status]??0)+1; await new Promise(resolve=>setImmediate(resolve)) }
+  assert.equal(s.db.prepare('SELECT status FROM orders').get()!.status,'success')
+  assert.equal(codes[503], 1); assert.equal(codes[200], 180)
+  assert.ok(s.calls.length - start <= 8, 'polling must retain resource backoff instead of hammering the supplier')
+})
+test('frontend poll action must be accepted by Workers fulfillment endpoint', async t => {
+  const s = setup(t); const buyer = await s.buyer(); const order = await s.create(buyer)
+  const response = await s.call(`/api/orders/${order.id}/fulfillment`, { action:'poll' }, buyer)
+  assert.equal(response.status,200)
+  assert.equal((await s.call(`/api/orders/${order.id}/fulfillment`, { action: 'poll' }, buyer)).status, 200)
+  assert.equal(s.calls.filter(c => c.path === '/v1/orders').length, 1)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 0)
+})
+
+test('platform attempt numbers remain distinct from rejected local submissions and cannot be rebound', async t => {
+  const s = setup(t); const buyer = await s.buyer(); const order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)
+  s.override(path => path === '/v1/redemptions' ? Response.json({ error: { code: 'invalid_credential', retryable: false } }, { status: 400 }) : undefined)
+  assert.equal((await s.submit(order.id, buyer)).status, 503)
+  s.override(undefined)
+  assert.equal((await s.submit(order.id, buyer)).status, 200)
+  s.setTask('failed', true); await s.query(order.id, buyer)
+  s.setTask('queued'); assert.equal((await s.submit(order.id, buyer)).status, 200)
+  const rows = s.db.prepare('SELECT attempt_no,remote_attempt_no,status,remote_id FROM recharge_redemptions ORDER BY attempt_no').all()
+  assert.deepEqual(rows.map(r => [r.attempt_no, r.remote_attempt_no, r.status]), [[1, null, 'rejected'], [2, 1, 'failed'], [3, 2, 'queued']])
+  for (const patch of [{ attempt_no: 1 }, { attempt_no: 3 }, { attempt_no: 0 }, { attempt_no: 1.5 }, { redemption_id: 'ful_test' }, { order_id: 'other_order' }]) {
+    s.override(path => path.startsWith('/v1/redemptions/') ? Response.json({ data: { ...s.redemption(), ...patch, status: 'succeeded' } }) : undefined)
+    assert.equal((await s.query(order.id, buyer)).status, 503)
+    assert.deepEqual(s.db.prepare('SELECT attempt_no,remote_attempt_no,status,remote_id FROM recharge_redemptions ORDER BY attempt_no').all(), rows)
+    assert.equal(s.db.prepare('SELECT status FROM orders').get()!.status, 'processing')
+  }
+})
+
+test('an existing unknown submission with a rejected predecessor recovers only its original key and body', async t => {
+  const s = setup(t); const buyer = await s.buyer(); const order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)
+  s.override(path => path === '/v1/redemptions' ? Response.json({ error: { code: 'invalid_credential', retryable: false } }, { status: 400 }) : undefined)
+  await s.submit(order.id, buyer)
+  s.override(undefined); const key = crypto.randomUUID(); await s.submit(order.id, buyer, key)
+  // Old releases retained the hash/key but lost the accepted task on the local
+  // sequence mismatch. Migration leaves this uncertainty and history intact.
+  s.db.prepare("UPDATE recharge_redemptions SET status='unknown',remote_id=NULL,remote_attempt_no=NULL WHERE id=?").run(key)
+  const before = s.calls.filter(c => c.path === '/v1/redemptions').length
+  assert.equal((await s.submit(order.id, buyer)).status, 409)
+  assert.equal((await s.submit(order.id, buyer, key, session + ' ')).status, 409)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, before)
+  assert.equal((await s.submit(order.id, buyer, key)).status, 200)
+  const saved = s.db.prepare('SELECT attempt_no,remote_attempt_no,status,remote_id FROM recharge_redemptions WHERE id=?').get(key)!
+  assert.equal(saved.attempt_no, 2); assert.equal(saved.remote_attempt_no, 1); assert.equal(saved.remote_id, 'ful_test'); assert.equal(saved.status, 'queued')
+  const replay = s.calls.filter(c => c.key === 'recharge:' + key)
+  assert.equal(replay.length, 2); assert.equal(replay[0].body, replay[1].body)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_redemptions').get()!.n, 2)
+})
+
+test('local polling deferral retains confirmed state without issuing early reads or acknowledging a pending notice', async t => {
+  const s = setup(t); let now = Date.now(); t.mock.method(Date, 'now', () => now)
+  const buyer = await s.buyer(); const order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer); await s.submit(order.id, buyer)
+  s.override(path => path === '/v1/orders/ord_test' ? Response.json({ data: s.remoteOrder() }, { headers: { 'X-Poll-After': '300' } }) : path.startsWith('/v1/redemptions/') ? Response.json({ data: s.redemption() }, { headers: { 'X-Poll-After': '300' } }) : undefined)
+  await s.query(order.id, buyer); await s.notice('evt_deferred')
+  const before = s.calls.length; now += 5000
+  const result = await s.call(`/api/orders/${order.id}/fulfillment`, { action: 'poll' }, buyer)
+  assert.equal(result.status, 200); assert.equal((await result.json()).order.status, 'processing'); assert.equal(s.calls.length, before)
+  let row = s.db.prepare('SELECT notify_version,checked_notify_version FROM recharge_orders').get()!
+  assert.ok(Number(row.notify_version) > Number(row.checked_notify_version))
+  now += 300000; await s.query(order.id, buyer)
+  row = s.db.prepare('SELECT notify_version,checked_notify_version FROM recharge_orders').get()!
+  assert.equal(row.notify_version, row.checked_notify_version)
+})
+
+test('a successful task snapshot persists through a financial read failure without hiding the failure', async t => {
+  const s = setup(t); const buyer = await s.buyer(); const order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer); await s.submit(order.id, buyer)
+  s.setTask('succeeded')
+  s.override(path => path === '/v1/orders/ord_test' ? Response.json({ error: { code: 'temporarily_unavailable', retryable: true } }, { status: 503 }) : undefined)
+  assert.equal((await s.query(order.id, buyer)).status, 503)
+  assert.equal(s.db.prepare('SELECT status FROM recharge_redemptions').get()!.status, 'succeeded')
+  assert.equal(s.db.prepare('SELECT payment_status FROM orders').get()!.payment_status, 'paid')
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 1)
+})
+
+test('saving a successful task cannot advance fulfillment through a newly verified financial hold', async t => {
+  const s = setup(t); const buyer = await s.buyer(); const order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer); await s.submit(order.id, buyer)
+  s.setTask('succeeded'); s.setRefund('succeeded'); s.setPayment('refunded')
+  const result = await s.query(order.id, buyer)
+  assert.equal(result.status, 200)
+  const current = (await result.json()).order
+  assert.equal(s.db.prepare('SELECT status FROM recharge_redemptions').get()!.status, 'succeeded')
+  assert.equal(current.status, 'processing'); assert.equal(current.refundHold, true); assert.equal(current.fulfillment.canSubmit, false)
+  assert.equal(s.db.prepare('SELECT financial_hold FROM recharge_orders').get()!.financial_hold, 1)
+  assert.equal((await s.submit(order.id, buyer)).status, 409)
+})
+
+test('remote attempt migration preserves old rejected and unknown history without inventing platform numbers', () => {
+  const db = new DatabaseSync(':memory:')
+  try {
+    const files = readdirSync(new URL('../migrations/', import.meta.url)).filter(f => f.endsWith('.sql')).sort()
+    for (const file of files.filter(f => f < '0045_')) db.exec(readFileSync(new URL('../migrations/' + file, import.meta.url), 'utf8'))
+    db.exec("INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,status,mode,payment_status,created_at,updated_at,last_event_id) VALUES ('YMX-MIGRATION','owner','key','plus','Plus',13900,'processing','live','paid',1,1,'event')")
+    db.exec("INSERT INTO recharge_orders(order_id,account,product_code,collection_mode,create_body,remote_id,updated_at) VALUES ('YMX-MIGRATION','account','plus','platform_collect','{}','ord_old',1)")
+    db.exec("INSERT INTO recharge_redemptions(id,order_id,attempt_no,request_hash,credential_mode,status,created_at) VALUES ('rejected','YMX-MIGRATION',1,'hash-one','session','rejected',1),('unknown','YMX-MIGRATION',2,'hash-two','session','unknown',2)")
+    const before = db.prepare('SELECT * FROM recharge_redemptions ORDER BY attempt_no').all()
+    db.exec(readFileSync(new URL('../migrations/0045_recharge_remote_attempt.sql', import.meta.url), 'utf8'))
+    const after = db.prepare('SELECT * FROM recharge_redemptions ORDER BY attempt_no').all()
+    assert.deepEqual(after.map(({ remote_attempt_no, ...row }) => { assert.equal(remote_attempt_no, null); return { ...row } }), before.map(row => ({ ...row })))
+    assert.equal(db.prepare('PRAGMA integrity_check').get()!.integrity_check, 'ok')
+  } finally { db.close() }
+})
+
+test('independently successful reads acknowledge the same notification without requiring aligned polling windows', async t => {
+  const s = setup(t); let now = Date.now(); t.mock.method(Date, 'now', () => now)
+  const buyer = await s.buyer(); const order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer); await s.submit(order.id, buyer)
+  await s.notice('evt_split_reads')
+  let unavailable = true; s.setTask('succeeded')
+  s.override(path => {
+    if (path === '/v1/orders/ord_test') {
+      if (unavailable) { unavailable = false; throw new Error('one failed read') }
+      return Response.json({ data: s.remoteOrder() }, { headers: { 'X-Poll-After': '300' } })
+    }
+    if (path.startsWith('/v1/redemptions/')) return Response.json({ data: s.redemption() }, { headers: { 'X-Poll-After': '300' } })
+  })
+  assert.equal((await s.query(order.id, buyer)).status, 503)
+  assert.equal(s.db.prepare('SELECT checked_notify_version FROM recharge_orders').get()!.checked_notify_version, 0)
+  now += 5000
+  assert.equal((await s.query(order.id, buyer)).status, 200)
+  const row = s.db.prepare('SELECT notify_version,checked_notify_version FROM recharge_orders').get()!
+  assert.equal(row.notify_version, 1); assert.equal(row.checked_notify_version, 1)
+  assert.equal(s.db.prepare('SELECT status FROM orders').get()!.status, 'success')
 })

@@ -1,7 +1,7 @@
 import { ApiError, body, json, type Env } from './platform.ts'
 import { type Order } from './order-state.ts'
 import { findPayment, refundThroughProvider } from './payments/service.ts'
-import { findRechargeOrder, platformOrderStatus, reconcilePlatformRefund, refundThroughRecharge, RechargeRefundRejected } from './recharge/service.ts'
+import { findRechargeOrder, platformOrderStatus, reconcilePlatformRefund, refundThroughRecharge, verifyExternalRechargeRefund, RechargeRefundRejected } from './recharge/service.ts'
 
 type Case = { id: string; order_id: string; status: string; requested_cents: number; approved_cents: number | null; version: number; reason: string; note: string; created_at: number; updated_at: number }
 const text = (value: unknown, label: string, max = 500) => {
@@ -55,6 +55,7 @@ export async function customerRefunds(request: Request, env: Env, order: Order) 
 
 export async function adminRefunds(request: Request, env: Env, url: URL) {
   const db = env.INTEREST_DB; const path = url.pathname
+  if (path === '/api/admin/refunds/reconcile-external' && request.method === 'POST') { await body(request); return json(await reconcileExternalRechargeRefunds(env, 'admin')) }
   if (path === '/api/admin/refunds' && request.method === 'GET') {
     const page = Number(url.searchParams.get('page') ?? 1); const status = url.searchParams.get('status') ?? ''
     if (!Number.isInteger(page) || page < 1 || page > 10000 || (status && !['pending', 'approved', 'refunded', 'rejected', 'cancelled'].includes(status))) throw new ApiError('筛选条件无效。')
@@ -73,11 +74,18 @@ export async function adminRefunds(request: Request, env: Env, url: URL) {
     const events = (await db.prepare('SELECT * FROM refund_events WHERE case_id=? ORDER BY created_at,id').bind(row.id).all()).results
     const partnerDebit = await db.prepare('SELECT d.amount_cents,d.payout_id,p.status payout_status FROM partner_debits d LEFT JOIN partner_payouts p ON p.id=d.payout_id WHERE d.refund_id=?').bind(row.id).first()
     const channel = order.mode === 'live' ? (await findRechargeOrder(env, order.id) ? 'recharge' : (await findPayment(env, order.id))?.provider ?? null) : null
-    return json({ refund: row, hasPartner: order.partner_id !== null, partnerDebit, paymentProvider: channel, platformStatus: channel === 'recharge' ? await platformOrderStatus(env, order) : null, order: { id: order.id, plan: order.plan_name, plan_id: order.plan, price_cents: order.price_cents, refunded_cents: order.refunded_cents, customer_email: order.customer_email, mode: order.mode, status: order.status, partner_name: order.partner_name }, payout, events })
+    const platformStatus = channel === 'recharge' ? await platformOrderStatus(env, order) : null
+    const upstreamRefund = channel === 'recharge' ? await db.prepare('SELECT remote_id,status,updated_at FROM recharge_refunds WHERE case_id=?').bind(row.id).first() : null
+    return json({ refund: row, upstreamRefund, hasPartner: order.partner_id !== null, partnerDebit, paymentProvider: channel, platformStatus: platformStatus ? { ...platformStatus, remote_id: platformStatus.remoteId } : null, order: { id: order.id, plan: order.plan_name, plan_id: order.plan, price_cents: order.price_cents, refunded_cents: order.refunded_cents, customer_email: order.customer_email, mode: order.mode, status: order.status, payment_status: order.payment_status, refund_hold: order.refund_hold, created_at: order.created_at, updated_at: order.updated_at, purchase_note: order.purchase_note, partner_name: order.partner_name }, payout, events })
   }
   const data = await body(request); const note = text(data.note, '处理说明'); const now = Date.now(); const eventId = crypto.randomUUID()
   if (row.version !== data.version) throw new ApiError('售后已更新，请刷新。', 409)
-  if (data.action === 'approve' && row.status === 'pending') {
+  const submitPlatform = data.action === 'approve-submit-platform'
+  if ((data.action === 'approve' || submitPlatform) && row.status === 'pending') {
+    if (submitPlatform) {
+      const supplier = await findRechargeOrder(env, order.id)
+      if (order.mode !== 'live' || order.is_test || !supplier?.remote_id || supplier.collection_mode !== 'platform_collect' || await findPayment(env, order.id)) throw new ApiError('该订单不能提交上游退款。', 409)
+    }
     const amount = Number(data.amountCents)
     if (!Number.isSafeInteger(amount) || amount < 1 || amount > row.requested_cents || amount > order.price_cents - order.refunded_cents) throw new ApiError('退款金额超出可退范围。')
     if (order.status !== 'success' && amount !== order.price_cents - order.refunded_cents) throw new ApiError('未交付或交付失败的订单请按剩余已付金额全额退款。')
@@ -101,6 +109,15 @@ export async function adminRefunds(request: Request, env: Env, url: URL) {
     return json({ ok: true })
   } else throw new ApiError('当前状态不支持此操作。', 409)
   await checkWritten(env, eventId)
+  if (submitPlatform) {
+    const approved = (await db.prepare('SELECT * FROM refund_cases WHERE id=?').bind(row.id).first<Case>())!
+    try { await executeRefund(env, approved, order, note, 'admin') }
+    catch (error) {
+      const upstream = await db.prepare('SELECT remote_id,status FROM recharge_refunds WHERE case_id=?').bind(row.id).first<{ remote_id: string | null; status: string }>()
+      if (error instanceof ApiError && error.status === 409 && upstream?.remote_id && ['requested','approved','processing'].includes(upstream.status)) return json({ ok: true, pending: true }, 202)
+      throw error
+    }
+  }
   return json({ ok: true })
 }
 
@@ -119,18 +136,7 @@ async function executeRefund(env: Env, row: Case, order: Order & { payout_id: st
     ])
     await checkWritten(env, eventId); return
   }
-  const margin = order.cost_cents === null ? 0 : order.price_cents - order.cost_cents
-  const afterRefund = order.refunded_cents + row.approved_cents!
-  let debit = Math.floor(margin * afterRefund / order.price_cents) - Math.floor(margin * order.refunded_cents / order.price_cents)
-  const supplier = order.mode === 'live' ? await findRechargeOrder(env, order.id) : null
-  const forfeit = order.plan === 'duolingo-12m'
-  if ((supplier || forfeit) && payout?.status === 'paid') {
-    const paid = await db.prepare('SELECT profit_cents FROM partner_payout_items WHERE payout_id=? AND order_id=?').bind(order.payout_id, order.id).first<{ profit_cents: number }>()
-    if (!paid || (supplier && supplier.merchant_margin_cents === null)) throw new ApiError('代理历史收益尚未核对，请联系管理员。', 409)
-    const previous = await db.prepare('SELECT COALESCE(SUM(d.amount_cents),0) amount FROM partner_debits d JOIN refund_cases r ON r.id=d.refund_id WHERE r.order_id=?').bind(order.id).first<{ amount: number }>()
-    const remaining = forfeit ? 0 : Math.max(0, Math.min(margin - Math.floor(margin * afterRefund / order.price_cents), supplier!.merchant_margin_cents!))
-    debit = Math.max(0, paid.profit_cents - (previous?.amount ?? 0) - remaining)
-  }
+  const debit = await refundDebit(env, order, order.refunded_cents + row.approved_cents!, payout?.status)
   await db.batch([
     db.prepare("UPDATE refund_cases SET status='refunded',reference=?,note=?,version=version+1,updated_at=?,last_event_id=? WHERE id=? AND status='approved' AND version=? AND EXISTS(SELECT 1 FROM orders o WHERE o.id=order_id AND o.version=? AND o.refund_hold=1 AND o.refunded_cents+approved_cents<=o.price_cents AND NOT EXISTS(SELECT 1 FROM partner_payouts p WHERE p.id=o.payout_id AND p.status='pending')) AND (?=0 OR EXISTS(SELECT 1 FROM recharge_orders t WHERE t.order_id=refund_cases.order_id AND t.refunded_cents=(SELECT refunded_cents FROM orders WHERE id=refund_cases.order_id)+refund_cases.approved_cents AND t.payment_status IN ('partially_refunded','refunded')))").bind(reference, note, now, eventId, row.id, row.version, order.version, Number(reconcilePlatform)),
     db.prepare('UPDATE orders SET refunded_cents=refunded_cents+?,refund_hold=0,version=version+1,updated_at=? WHERE id=? AND EXISTS(SELECT 1 FROM refund_cases WHERE id=? AND last_event_id=?)').bind(row.approved_cents!, now, order.id, row.id, eventId),
@@ -153,4 +159,56 @@ export async function reconcileRechargeRefunds(env: Env) {
     } catch { pending++; await env.INTEREST_DB.prepare('UPDATE recharge_refunds SET updated_at=? WHERE case_id=?').bind(Date.now(), row.id).run() }
   }
   return { checked: rows.length, completed, pending }
+}
+
+async function refundDebit(env: Env, order: Order & { payout_id: string | null }, afterRefund: number, payoutStatus?: string) {
+  const db = env.INTEREST_DB
+  const margin = order.cost_cents === null ? 0 : order.price_cents - order.cost_cents
+  let debit = Math.floor(margin * afterRefund / order.price_cents) - Math.floor(margin * order.refunded_cents / order.price_cents)
+  const supplier = order.mode === 'live' ? await findRechargeOrder(env, order.id) : null
+  const forfeit = order.plan === 'duolingo-12m'
+  if ((supplier || forfeit) && payoutStatus === 'paid') {
+    const paid = await db.prepare('SELECT profit_cents FROM partner_payout_items WHERE payout_id=? AND order_id=?').bind(order.payout_id, order.id).first<{ profit_cents: number }>()
+    if (!paid || (supplier && supplier.merchant_margin_cents === null)) throw new ApiError('代理历史收益尚未核对，请联系管理员。', 409)
+    const previous = await db.prepare('SELECT COALESCE(SUM(d.amount_cents),0) amount FROM partner_debits d JOIN refund_cases r ON r.id=d.refund_id WHERE r.order_id=?').bind(order.id).first<{ amount: number }>()
+    const remaining = forfeit ? 0 : Math.max(0, Math.min(margin - Math.floor(margin * afterRefund / order.price_cents), supplier!.merchant_margin_cents!))
+    debit = Math.max(0, paid.profit_cents - (previous?.amount ?? 0) - remaining)
+  }
+  return debit
+}
+
+// Import only money already confirmed refunded on the original upstream order.
+// Existing cases keep their review flow; this path never sends a refund request.
+export async function reconcileExternalRechargeRefunds(env: Env, actor = 'system') {
+  const db = env.INTEREST_DB
+  const candidates = (await db.prepare("SELECT o.id FROM orders o JOIN recharge_orders t ON t.order_id=o.id WHERE o.mode='live' AND o.is_test=0 AND o.payment_status='paid' AND o.refund_hold=0 AND t.collection_mode='platform_collect' AND t.remote_id IS NOT NULL AND t.financial_hold=1 AND t.refunded_cents>o.refunded_cents AND t.lease_until<=? AND NOT EXISTS(SELECT 1 FROM refund_cases r WHERE r.order_id=o.id AND r.status IN ('pending','approved')) AND NOT EXISTS(SELECT 1 FROM partner_payouts p WHERE p.id=o.payout_id AND p.status='pending') AND NOT EXISTS(SELECT 1 FROM payments p WHERE p.order_id=o.id) ORDER BY t.updated_at,o.id LIMIT 10").bind(Date.now()).all<{ id: string }>()).results
+  let completed = 0; let pending = 0
+  for (const candidate of candidates) {
+    try {
+      const initial = await db.prepare('SELECT * FROM orders WHERE id=?').bind(candidate.id).first<Order & { payout_id: string | null }>()
+      if (!initial) throw new Error('Order missing')
+      const started = Date.now()
+      const verified = await verifyExternalRechargeRefund(env, initial)
+      const order = await db.prepare('SELECT * FROM orders WHERE id=?').bind(initial.id).first<Order & { payout_id: string | null }>()
+      if (!order || !verified.remote_id || !['partially_refunded','refunded'].includes(verified.payment_status) || !Number.isSafeInteger(verified.refunded_cents) || verified.refunded_cents <= order.refunded_cents || verified.refunded_cents > order.price_cents) throw new ApiError('平台退款金额尚未核对一致。', 409)
+      const payout = order.payout_id ? await db.prepare('SELECT status FROM partner_payouts WHERE id=?').bind(order.payout_id).first<{ status: string }>() : null
+      if (payout?.status === 'pending') throw new ApiError('关联提现仍待核对。', 409)
+      const debit = await refundDebit(env, order, verified.refunded_cents, payout?.status)
+      const amount = verified.refunded_cents - order.refunded_cents
+      const id = crypto.randomUUID(); const eventId = crypto.randomUUID(); const now = Date.now()
+      const note = '平台原订单已确认退款，自动同步退款记录与代理收益'
+      await db.batch([
+        // Snapshot and financial locks are checked inside the same transaction
+        // as the case, cumulative total, commission debit and immutable audit.
+        db.prepare("INSERT INTO refund_cases(id,order_id,request_key,reason,status,requested_cents,approved_cents,note,reference,created_at,updated_at,last_event_id) SELECT ?,o.id,?,?,'refunded',?,?,?,?,?,?,? FROM orders o JOIN recharge_orders t ON t.order_id=o.id WHERE o.id=? AND o.version=? AND o.mode='live' AND o.is_test=0 AND o.payment_status='paid' AND o.refund_hold=0 AND o.refunded_cents=? AND o.price_cents>=? AND o.payout_id IS ? AND (SELECT status FROM partner_payouts WHERE id=o.payout_id) IS ? AND NOT EXISTS(SELECT 1 FROM refund_cases r WHERE r.order_id=o.id AND r.status IN ('pending','approved')) AND NOT EXISTS(SELECT 1 FROM payments p WHERE p.order_id=o.id) AND t.remote_id=? AND t.collection_mode='platform_collect' AND t.payment_status=? AND t.refunded_cents=? AND t.merchant_margin_cents IS ? AND t.financial_hold=1 AND t.verified_at>=? AND t.lease_until<=? AND t.lease_token IS NULL ON CONFLICT DO NOTHING")
+          .bind(id, 'external-refund:' + verified.remote_id + ':' + verified.refunded_cents, note, amount, amount, note, 'recharge-order:' + verified.remote_id + ':' + verified.refunded_cents, now, now, eventId, order.id, order.version, order.refunded_cents, verified.refunded_cents, order.payout_id, payout?.status ?? null, verified.remote_id, verified.payment_status, verified.refunded_cents, verified.merchant_margin_cents, started, now),
+        db.prepare('UPDATE orders SET refunded_cents=?,refund_hold=0,version=version+1,updated_at=? WHERE id=? AND EXISTS(SELECT 1 FROM refund_cases WHERE id=? AND last_event_id=?)').bind(verified.refunded_cents, now, order.id, id, eventId),
+        db.prepare('UPDATE recharge_orders SET financial_hold=0 WHERE order_id=? AND refunded_cents=(SELECT refunded_cents FROM orders WHERE id=?) AND EXISTS(SELECT 1 FROM refund_cases WHERE id=? AND last_event_id=?)').bind(order.id, order.id, id, eventId),
+        db.prepare("INSERT INTO partner_debits(id,partner_id,refund_id,amount_cents,created_at) SELECT ?,o.partner_id,?,?,? FROM orders o JOIN partner_payouts p ON p.id=o.payout_id WHERE o.id=? AND o.mode='live' AND p.status='paid' AND ?>0 AND EXISTS(SELECT 1 FROM refund_cases WHERE id=? AND last_event_id=?)").bind(crypto.randomUUID(), id, debit, now, order.id, debit, id, eventId),
+        event(env, eventId, id, actor, note),
+      ])
+      await checkWritten(env, eventId); completed++
+    } catch { pending++ }
+  }
+  return { checked: candidates.length, completed, pending }
 }

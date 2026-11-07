@@ -5,7 +5,7 @@ import type { Env } from './platform.ts'
 import { commerce } from './commerce.ts'
 import { paymentNotification, reconcilePayments } from './payments/service.ts'
 import { reconcileRecharge, rechargeWebhook } from './recharge/service.ts'
-import { reconcileRechargeRefunds } from './refunds.ts'
+import { reconcileExternalRechargeRefunds, reconcileRechargeRefunds } from './refunds.ts'
 import { limitApi } from './rate-limit.ts'
 import { ApiError } from './platform.ts'
 import { recordVisitor } from './visitors.ts'
@@ -28,8 +28,11 @@ export default {
     await retryTelegramInvitations(env).catch(() => { console.error('Telegram invitation queue temporarily unavailable') })
     // Reminders run every minute; preserve the existing five-minute reconciliation cadence.
     if (event.scheduledTime === undefined || Math.floor(event.scheduledTime / 60_000) % 5 === 0) {
-      await Promise.all([reconcilePayments(env), reconcileRecharge(env), retryPayoutNotifications(env), reconcileInvoicePayments(env)])
+      // Refund confirmation also needs the original order snapshot. Give both
+      // refund paths its read budget before ordinary polling can consume it.
       await reconcileRechargeRefunds(env)
+      await reconcileExternalRechargeRefunds(env)
+      await Promise.all([reconcilePayments(env), reconcileRecharge(env), retryPayoutNotifications(env), reconcileInvoicePayments(env)])
     }
     await Promise.all([sendDueRechargeReminders(env), reconcileGmail(env), reconcileDeliverySupplier(env), reconcileXGift(env)])
   },

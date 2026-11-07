@@ -1,6 +1,6 @@
 import { ApiError, body, json, type Env, type Value } from './platform.ts'
 import { requirePartner, partnerLimit } from './partner-auth.ts'
-import { paymentProvider } from './payments/providers.ts'
+import { alipayConfigured, paymentProvider } from './payments/providers.ts'
 import type { PaymentProvider, PaymentResult } from './payments/types.ts'
 import { INVOICE_STATUSES, invoiceAmounts, type Invoice, type InvoicePaymentView } from '../shared/invoices.ts'
 import { invoicePlatformPayload } from './invoice-platform.ts'
@@ -36,7 +36,7 @@ function providerFor(env: Env, p: Payment) {
 }
 const paymentOrder = (p: Payment) => ({ id: p.id, amountCents: p.amount_cents, subject: 'GPTibo · 开票手续费', expiresAt: p.expires_at })
 function paymentView(p: Payment | null, invoice: Invoice): InvoicePaymentView | null {
-  return p ? { status: p.state, amountCents: p.amount_cents, expiresAt: p.expires_at, qr: invoice.status === 'awaiting_payment' && p.state === 'pending' && p.expires_at > Date.now() ? p.qr : null } : null
+  return p ? { provider: p.provider, status: p.state, amountCents: p.amount_cents, expiresAt: p.expires_at, qr: invoice.status === 'awaiting_payment' && p.state === 'pending' && p.expires_at > Date.now() ? p.qr : null } : null
 }
 
 export async function applyInvoicePayment(env: Env, p: Payment, result: PaymentResult) {
@@ -83,8 +83,16 @@ async function syncPayment(env: Env, p: Payment) {
   }
   await env.INTEREST_DB.prepare('UPDATE invoice_payments SET updated_at=? WHERE id=?').bind(Date.now(), p.id).run()
 }
-async function paymentAction(env: Env, invoice: Invoice, action: unknown, admin: boolean) {
-  if (!['create', 'query'].includes(String(action)) || (admin && action !== 'query')) throw new ApiError('支付操作无效。')
+async function paymentAction(env: Env, invoice: Invoice, action: unknown, admin: boolean, method?: unknown) {
+  if (!['create', 'query', 'options'].includes(String(action)) || (admin && action !== 'query')) throw new ApiError('支付操作无效。')
+  if (method !== undefined && method !== 'alipay') throw new ApiError('请选择当前支持的支付方式。')
+  // Discovering options is read-only: it must never create a payment or contact
+  // the gateway. Existing payments retain their original provider/account.
+  const methods = () => {
+    try { if (alipayConfigured(env)) { notifyUrl(env); return [{ method: 'alipay', name: '支付宝', feeBps: 0 }] } } catch { /* Incomplete configuration is unavailable. */ }
+    return []
+  }
+  if (action === 'options') return json({ invoice: publicInvoice(invoice as StoredInvoice), payment: paymentView(await currentPayment(env, invoice.id), invoice), methods: methods() })
   await locked(env, invoice.id, async () => {
     if ((await getInvoice(env, invoice.id))!.status !== 'awaiting_payment') return
     let p = await currentPayment(env, invoice.id)
@@ -103,7 +111,7 @@ async function paymentAction(env: Env, invoice: Invoice, action: unknown, admin:
     }
   })
   const fresh = (await getInvoice(env, invoice.id))!
-  return json({ invoice: publicInvoice(fresh), payment: paymentView(await currentPayment(env, invoice.id), fresh) })
+  return json({ invoice: publicInvoice(fresh), payment: paymentView(await currentPayment(env, invoice.id), fresh), methods: methods() })
 }
 
 export async function invoiceRoutes(request: Request, env: Env, url: URL, admin = false) {
@@ -159,7 +167,7 @@ export async function invoiceRoutes(request: Request, env: Env, url: URL, admin 
   if (match[2] === '/payment' && request.method === 'POST') {
     const data = await body(request)
     await partnerLimit(env, 'invoice-payment:' + row.partner_id, 30, 60000)
-    return paymentAction(env, row, data.action, admin)
+    return paymentAction(env, row, data.action, admin, data.method)
   }
   if (admin && request.method === 'POST' && ['/submit', '/complete'].includes(match[2])) {
     const data = await body(request); const submit = match[2] === '/submit'

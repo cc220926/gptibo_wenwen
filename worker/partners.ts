@@ -1,6 +1,6 @@
 import { eligibleSql, profitSql, MIN_PAYOUT_CENTS, PAYOUT_COOLDOWN_MS } from './finance.ts'
 import { settleDue, type Order } from './order-state.ts'
-import { syncRechargeOrder } from './recharge/service.ts'
+import { rechargeSummary, syncRechargeOrder } from './recharge/service.ts'
 import { ApiError, body, json, type Env } from './platform.ts'
 import { emailValue, mailConfigured, partnerLimit, requirePartner, sendPartnerInvitation, type Partner } from './partner-auth.ts'
 import { referralCodePattern } from '../shared/partner-link.ts'
@@ -15,6 +15,7 @@ import { customerRoutes } from './customers.ts'
 import { resetPayoutCooldown } from './payout-cooldown.ts'
 import { productOrderRoute, productOrderSettings } from './product-order.ts'
 import { partnerOrderSummary } from './partner-order-summary.ts'
+import { payoutAccount, savePayoutAccount } from './partner-payout-account.ts'
 
 export async function resolvePartner(env: Env, slug: unknown) {
   if (slug === undefined || slug === null || slug === '') return null
@@ -59,24 +60,59 @@ export async function partnerDashboard(env: Env, p: Partner) {
   const totals = await env.INTEREST_DB.prepare("SELECT COALESCE(SUM(CASE WHEN status='pending' THEN amount_cents ELSE 0 END),0) pending,COALESCE(SUM(CASE WHEN status='paid' THEN amount_cents ELSE 0 END),0) paid FROM partner_payouts WHERE partner_id=?").bind(p.id).first()
   const lastPayout = await env.INTEREST_DB.prepare('SELECT MAX(created_at) created_at FROM partner_payouts WHERE partner_id=? AND cooldown_exempt=0').bind(p.id).first<{created_at:number|null}>()
   const nextPayoutAt = lastPayout?.created_at == null ? null : lastPayout.created_at + PAYOUT_COOLDOWN_MS
-  return { partner: p, plans, stats: { ...stats, available: Math.max(0,(stats?.available ?? 0)-(debts?.amount ?? 0)), debt: debts?.amount ?? 0, withdrawalHeld: Boolean(held?.n), minimum: MIN_PAYOUT_CENTS, nextPayoutAt, payoutCoolingDown: nextPayoutAt !== null && Date.now() < nextPayoutAt }, payouts, totals, mailReady: mailConfigured(env) }
+  return { partner: p, plans, payoutAccount: await payoutAccount(env, p.id) ?? { phone: '', name: '', version: 0 }, capabilities: { multiStore: false, tickets: false, notifications: false }, stats: { ...stats, available: Math.max(0,(stats?.available ?? 0)-(debts?.amount ?? 0)), debt: debts?.amount ?? 0, withdrawalHeld: Boolean(held?.n), minimum: MIN_PAYOUT_CENTS, nextPayoutAt, payoutCoolingDown: nextPayoutAt !== null && Date.now() < nextPayoutAt }, payouts, totals, mailReady: mailConfigured(env) }
 }
-async function orders(env: Env, id: string, url: URL) {
-  await settleDue(env, id)
-  const n = page(url)
-  const rows = (await env.INTEREST_DB.prepare(`SELECT o.id,o.customer_email,o.plan,o.plan_name,o.price_cents,o.cost_cents,o.refunded_cents,t.payment_status platform_payment_status,t.refunded_cents platform_refunded_cents,t.verified_at platform_checked_at,MAX(o.refund_hold,CASE WHEN o.payment_status='paid' THEN COALESCE(t.financial_hold,0) ELSE 0 END) refund_hold,${profitSql('o')} profit_cents,o.mode,o.payment_status,o.status,o.created_at,ps.status payout_status,ps.reviewed_at FROM orders o LEFT JOIN partner_payouts ps ON ps.id=o.payout_id LEFT JOIN recharge_orders t ON t.order_id=o.id WHERE o.partner_id=? ORDER BY o.created_at DESC,o.id DESC LIMIT 20 OFFSET ?`).bind(id, (n - 1) * 20).all()).results
-  const count = await env.INTEREST_DB.prepare('SELECT COUNT(*) total FROM orders WHERE partner_id=?').bind(id).first<{ total: number }>()
-  return json({ rows, total: count?.total ?? 0, page: n })
+async function orders(env: Env, id: string, url: URL, orderId?: string) {
+  if (!orderId) await settleDue(env, id)
+  const db = env.INTEREST_DB
+  const select = `SELECT o.id,o.customer_email,o.plan,o.plan_name,o.price_cents,o.cost_cents,o.refunded_cents,t.payment_status platform_payment_status,t.refunded_cents platform_refunded_cents,t.verified_at platform_checked_at,MAX(o.refund_hold,CASE WHEN o.payment_status='paid' THEN COALESCE(t.financial_hold,0) ELSE 0 END) refund_hold,${profitSql('o')} profit_cents,o.mode,o.payment_status,o.status,o.created_at,o.updated_at,ps.status payout_status,ps.reviewed_at,(SELECT a.status FROM recharge_redemptions a WHERE a.order_id=o.id ORDER BY a.attempt_no DESC LIMIT 1) recharge_status FROM orders o LEFT JOIN partner_payouts ps ON ps.id=o.payout_id LEFT JOIN recharge_orders t ON t.order_id=o.id`
+  const statuses: Record<string, string> = { pending: '等待付款', session: '等待提交资料', processing: '订单处理中', success: '订单已完成', failed: '订单需要处理', cancelled: '订单已关闭' }
+  if (orderId) {
+    const order = await db.prepare(select + ' WHERE o.partner_id=? AND o.id=?').bind(id, orderId).first<Record<string, unknown>>()
+    if (!order) throw new ApiError('订单不存在。', 404)
+    const raw = await db.prepare('SELECT * FROM orders WHERE partner_id=? AND id=?').bind(id, orderId).first<Order>()
+    if (!raw) throw new ApiError('订单不存在。', 404)
+    const summary = await rechargeSummary(env, raw)
+    // Reuse customer-safe status logic, but never disclose payment codes or the
+    // customer's credential retry key to a partner (including admin previews).
+    order.fulfillment = summary ? Object.fromEntries(['rechargeStatus','failureCode','errorCategory','progressStage','progressUpdatedAt','attemptNo','canSubmit','message','accountEmailMasked','finishedAt'].map(key => [key, summary[key as keyof typeof summary]])) : null
+    order.rechargeReference = await db.prepare('SELECT t.remote_id order_id,(SELECT a.remote_id FROM recharge_redemptions a WHERE a.order_id=t.order_id ORDER BY a.attempt_no DESC LIMIT 1) redemption_id FROM recharge_orders t WHERE t.order_id=?').bind(orderId).first()
+    order.delivery = await db.prepare('SELECT status,sent_at sentAt FROM email_deliveries WHERE order_id=?').bind(orderId).first()
+    type Event = { id: string; actor: string; action: string; to_status: string; created_at: number; note?: string }
+    const history = (await db.prepare("SELECT e.id,e.actor,e.action,e.to_status,e.created_at FROM order_events e JOIN orders o ON o.id=e.order_id WHERE o.partner_id=? AND o.id=? AND e.action<>'note' ORDER BY e.order_version DESC LIMIT 200").bind(id, orderId).all<Event>()).results
+    const notes: Record<string, string> = { create: '创建订单，等待付款', 'recharge-submit': '客户已授权提交充值资料', 'payment-confirmed': '支付渠道已确认收款', 'payment-closed': '支付渠道已确认订单关闭', 'email-delivery-sent': '交付邮件已发送', 'redemption-block': '本订单已禁止再次兑换', 'redemption-unblock': '本订单已解除禁止兑换' }
+    const role = (actor: string) => actor === 'customer' ? 'customer' : ['system','payment'].includes(actor) ? 'system' : 'admin'
+    const events = history.reverse().map(event => ({ ...event, actor: role(event.actor), action: notes[event.action] ? event.action : 'status-updated', to_status: statuses[event.to_status] ? event.to_status : '', note: notes[event.action] ?? statuses[event.to_status] ?? '订单处理状态已更新' }))
+    // Refund notes/reasons can contain customer credentials and internal review
+    // remarks. Only publish the recorded transition and an explicit fixed label.
+    const refundNotes: Record<string, string> = { pending: '客户已提交售后申请', approved: '售后申请已审核通过，等待退款结果', refunded: '退款已确认并完成记账', rejected: '售后申请未通过审核', cancelled: '客户已撤回售后申请' }
+    const refunds = (await db.prepare('SELECT e.id,e.actor,e.status,e.created_at FROM refund_events e JOIN refund_cases r ON r.id=e.case_id JOIN orders o ON o.id=r.order_id WHERE o.partner_id=? AND o.id=? ORDER BY e.created_at DESC,e.id DESC LIMIT 200').bind(id, orderId).all<{ id: string; actor: string; status: string; created_at: number }>()).results
+    for (const event of refunds.reverse()) if (refundNotes[event.status]) events.push({ id: event.id, actor: role(event.actor), action: 'refund-' + event.status, to_status: '', note: refundNotes[event.status], created_at: event.created_at })
+    events.sort((a, b) => a.created_at - b.created_at)
+    return json({ order, events })
+  }
+  const n = page(url), q = (url.searchParams.get('q') ?? '').trim(), status = url.searchParams.get('status') ?? ''
+  if (q.length > 320 || (status && !Object.hasOwn(statuses, status))) throw new ApiError('搜索条件无效。')
+  const where = " WHERE o.partner_id=? AND (?='' OR instr(lower(o.id),lower(?))>0 OR instr(lower(COALESCE(o.customer_email,'')),lower(?))>0 OR instr(lower(o.plan),lower(?))>0 OR instr(lower(o.plan_name),lower(?))>0) AND (?='' OR o.status=?)"
+  const values = [id, q, q, q, q, q, status, status]
+  const result = await db.batch([
+    db.prepare(select + where + ' ORDER BY o.created_at DESC,o.id DESC LIMIT 20 OFFSET ?').bind(...values, (n - 1) * 20),
+    db.prepare('SELECT COUNT(*) total FROM orders o' + where).bind(...values),
+  ]) as [{ results: unknown[] }, { results: { total: number }[] }]
+  return json({ rows: result[0].results, total: result[1].results[0]?.total ?? 0, page: n })
 }
 export async function partnerRoutes(request: Request, env: Env, url: URL) {
   if (url.pathname.startsWith('/api/partner/customers')) return customerRoutes(request,env,url)
   const p = await requirePartner(request, env); const path = url.pathname; const db = env.INTEREST_DB
+  if (path === '/api/partner/payout-account') return savePayoutAccount(request, env, p)
   if (path === '/api/partner/visitors' && request.method === 'GET') return json(await visitorSummary(env, url, p.id))
   if (path === '/api/partner/support-contacts') return supportContactsRoute(request, env, p)
   if (path === '/api/partner/announcement') return announcementRoute(request, env, p)
   if (path === '/api/partner/product-order') return productOrderRoute(request, env, p)
   if (path === '/api/partner/dashboard' && request.method === 'GET') return json(await partnerDashboard(env, p))
   if (path === '/api/partner/orders' && request.method === 'GET') return orders(env, p.id, url)
+  const orderDetail = path.match(/^\/api\/partner\/orders\/([a-f0-9-]{36})$/)
+  if (orderDetail && request.method === 'GET') return orders(env, p.id, url, orderDetail[1])
   if (path === '/api/partner/order-summary' && request.method === 'GET') {
     await settleDue(env, p.id)
     return json(await partnerOrderSummary(env, p.id, url))
@@ -97,15 +133,20 @@ export async function partnerRoutes(request: Request, env: Env, url: URL) {
     return json({ ok: true })
   }
   if (path === '/api/partner/payouts' && request.method === 'POST') {
-    const data = await body(request); const recipient = text(data.recipient, 200, '支付宝收款账号与姓名')
+    const data = await body(request)
     if (typeof data.key !== 'string' || !/^[a-f0-9-]{36}$/.test(data.key)) throw new ApiError('请求编号无效。')
     const existing = await db.prepare('SELECT id FROM partner_payouts WHERE partner_id=? AND request_key=?').bind(p.id, data.key).first()
     if (existing) return json({ ok: true })
+    const account = await payoutAccount(env, p.id)
+    if ((account || data.accountVersion !== undefined) && (!account || !Number.isSafeInteger(data.accountVersion) || data.accountVersion !== account.version)) throw new ApiError('请先绑定收款信息，或刷新后重新确认提现账户。', 409)
+    // Legacy unbound clients retain their original contract. Once bound, all new
+    // requests must use the server-owned versioned account; retries keep snapshots.
+    const recipient = account ? account.phone + ' / ' + account.name : text(data.recipient, 200, '支付宝收款账号与姓名')
     await verifySupplierPayout(env,p.id)
     const id = crypto.randomUUID(); const auditId = crypto.randomUUID(); const now = Date.now()
     // Reserve all currently eligible orders in the same transaction as the request.
     await db.batch([
-      db.prepare(`INSERT INTO partner_payouts(id,partner_id,amount_cents,gross_cents,deduction_cents,recipient,created_at,request_key) SELECT ?,?,SUM(${profit})-${debitSql},SUM(${profit}),${debitSql},?,?,? FROM orders WHERE partner_id=? AND ${eligible} AND payout_id IS NULL AND NOT ${paidRefundHold} AND EXISTS(SELECT 1 FROM partners WHERE id=? AND active=1 AND auth_version=?) AND NOT EXISTS(SELECT 1 FROM partner_payouts recent WHERE recent.partner_id=? AND recent.cooldown_exempt=0 AND recent.created_at>?) HAVING SUM(${profit})-${debitSql}>=${MIN_PAYOUT_CENTS} ON CONFLICT DO NOTHING`).bind(id, p.id, recipient, now, data.key, p.id, p.id, p.auth_version, p.id, now-PAYOUT_COOLDOWN_MS),
+      db.prepare(`INSERT INTO partner_payouts(id,partner_id,amount_cents,gross_cents,deduction_cents,recipient,created_at,request_key) SELECT ?,?,SUM(${profit})-${debitSql},SUM(${profit}),${debitSql},?,?,? FROM orders WHERE partner_id=? AND ${eligible} AND payout_id IS NULL AND NOT ${paidRefundHold} AND EXISTS(SELECT 1 FROM partners WHERE id=? AND active=1 AND auth_version=?) AND NOT EXISTS(SELECT 1 FROM partner_payouts recent WHERE recent.partner_id=? AND recent.cooldown_exempt=0 AND recent.created_at>?) AND COALESCE((SELECT version FROM partner_payout_accounts a WHERE a.partner_id=orders.partner_id),-1)=? HAVING SUM(${profit})-${debitSql}>=${MIN_PAYOUT_CENTS} ON CONFLICT DO NOTHING`).bind(id, p.id, recipient, now, data.key, p.id, p.id, p.auth_version, p.id, now-PAYOUT_COOLDOWN_MS, account?.version ?? -1),
       db.prepare(`UPDATE orders SET payout_id=? WHERE partner_id=? AND ${eligible} AND payout_id IS NULL AND EXISTS(SELECT 1 FROM partner_payouts WHERE id=?)`).bind(id, p.id, id),
       db.prepare(`INSERT INTO partner_payout_items(payout_id,order_id,profit_cents) SELECT ?,id,${profit} FROM orders WHERE payout_id=?`).bind(id, id),
       db.prepare('UPDATE partner_debits SET payout_id=? WHERE partner_id=? AND payout_id IS NULL AND EXISTS(SELECT 1 FROM partner_payouts WHERE id=?)').bind(id,p.id,id),
@@ -146,6 +187,8 @@ export async function adminPartnerRoutes(request: Request, env: Env, url: URL) {
     try { await sendPartnerInvitation(env, p!); invitationSent = true } catch { /* Keep the account and link; the administrator can resend the invitation. */ }
     return json({ ok: true, id, slug, invitationSent, message: invitationSent ? '代理已开通，邀请邮件已发送。代理可通过邮件中的工作台入口自行获取登录验证码。' : '代理已开通，但邀请邮件发送失败。请在代理详情中重发。' }, 201)
   }
+  const orderDetail = path.match(/^\/api\/admin\/partners\/([a-f0-9-]{36})\/orders\/([a-f0-9-]{36})$/)
+  if (orderDetail && method === 'GET') return orders(env, orderDetail[1], url, orderDetail[2])
   const match = path.match(/^\/api\/admin\/partners\/([a-f0-9-]{36})(?:\/(prices\/([a-z0-9-]+)|orders|order-summary|preview|invitation|support-contacts|announcement|product-order))?$/)
   if (match) {
     const p = await db.prepare('SELECT * FROM partners WHERE id=?').bind(match[1]).first<Partner>()

@@ -65,6 +65,9 @@ function requiredNote(data: Record<string, unknown>) {
 export async function commerce(request: Request, env: Env): Promise<Response> {
   try {
     const url = new URL(request.url); const path = url.pathname; const method = request.method
+    // Workers uses OTP/TOTP and rate limits; no Turnstile provider is configured.
+    // This public capability must be readable before buyer initialization/login.
+    if (path === '/api/orders/verification' && method === 'GET') return json({ enabled: false, purpose: url.searchParams.get('purpose') === 'auth' ? 'auth' : 'order_create' })
     const auth = await authRoute(request, env, path)
     if (auth) return auth
     const partnerLogin = await partnerAuth(request, env, path)

@@ -62,6 +62,11 @@ export class RechargeError extends ApiError {
     this.requestId = details.requestId ?? null; this.retryAfter = details.retryAfter ?? null; this.upstreamStatus = details.upstreamStatus ?? null
   }
 }
+// A cached polling deadline is not a new upstream failure. Callers can keep
+// their last confirmed state while independently synchronizing other resources.
+export class RechargeReadDeferred extends RechargeError {
+  constructor(retryAfter: number) { super('rate_limited', true, { retryAfter }) }
+}
 function retryDelay(value: string | null) {
   if (!value) return null
   const delay = /^\d+$/.test(value) ? Number(value) : Math.ceil((Date.parse(value) - Date.now()) / 1000)
@@ -79,7 +84,7 @@ export async function request<T>(env: Env, path: string, rawBody?: string, idemp
   const trackedRead = method === 'GET' && /^\/(orders|redemptions|refunds)\/[A-Za-z0-9_-]+$/.test(path)
   if (trackedRead) {
     const wait = await env.INTEREST_DB.prepare('SELECT next_allowed_at FROM recharge_api_reads WHERE account=? AND resource=?').bind(c.account, path).first<{ next_allowed_at: number }>()
-    if (wait && wait.next_allowed_at > Date.now()) throw new RechargeError('rate_limited', true, { retryAfter: Math.ceil((wait.next_allowed_at - Date.now()) / 1000) })
+    if (wait && wait.next_allowed_at > Date.now()) throw new RechargeReadDeferred(Math.ceil((wait.next_allowed_at - Date.now()) / 1000))
   }
   const timestamp = String(Math.floor(Date.now() / 1000)); const nonce = crypto.randomUUID()
   const headers: Record<string, string> = { 'X-Partner-Id': c.partner, 'X-Key-Id': c.key, 'X-Timestamp': timestamp, 'X-Nonce': nonce, 'X-Signature': await signature(c.secret, method, url, timestamp, nonce, c.key, idempotency, rawBody ?? ''), Accept: 'application/json' }
