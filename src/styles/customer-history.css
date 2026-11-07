@@ -1,0 +1,31 @@
+.customer-history {
+  --customer-history-row-height:44px;
+  margin-top:18px;
+  padding:19px 26px 12px;
+  border:1px solid var(--border);
+  border-radius:18px;
+  background:var(--panel-tint);
+}
+.customer-history-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; min-width:0; }
+.customer-history-heading>div:first-child { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; min-width:0; }
+.customer-history-heading h2 { margin:0; font-size:14px; line-height:1.6; font-weight:600; letter-spacing:-.2px; }
+.customer-history-heading>div>span { font-size:11px; color:var(--muted-foreground); }
+.customer-history-controls { display:flex; align-items:center; gap:4px; flex-shrink:0; }
+.customer-history-controls button { display:grid; place-items:center; width:32px; height:32px; color:var(--muted-foreground); border:1px solid var(--border); border-radius:8px; background:var(--card); }
+.customer-history-controls button:hover { color:var(--foreground); background:var(--accent); }
+.customer-history-window { overflow:hidden; }
+.customer-history-list { list-style:none; margin:0; padding:0; transform:translateY(0); }
+.customer-history-list.is-moving { animation:customer-history-step 650ms cubic-bezier(.4,0,.2,1) both; }
+.customer-history-list li { display:flex; align-items:center; gap:10px; height:var(--customer-history-row-height); border-top:1px solid var(--border); font-size:13px; line-height:1.5; color:var(--foreground); }
+.customer-history-list li>svg { color:var(--success); flex-shrink:0; }
+.customer-history-list li>span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums; }
+@keyframes customer-history-step { to { transform:translateY(calc(-1 * var(--customer-history-row-height))); } }
+@media(max-width:760px) {
+  .customer-history { margin-top:14px; padding:14px 18px 9px; border-radius:15px; }
+  .customer-history-heading { align-items:flex-start; }
+  .customer-history-heading>div:first-child { display:block; }
+  .customer-history-heading h2 { font-size:13px; }
+  .customer-history-heading>div>span { display:block; margin-top:2px; font-size:10px; }
+  .customer-history-list li { font-size:12px; }
+}
+@media(prefers-reduced-motion:reduce) { .customer-history-list.is-moving { animation:none; } }

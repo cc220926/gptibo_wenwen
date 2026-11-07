@@ -16,6 +16,7 @@ import { sendDueOrderNotifications } from './order-notifications.ts'
 import { reconcileGmail } from './account_supplier/service.ts'
 import { requireSecureTransport, secureResponse } from './security.ts'
 import { checkoutPresence, expireCheckoutPresence } from './checkout-presence.ts'
+import { customerHistory } from './customer-history.ts'
 const json = (value: unknown, status = 200) => Response.json(value, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...(status === 429 ? { 'Retry-After': '60' } : {}) },
 })
@@ -72,6 +73,10 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (url.pathname === '/api/checkout-presence') {
       try { return await checkoutPresence(request, env) }
       catch (caught) { return error(caught instanceof ApiError ? caught.message : '下单活动统计暂不可用。', caught instanceof ApiError ? caught.status : 503) }
+    }
+    if (url.pathname === '/api/customer-history') {
+      try { return await customerHistory(request, env) }
+      catch (caught) { return error(caught instanceof ApiError ? caught.message : '历史客户展示暂不可用。', caught instanceof ApiError ? caught.status : 503) }
     }
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request)
     if (url.pathname.startsWith('/api/admin/') || url.pathname.startsWith('/api/partner/') || url.pathname.startsWith('/api/orders') || url.pathname === '/api/catalog') return commerce(request, env)
