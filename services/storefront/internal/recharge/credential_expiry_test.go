@@ -41,4 +41,14 @@ func TestCredentialExpiry(t *testing.T) {
 	if credentialExpiry(Credential{Mode: "access_token", AccessToken: jwt(`{"exp":1}`)}, now) == nil {
 		t.Fatal("expired raw token accepted")
 	}
+	for _, c := range []Credential{
+		{Mode: "session", Session: jwt(`{"exp":1}`)},
+		{Mode: "session", Session: Raw(map[string]any{"auth": map[string]string{"access_token": jwt(`{"exp":1}`)}})},
+		{Mode: "session", Session: Raw(map[string]any{"sessionToken": "private-cookie", "accessToken": jwt(`{"exp":1}`)})},
+		{Mode: "session", Session: `{"expires":"2000-01-01T00:00:00Z","data":{"sessionToken":"private-cookie","expires":null}}`},
+	} {
+		if credentialExpiry(c, now) == nil {
+			t.Fatal("alternate credential format bypassed known expiry")
+		}
+	}
 }

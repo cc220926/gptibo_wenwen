@@ -51,23 +51,18 @@ func (r *RemoteSessionChecker) Check(ctx context.Context, c Credential, plan str
 		AccountID   string `json:"accountId,omitempty"`
 		Target      string `json:"target"`
 	}
-	payload.AccessToken = c.AccessToken
-	payload.Target = plan
-	if c.Mode == "session" {
-		var s struct {
-			AccessToken string `json:"accessToken"`
-			Expires     string `json:"expires"`
-			Account     struct {
-				ID string `json:"id"`
-			} `json:"account"`
-		}
-		if json.Unmarshal([]byte(c.Session), &s) != nil {
-			return PrecheckResult{}, errors.New("invalid session")
-		}
-		payload.AccessToken = s.AccessToken
-		payload.Expires = s.Expires
-		payload.AccountID = s.Account.ID
+	token, metadata, err := precheckCredentialParts(c)
+	if err != nil {
+		return PrecheckResult{}, err
 	}
+	payload.AccessToken = token
+	payload.Target = plan
+	_ = json.Unmarshal(metadata["expires"], &payload.Expires)
+	var account struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(metadata["account"], &account)
+	payload.AccountID = account.ID
 	raw, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.URL, bytes.NewReader(raw))
 	if err != nil {
@@ -114,26 +109,6 @@ func (r *RemoteSessionChecker) Check(ctx context.Context, c Credential, plan str
 	}
 	out.Receipt = "" // Only this server can issue a receipt bound to an order.
 	return out, nil
-}
-func normalizeCredential(c Credential) (Credential, error) {
-	if c.Mode == "session" && len(c.Session) > 0 && len(c.Session) <= 32000 {
-		var s struct {
-			User struct {
-				Email string `json:"email"`
-			} `json:"user"`
-			Token string `json:"accessToken"`
-		}
-		if json.Unmarshal([]byte(c.Session), &s) != nil || s.User.Email == "" || s.Token == "" {
-			return c, fault.New(400, "Session 内容不完整，请重新获取。")
-		}
-		c.AccessToken = ""
-		return c, nil
-	}
-	if c.Mode == "access_token" && strings.TrimSpace(c.AccessToken) != "" && len(c.AccessToken) <= 32000 {
-		c.Session = ""
-		return c, nil
-	}
-	return c, fault.New(400, "Session 内容无效，请重新获取。")
 }
 
 // Called only after the HTTP handler has checked order ownership. No order writes.

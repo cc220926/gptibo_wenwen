@@ -28,15 +28,21 @@ func (s *Service) syncLatest(ctx context.Context, r Row, a *Attempt, hasFulfillm
 		return err
 	}
 	var newest *fulfillmentRef
+	numbers, identities := map[int64]string{}, map[string]int64{}
 	for i := range refs {
 		v := &refs[i]
 		if v.Order != *r.Remote || !remoteID.MatchString(v.ID) || v.Number < 1 || v.Number > 9007199254740991 {
 			return errors.New("invalid fulfillment identity")
 		}
+		if id, found := numbers[v.Number]; found && id != v.ID {
+			return errors.New("duplicate fulfillment attempt")
+		}
+		if number, found := identities[v.ID]; found && number != v.Number {
+			return errors.New("conflicting fulfillment identity")
+		}
+		numbers[v.Number], identities[v.ID] = v.ID, v.Number
 		if newest == nil || v.Number > newest.Number {
 			newest = v
-		} else if v.Number == newest.Number && v.ID != newest.ID {
-			return errors.New("duplicate fulfillment attempt")
 		}
 	}
 	if newest == nil {
@@ -48,11 +54,38 @@ func (s *Service) syncLatest(ctx context.Context, r Row, a *Attempt, hasFulfillm
 		}
 		return nil
 	}
-	if a != nil && newest.Number < a.Number {
+	expected := int64(1)
+	if a != nil {
+		var err error
+		expected, err = remoteAttempt(ctx, s.Store.DB, *a)
+		if err != nil {
+			return err
+		}
+		if expected == 0 {
+			if err = s.bindLegacyAttemptNumbers(ctx, r, refs); err != nil {
+				return err
+			}
+			a, err = latest(ctx, s.Store.DB, r.OrderID)
+			if err != nil {
+				return err
+			}
+			if a == nil {
+				return orders.Conflict()
+			}
+			expected, err = remoteAttempt(ctx, s.Store.DB, *a)
+			if err != nil {
+				return err
+			}
+			if expected == 0 {
+				return errors.New("unconfirmed legacy attempt number")
+			}
+		}
+	}
+	if a != nil && newest.Number < expected {
 		// A later submission can remain unconfirmed while the upstream list
 		// still contains only the preceding task. Preserve that uncertainty;
 		// never bind its older result or grant permission to create a new one.
-		if a.Status == "unknown" && a.Remote == nil {
+		if (a.Status == "unknown" || a.Status == "rejected") && a.Remote == nil {
 			return nil
 		}
 		return errors.New("stale fulfillment list")
@@ -64,7 +97,7 @@ func (s *Service) syncLatest(ctx context.Context, r Row, a *Attempt, hasFulfillm
 	if v.ID != newest.ID || v.Order != newest.Order || v.Attempt == nil || *v.Attempt != newest.Number || v.Fallback == nil {
 		return errors.New("latest redemption identity mismatch")
 	}
-	if a == nil || newest.Number > a.Number {
+	if a == nil || newest.Number > expected || a.Status == "rejected" {
 		tx, err := s.Store.DB.Begin(ctx)
 		if err != nil {
 			return err
@@ -83,8 +116,12 @@ func (s *Service) syncLatest(ctx context.Context, r Row, a *Attempt, hasFulfillm
 		if (a == nil && current != nil) || (a != nil && (current == nil || current.ID != a.ID)) {
 			return orders.Conflict()
 		}
-		a = &Attempt{ID: security.ID(), Order: r.OrderID, Number: newest.Number, Mode: "session", Status: "unknown", Created: time.Now().UnixMilli()}
-		_, err = tx.Exec(ctx, `INSERT INTO recharge_redemptions(id,order_id,attempt_no,request_hash,credential_mode,created_at) VALUES($1,$2,$3,'','session',$4)`, a.ID, a.Order, a.Number, a.Created)
+		number := int64(1)
+		if current != nil {
+			number = current.Number + 1
+		}
+		a = &Attempt{ID: security.ID(), Order: r.OrderID, Number: number, RemoteNumber: &newest.Number, Mode: "session", Status: "unknown", Created: time.Now().UnixMilli()}
+		_, err = tx.Exec(ctx, `INSERT INTO recharge_redemptions(id,order_id,attempt_no,remote_attempt_no,request_hash,credential_mode,created_at) VALUES($1,$2,$3,$5,'','session',$4)`, a.ID, a.Order, a.Number, a.Created, newest.Number)
 		if err != nil {
 			return err
 		}

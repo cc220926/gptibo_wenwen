@@ -27,6 +27,9 @@ var schema []byte
 //go:embed legacy-extensions.json
 var extensionSchema []byte
 
+//go:embed legacy-optional-tables.json
+var optionalTableSchema []byte
+
 type Row map[string]*string
 type Snapshot struct {
 	Format   int              `json:"format"`
@@ -119,6 +122,15 @@ func Run(ctx context.Context, s *store.Store, path, expected string, apply bool)
 	var extensions map[string][]Column
 	if e = json.Unmarshal(extensionSchema, &extensions); e != nil {
 		return report, e
+	}
+	var optionalTables []Table
+	if e = json.Unmarshal(optionalTableSchema, &optionalTables); e != nil {
+		return report, e
+	}
+	for _, table := range optionalTables {
+		if _, present := snap.Tables[table.Name]; present {
+			spec.Tables = append(spec.Tables, table)
+		}
 	}
 	if len(snap.Tables) != len(spec.Tables)-len(excluded) || len(snap.Excluded) != len(excluded) {
 		return report, errors.New("snapshot table inventory differs")
@@ -323,17 +335,17 @@ func Run(ctx context.Context, s *store.Store, path, expected string, apply bool)
 		report.Totals[key] = n
 	}
 	for key, query := range map[string]string{
-		"financial_holds":          "SELECT count(*) FROM recharge_orders WHERE financial_hold=1",
-		"unknown_redemptions":      "SELECT count(*) FROM recharge_redemptions WHERE status='unknown'",
-		"approved_refunds":         "SELECT count(*) FROM refund_cases WHERE status='approved'",
-		"unsent_delivery":          "SELECT count(*) FROM email_deliveries WHERE status<>'sent'",
-		"pending_payouts":          "SELECT count(*) FROM partner_payouts WHERE status='pending'",
-		"pending_payments":         "SELECT count(*) FROM payments WHERE state='pending'",
-		"pending_invoice_payments": "SELECT count(*) FROM invoice_payments WHERE state='pending'",
-		"uncertain_delivery_supplier":        "SELECT count(*) FROM delivery_supplier_orders WHERE state IN ('creating','unknown','pending')",
-		"uncertain_gmail":          "SELECT count(*) FROM account_supplier_orders WHERE state IN ('creating','unknown')",
-		"uncertain_xgift":          "SELECT count(*) FROM xgift_purchases WHERE state IN ('creating','unknown','pending')",
-		"refund_holds":             "SELECT count(*) FROM orders WHERE refund_hold=1",
+		"financial_holds":             "SELECT count(*) FROM recharge_orders WHERE financial_hold=1",
+		"unknown_redemptions":         "SELECT count(*) FROM recharge_redemptions WHERE status='unknown'",
+		"approved_refunds":            "SELECT count(*) FROM refund_cases WHERE status='approved'",
+		"unsent_delivery":             "SELECT count(*) FROM email_deliveries WHERE status<>'sent'",
+		"pending_payouts":             "SELECT count(*) FROM partner_payouts WHERE status='pending'",
+		"pending_payments":            "SELECT count(*) FROM payments WHERE state='pending'",
+		"pending_invoice_payments":    "SELECT count(*) FROM invoice_payments WHERE state='pending'",
+		"uncertain_delivery_supplier": "SELECT count(*) FROM delivery_supplier_orders WHERE state IN ('creating','unknown','pending')",
+		"uncertain_gmail":             "SELECT count(*) FROM account_supplier_orders WHERE state IN ('creating','unknown')",
+		"uncertain_xgift":             "SELECT count(*) FROM xgift_purchases WHERE state IN ('creating','unknown','pending')",
+		"refund_holds":                "SELECT count(*) FROM orders WHERE refund_hold=1",
 	} {
 		var n int64
 		if e = tx.QueryRow(ctx, query).Scan(&n); e != nil {
@@ -458,6 +470,26 @@ func transform(table string, source Row, index int, report *Report) (map[string]
 			return nil, e
 		}
 		delete(r, "updated_at")
+	case "partner_payout_accounts":
+		// The exact D1 audit pointer remains in the immutable source archive.
+		delete(r, "last_event_id")
+	case "recharge_api_reads":
+		// These are runtime polling deadlines, not financial or task records. Go
+		// owns its polling scheduler; retain the original row in the offline
+		// archive and explicitly report that its old cooldown is not restored.
+		report.Review["recharge_read_cooldowns_not_restored"]++
+		return map[string][]Row{}, nil
+	case "recharge_orders":
+		// Go retains the combined acknowledgement watermark. The independently
+		// observed D1 watermarks stay archived; unread notifications remain due.
+		delete(r, "order_checked_notify_version")
+		delete(r, "redemption_checked_notify_version")
+	case "recharge_redemptions":
+		// Missing legacy platform ordinals remain unknown; never infer one from
+		// a local attempt sequence that can include rejected submissions.
+		if _, present := r["remote_attempt_no"]; !present {
+			r["remote_attempt_no"] = nil
+		}
 	case "support_contacts":
 		delete(r, "partner_id")
 		delete(r, "change_id")

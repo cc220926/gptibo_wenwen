@@ -194,13 +194,14 @@ func (c *Client) Request(ctx context.Context, path string, body *string, key str
 }
 
 type Product struct {
-	Code      string   `json:"product_code"`
-	Supply    string   `json:"supply_price"`
-	MaxSale   string   `json:"max_sale_price"`
-	Currency  string   `json:"currency"`
-	Quantity  int      `json:"max_quantity"`
-	Available bool     `json:"available"`
-	Modes     []string `json:"delivery_modes"`
+	Code          string   `json:"product_code"`
+	Supply        string   `json:"supply_price"`
+	MaxSale       string   `json:"max_sale_price"`
+	QuoteRequired bool     `json:"quote_required"`
+	Currency      string   `json:"currency"`
+	Quantity      int      `json:"max_quantity"`
+	Available     bool     `json:"available"`
+	Modes         []string `json:"delivery_modes"`
 }
 type RemoteOrder struct {
 	ID          string  `json:"order_id"`

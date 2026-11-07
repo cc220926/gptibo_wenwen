@@ -7,9 +7,7 @@ import (
 	"log/slog"
 	"regexp"
 	"slices"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"gptibo/storefront/internal/fault"
@@ -19,19 +17,20 @@ import (
 )
 
 type Attempt struct {
-	Message  string  `json:"public_message"`
-	ID       string  `json:"id"`
-	Order    string  `json:"order_id"`
-	Number   int64   `json:"attempt_no"`
-	Hash     string  `json:"request_hash"`
-	Mode     string  `json:"credential_mode"`
-	Remote   *string `json:"remote_id"`
-	Status   string  `json:"status"`
-	Fallback int     `json:"fallback"`
-	Created  int64   `json:"created_at"`
-	Stage    *string `json:"progress_stage"`
-	Version  int64   `json:"progress_version"`
-	Updated  *int64  `json:"progress_updated_at"`
+	Message      string  `json:"public_message"`
+	ID           string  `json:"id"`
+	Order        string  `json:"order_id"`
+	Number       int64   `json:"attempt_no"`
+	RemoteNumber *int64  `json:"remote_attempt_no"`
+	Hash         string  `json:"request_hash"`
+	Mode         string  `json:"credential_mode"`
+	Remote       *string `json:"remote_id"`
+	Status       string  `json:"status"`
+	Fallback     int     `json:"fallback"`
+	Created      int64   `json:"created_at"`
+	Stage        *string `json:"progress_stage"`
+	Version      int64   `json:"progress_version"`
+	Updated      *int64  `json:"progress_updated_at"`
 }
 
 func latest(ctx context.Context, q orders.Query, id string) (*Attempt, error) {
@@ -46,6 +45,24 @@ func latest(ctx context.Context, q orders.Query, id string) (*Attempt, error) {
 	}
 	e = json.Unmarshal(raw, &a)
 	return &a, e
+}
+
+// Local ordinals count every submission, including a request rejected before
+// the supplier created a task. Only accepted tasks advance the upstream ordinal.
+func remoteAttempt(ctx context.Context, q orders.Query, a Attempt) (int64, error) {
+	if a.RemoteNumber != nil {
+		return *a.RemoteNumber, nil
+	}
+	// A bound legacy ID is reliable, but older replies could omit attempt_no.
+	if a.Remote != nil {
+		return 0, nil
+	}
+	var number, missing int64
+	err := q.QueryRow(ctx, `SELECT COALESCE(max(remote_attempt_no),0)+1,count(*) FILTER(WHERE remote_attempt_no IS NULL) FROM recharge_redemptions WHERE order_id=$1 AND attempt_no<$2 AND remote_id IS NOT NULL`, a.Order, a.Number).Scan(&number, &missing)
+	if missing > 0 {
+		return 0, err
+	}
+	return number, err
 }
 func terminal(s string) bool {
 	return slices.Contains([]string{"succeeded", "failed", "cancelled", "rejected"}, s)
@@ -68,7 +85,7 @@ func optionalTime(v *string) (*int64, error) {
 	return &n, e
 }
 func (s *Service) applyRedemption(ctx context.Context, r Row, a Attempt, v Redemption) error {
-	if !remoteID.MatchString(v.ID) || r.Remote == nil || v.Order != *r.Remote || (a.Remote != nil && *a.Remote != v.ID) || !slices.Contains([]string{"queued", "running", "succeeded", "failed", "cancelled"}, v.Status) || v.Fallback == nil || (v.Attempt != nil && *v.Attempt != a.Number) {
+	if !remoteID.MatchString(v.ID) || r.Remote == nil || v.Order != *r.Remote || (a.Remote != nil && *a.Remote != v.ID) || !slices.Contains([]string{"queued", "running", "succeeded", "failed", "cancelled"}, v.Status) || v.Fallback == nil {
 		return errors.New("redemption identity mismatch")
 	}
 	version := int64(0)
@@ -138,6 +155,13 @@ func (s *Service) applyRedemption(ctx context.Context, r Row, a Attempt, v Redem
 		return orders.Conflict()
 	}
 	a = *current
+	number, e := remoteAttempt(ctx, tx, a)
+	if e != nil {
+		return e
+	}
+	if number < 1 || number > 9007199254740991 || (a.RemoteNumber == nil && v.Attempt == nil) || (v.Attempt != nil && *v.Attempt != number) || (a.Remote != nil && *a.Remote != v.ID) {
+		return errors.New("redemption attempt identity mismatch")
+	}
 	if version < a.Version {
 		return tx.Commit(ctx)
 	}
@@ -163,7 +187,7 @@ func (s *Service) applyRedemption(ctx context.Context, r Row, a Attempt, v Redem
 	if *v.Fallback && v.Retry && v.Next == "resubmit" && v.Recovery != "refund" && slices.Contains([]string{"failed", "cancelled"}, v.Status) {
 		fallback = 1
 	}
-	_, e = tx.Exec(ctx, `UPDATE recharge_redemptions SET remote_id=$1,status=$2,fallback=$3,failure_code=$4,error_category=$5,result_code=$6,account_email_masked=$7,finished_at=$8,progress_stage=$9,progress_version=$10,progress_updated_at=$11,public_message=$13,recovery_action=$14 WHERE id=$12`, v.ID, v.Status, fallback, failure, category, result, masked, finished, stage, version, updated, a.ID, message, recovery)
+	_, e = tx.Exec(ctx, `UPDATE recharge_redemptions SET remote_id=$1,status=$2,fallback=$3,failure_code=$4,error_category=$5,result_code=$6,account_email_masked=$7,finished_at=$8,progress_stage=$9,progress_version=$10,progress_updated_at=$11,public_message=$13,recovery_action=$14,remote_attempt_no=$15 WHERE id=$12`, v.ID, v.Status, fallback, failure, category, result, masked, finished, stage, version, updated, a.ID, message, recovery, number)
 	if e != nil {
 		return e
 	}
@@ -223,27 +247,17 @@ func (s *Service) Action(ctx context.Context, id string, in Input) error {
 	if in.Action != "submit" || !in.Confirmed || !security.ValidID(in.Key) {
 		return fault.New(400, "请确认账号并重新提交。")
 	}
-	c := in.Credential
-	if c.Mode == "session" && len(c.Session) > 0 && len(c.Session) <= 32000 && utf8.ValidString(c.Session) {
-		var session struct {
-			User struct {
-				Email string `json:"email"`
-			} `json:"user"`
-			Token string `json:"accessToken"`
-		}
-		if json.Unmarshal([]byte(c.Session), &session) != nil || session.User.Email == "" || session.Token == "" {
-			return fault.New(400, "Session 中缺少账号邮箱或 Access Token。")
-		}
-		c.AccessToken = ""
-	} else if c.Mode == "access_token" && strings.TrimSpace(c.AccessToken) != "" && len(c.AccessToken) <= 32000 && utf8.ValidString(c.AccessToken) {
-		c.Session = ""
-	} else {
-		return fault.New(400, "请选择 Session 或 Access Token，并填写有效凭据。")
+	c, err := normalizeCredential(in.Credential)
+	if err != nil {
+		return err
 	}
 	return s.locked(ctx, id, func(r Row) error { return s.submit(ctx, id, in, c, r, "customer") })
 }
 
 func (s *Service) submit(ctx context.Context, id string, in Input, c Credential, r Row, actor string) error {
+	if err := s.bindLegacyAttemptNumbers(ctx, r, nil); err != nil {
+		return err
+	}
 	tx, e := s.Store.DB.Begin(ctx)
 	if e != nil {
 		return e

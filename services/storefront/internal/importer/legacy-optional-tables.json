@@ -1,0 +1,52 @@
+[
+  {
+    "name": "partner_payout_accounts",
+    "columns": [
+      {
+        "name": "partner_id",
+        "type": "TEXT",
+        "pk": 1
+      },
+      {
+        "name": "phone",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "name",
+        "type": "TEXT",
+        "pk": 0
+      },
+      {
+        "name": "version",
+        "type": "INTEGER",
+        "pk": 0
+      },
+      {
+        "name": "last_event_id",
+        "type": "TEXT",
+        "pk": 0
+      }
+    ]
+  },
+  {
+    "name": "recharge_api_reads",
+    "columns": [
+      {
+        "name": "account",
+        "type": "TEXT",
+        "pk": 1
+      },
+      {
+        "name": "resource",
+        "type": "TEXT",
+        "pk": 2
+      },
+      {
+        "name": "next_allowed_at",
+        "type": "INTEGER",
+        "pk": 0
+      }
+    ]
+  }
+]

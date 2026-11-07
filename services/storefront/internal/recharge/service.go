@@ -81,8 +81,9 @@ func (s *Service) Quote(ctx context.Context, plan string, price int64, cost *int
 			continue
 		}
 		supply, e1 := Money(p.Supply)
-		maxSale, e2 := Money(p.MaxSale)
-		ok = e1 == nil && e2 == nil && p.Available && p.Currency == "CNY" && p.Quantity >= 1 && slices.Contains(p.Modes, "auto_recharge") && price >= supply && price <= maxSale && (cost == nil || *cost >= supply)
+		// Dynamic products require a real quotation; their placeholder supply
+		// price is not a fixed offer. max_sale_price is historical metadata.
+		ok = e1 == nil && !p.QuoteRequired && p.Available && p.Currency == "CNY" && p.Quantity >= 1 && slices.Contains(p.Modes, "auto_recharge") && price >= supply && (cost == nil || *cost >= supply)
 	}
 	if !ok {
 		return snap, fault.New(409, "套餐暂不可售或价格已更新，请刷新商品。")

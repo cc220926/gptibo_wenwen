@@ -1,4 +1,35 @@
 {
-  "xgift_recovery_attempts": [{"name":"previous_stage","type":"TEXT","pk":0}],
-  "partner_product_order": [{"name":"hidden_product_ids","type":"TEXT","pk":0}]
+  "xgift_recovery_attempts": [
+    {
+      "name": "previous_stage",
+      "type": "TEXT",
+      "pk": 0
+    }
+  ],
+  "partner_product_order": [
+    {
+      "name": "hidden_product_ids",
+      "type": "TEXT",
+      "pk": 0
+    }
+  ],
+  "recharge_redemptions": [
+    {
+      "name": "remote_attempt_no",
+      "type": "INTEGER",
+      "pk": 0
+    }
+  ],
+  "recharge_orders": [
+    {
+      "name": "order_checked_notify_version",
+      "type": "INTEGER",
+      "pk": 0
+    },
+    {
+      "name": "redemption_checked_notify_version",
+      "type": "INTEGER",
+      "pk": 0
+    }
+  ]
 }

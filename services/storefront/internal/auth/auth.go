@@ -241,7 +241,7 @@ func (a *Service) Verify(ctx context.Context, role string, in VerifyInput, ip st
 			return "", e
 		}
 		e = a.Store.DB.QueryRow(ctx, `SELECT c.id::text FROM auth_challenges c JOIN partners p ON p.id=c.subject
- WHERE c.role='partner' AND p.email=$1 AND p.active AND NOT c.used AND c.ready AND c.expires_at>now() ORDER BY c.created_at DESC LIMIT 1`, email).Scan(&id)
+ WHERE c.role='partner' AND p.email=$1 AND c.domain_scope=$2 AND p.active AND NOT c.used AND c.ready AND c.expires_at>now() ORDER BY c.created_at DESC LIMIT 1`, email, domains.Current(ctx).AuthScope(role)).Scan(&id)
 		if errors.Is(e, pgx.ErrNoRows) {
 			return "", invalid()
 		}

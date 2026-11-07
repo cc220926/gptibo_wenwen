@@ -30,6 +30,11 @@ func testD1ImportRecovery(t *testing.T, reason, stage string) {
  import {DatabaseSync} from 'node:sqlite';import{readFileSync,readdirSync}from'node:fs';import{pathToFileURL}from'node:url';
  const root=process.argv[1],dir=process.argv[2];const db=new DatabaseSync(dir+'/source.sqlite');for(const f of readdirSync(root+'/migrations').sort())if(f.endsWith('.sql'))db.exec(readFileSync(root+'/migrations/'+f,'utf8'));
  db.exec("INSERT INTO partners(id,slug,name,email,active,created_at,updated_at) VALUES('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','ABCDEF12','Fixture','agent@example.test',1,1700000000000,1700000000000)");
+ db.exec("INSERT INTO partner_payout_accounts(partner_id,phone,name,version,last_event_id) VALUES('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','13800000001','Fixture Receiver',4,'account-audit')");
+ db.exec("INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,mode,payment_status,status,created_at,updated_at,last_event_id) VALUES('YMX-RECHARGE','owner','recharge-key','plus','Plus',13900,'live','paid','failed',1700000000000,1700000000000,'recharge-initial')");
+ db.exec("INSERT INTO recharge_orders(order_id,account,product_code,collection_mode,create_body,remote_id,payment_status,updated_at,notify_version,checked_notify_version,order_checked_notify_version,redemption_checked_notify_version) VALUES('YMX-RECHARGE','fixture-account','plus','platform_collect','{}','remote-order','paid',1700000000000,7,3,7,3)");
+ db.exec("INSERT INTO recharge_redemptions(id,order_id,attempt_no,request_hash,credential_mode,remote_id,status,created_at,remote_attempt_no) VALUES('local-rejected','YMX-RECHARGE',1,'rejected-hash','session',NULL,'rejected',1700000000000,NULL),('local-accepted','YMX-RECHARGE',2,'accepted-hash','session','remote-redemption','failed',1700000000001,1)");
+ db.exec("INSERT INTO recharge_api_reads(account,resource,next_allowed_at) VALUES('fixture-account','/orders/remote-order',1700000300000)");
  db.exec("INSERT INTO partner_prices(partner_id,plan,cost_cents,price_cents) VALUES('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','plus',10000,16900)");
  db.exec("INSERT INTO support_contacts(owner,partner_id,wechat,qq,email,updated_at) VALUES('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','wechat_fixture','123456','','1700000000000')");
  db.exec("INSERT INTO partner_product_order(partner_id,product_ids,version,change_id,updated_at,hidden_product_ids) VALUES('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','[\"chatgpt\",\"x-premium\"]',3,'change',1700000000000,'[\"chatgpt\"]')");
@@ -52,7 +57,7 @@ func testD1ImportRecovery(t *testing.T, reason, stage string) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if report.Applied || report.Excluded["admin_sessions"] != 1 || report.Review["invitation_delivery_unconfirmed"] != 1 || report.Totals["orders_sale_cents"] != "3500" {
+	if report.Applied || report.Excluded["admin_sessions"] != 1 || report.Review["invitation_delivery_unconfirmed"] != 1 || report.Totals["orders_sale_cents"] != "17400" || report.Review["recharge_read_cooldowns_not_restored"] != 1 {
 		t.Fatal("incorrect import report")
 	}
 	var n int
@@ -62,6 +67,33 @@ func testD1ImportRecovery(t *testing.T, reason, stage string) {
 	}
 	if _, e = importer.Run(ctx, owner, snapshot, "wrong", true); e == nil {
 		t.Fatal("unreviewed snapshot accepted")
+	}
+	// Older snapshots with neither optional tables nor attempt/watermark columns
+	// must still import without guessing a platform attempt ordinal.
+	legacyBytes, _ := os.ReadFile(snapshot)
+	var legacy importer.Snapshot
+	json.Unmarshal(legacyBytes, &legacy)
+	delete(legacy.Tables, "partner_payout_accounts")
+	delete(legacy.Tables, "recharge_api_reads")
+	for _, row := range legacy.Tables["recharge_redemptions"] {
+		delete(row, "remote_attempt_no")
+	}
+	for _, row := range legacy.Tables["recharge_orders"] {
+		delete(row, "order_checked_notify_version")
+		delete(row, "redemption_checked_notify_version")
+	}
+	legacyBytes, _ = json.Marshal(legacy)
+	legacyPath := filepath.Join(dir, "legacy.json")
+	os.WriteFile(legacyPath, legacyBytes, 0600)
+	if _, e = importer.Run(ctx, owner, legacyPath, "", false); e != nil {
+		t.Fatal("legacy snapshot rejected", e)
+	}
+	// Unknown tables remain a hard error, even if all recognized tables exist.
+	legacy.Tables["unexpected_business_data"] = []importer.Row{}
+	legacyBytes, _ = json.Marshal(legacy)
+	os.WriteFile(legacyPath, legacyBytes, 0600)
+	if _, e = importer.Run(ctx, owner, legacyPath, "", false); e == nil {
+		t.Fatal("unknown table accepted")
 	}
 	// A missing foreign key must roll back the entire import, including the archive.
 	b, _ := os.ReadFile(snapshot)
@@ -98,6 +130,27 @@ func testD1ImportRecovery(t *testing.T, reason, stage string) {
 	}
 	if _, e = importer.Run(ctx, owner, snapshot, report.SHA256, true); e == nil {
 		t.Fatal("nonempty target overwritten")
+	}
+	var accountPhone, accountName string
+	var accountVersion int64
+	if e := owner.DB.QueryRow(ctx, `SELECT phone,name,version FROM partner_payout_accounts WHERE partner_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`).Scan(&accountPhone, &accountName, &accountVersion); e != nil || accountPhone != "13800000001" || accountName != "Fixture Receiver" || accountVersion != 4 {
+		t.Fatal("payout account changed during import", e)
+	}
+	var localAttempt, remoteAttempt int64
+	if e := owner.DB.QueryRow(ctx, `SELECT attempt_no,remote_attempt_no FROM recharge_redemptions WHERE id='local-accepted'`).Scan(&localAttempt, &remoteAttempt); e != nil || localAttempt != 2 || remoteAttempt != 1 {
+		t.Fatal("platform ordinal was replaced by local attempt", e)
+	}
+	var rejectedOrdinal *int64
+	if e := owner.DB.QueryRow(ctx, `SELECT remote_attempt_no FROM recharge_redemptions WHERE id='local-rejected'`).Scan(&rejectedOrdinal); e != nil || rejectedOrdinal != nil {
+		t.Fatal("rejected attempt received an invented remote ordinal", e)
+	}
+	var checked int64
+	if e := owner.DB.QueryRow(ctx, `SELECT checked_notify_version FROM recharge_orders WHERE order_id='YMX-RECHARGE'`).Scan(&checked); e != nil || checked != 3 {
+		t.Fatal("unread notification was acknowledged", e)
+	}
+	var archivedCooldown string
+	if e := owner.DB.QueryRow(ctx, `SELECT payload->>'next_allowed_at' FROM legacy_import_rows WHERE source_table='recharge_api_reads'`).Scan(&archivedCooldown); e != nil || archivedCooldown != "1700000300000" {
+		t.Fatal("runtime metadata was silently discarded", e)
 	}
 	var hidden []string
 	if e := owner.DB.QueryRow(ctx, `SELECT hidden_product_ids FROM partner_order_versions WHERE partner_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`).Scan(&hidden); e != nil || len(hidden) != 1 || hidden[0] != "chatgpt" {

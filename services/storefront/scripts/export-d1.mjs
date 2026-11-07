@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { supportedColumns } from './legacy-columns.mjs'
+import { supportedColumns, supportedTables } from './legacy-columns.mjs'
 
 export const excluded = new Set(['admin_sessions','admin_email_login_codes','admin_login_limits','admin_totp_usage','partner_sessions','partner_login_codes','customer_email_sessions','customer_login_codes'])
 export function exportSnapshot(input, output) {
@@ -15,9 +15,9 @@ export function exportSnapshot(input, output) {
   try {
     db.exec('BEGIN')
     const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name <> 'd1_migrations' ORDER BY name").all().map(r => r.name)
-    if (JSON.stringify(tables) !== JSON.stringify(spec.tables.map(t => t.name))) throw new Error('source tables differ from supported D1 schema')
+    const sourceTables = supportedTables(spec.tables, tables)
     const snapshot = { format: 1, schema: createHash('sha256').update(specBytes).digest('hex'), tables: {}, excluded: {} }
-    for (const table of spec.tables) {
+    for (const table of sourceTables) {
       const cols = db.prepare(`PRAGMA table_info("${table.name}")`).all().map(({name,type,pk}) => ({name,type,pk}))
       if (!supportedColumns(table, cols)) throw new Error('source schema differs: '+table.name)
       if (excluded.has(table.name)) { snapshot.excluded[table.name] = db.prepare(`SELECT count(*) n FROM "${table.name}"`).get().n; continue }
