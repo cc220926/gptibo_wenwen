@@ -30,9 +30,11 @@ test('feed pages through all available display entries, then loops from the firs
     publish: value => { view = value },
   })
   await tick()
-  assert.deepEqual(view?.emails, [mask(0), mask(1), mask(2), mask(3)])
+  assert.deepEqual(view?.emails, [mask(0), mask(1)])
   for (let i = 0; i < 60; i++) { feed.advance(); await tick() }
-  assert.deepEqual(view?.emails.slice(0, 3), [mask(60), mask(61), mask(0)])
+  assert.deepEqual(view?.emails, [mask(60), mask(61)])
+  for (let i = 0; i < 2; i++) { feed.advance(); await tick() }
+  assert.deepEqual(view?.emails, [mask(0), mask(1)])
   assert.deepEqual(calls.slice(0, 2), [0, 60])
   feed.stop()
 })

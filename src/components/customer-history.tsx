@@ -68,18 +68,16 @@ export function CustomerHistory() {
   return <section ref={section} className="customer-history page-width" aria-labelledby="customer-history-title"
     onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
     onFocusCapture={() => setFocused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false) }}>
-    <div className="customer-history-heading">
-      <div><h2 id="customer-history-title">{english ? 'Past paying customers' : '历史已付款客户'}</h2><span>{english ? 'Masked emails' : '邮箱已脱敏'}</span></div>
-      {view.canAdvance && <div className="customer-history-controls">
-        {!reducedMotion && <button type="button" onClick={() => setPaused(value => !value)} aria-label={toggleLabel} title={toggleLabel} aria-pressed={paused}>{paused ? <Play size={14} aria-hidden="true" /> : <Pause size={14} aria-hidden="true" />}</button>}
-        <button type="button" onClick={next} aria-label={english ? 'Show next customer' : '查看下一位客户'} title={english ? 'Show next customer' : '查看下一位客户'}><ChevronDown size={16} aria-hidden="true" /></button>
-      </div>}
-    </div>
-    <div className="customer-history-window" style={{ height: `calc(var(--customer-history-row-height) * ${Math.min(view.emails.length, 3)})` }}>
+    <div className="customer-history-heading"><h2 id="customer-history-title">{english ? 'Past paying customers' : '历史已付款客户'}</h2><span>{english ? 'Masked emails' : '邮箱已脱敏'}</span></div>
+    <div className="customer-history-window" style={{ height: 'var(--customer-history-row-height)' }}>
       <ul className={'customer-history-list' + (moving ? ' is-moving' : '')} aria-live="off" style={{ animationPlayState: shouldPause ? 'paused' : 'running' }}
         onAnimationEnd={event => { if (event.target === event.currentTarget && event.animationName === 'customer-history-step') next() }}>
-        {view.emails.map((email, index) => <li key={`${index}:${email}`} aria-hidden={index >= 3 || undefined}><Mail size={14} aria-hidden="true" /><span title={email}>{email}</span></li>)}
+        {view.emails.map((email, index) => <li key={`${index}:${email}`} aria-hidden={index >= 1 || undefined}><Mail size={14} aria-hidden="true" /><span title={email}>{email}</span></li>)}
       </ul>
     </div>
+    {view.canAdvance && <div className="customer-history-controls">
+      {!reducedMotion && <button type="button" onClick={() => setPaused(value => !value)} aria-label={toggleLabel} title={toggleLabel} aria-pressed={paused}>{paused ? <Play size={14} aria-hidden="true" /> : <Pause size={14} aria-hidden="true" />}</button>}
+      <button type="button" onClick={next} aria-label={english ? 'Show next customer' : '查看下一位客户'} title={english ? 'Show next customer' : '查看下一位客户'}><ChevronDown size={16} aria-hidden="true" /></button>
+    </div>}
   </section>
 }

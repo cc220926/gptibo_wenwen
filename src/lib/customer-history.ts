@@ -22,7 +22,7 @@ export function customerHistoryFeed(options: {
   let firstPage: CustomerHistoryPage | null = null
   let buffer: string[] = [], cursor: number | null = 0
   const publish = () => {
-    if (!stopped) options.publish(!failed && buffer.length ? { emails: buffer.slice(0, 4), canAdvance: canAdvance && buffer.length > 3 } : null)
+    if (!stopped) options.publish(!failed && buffer.length ? { emails: buffer.slice(0, 2), canAdvance: canAdvance && buffer.length > 1 } : null)
   }
   const load = async () => {
     if (stopped || failed || loading) return
@@ -33,7 +33,7 @@ export function customerHistoryFeed(options: {
       if (!page) throw new Error('Invalid customer history')
       if (!firstPage) {
         firstPage = page
-        canAdvance = page.emails.length > 3 || page.nextCursor !== null
+        canAdvance = page.emails.length > 1 || page.nextCursor !== null
       }
       buffer.push(...page.emails)
       cursor = page.nextCursor
@@ -51,7 +51,7 @@ export function customerHistoryFeed(options: {
   void load()
   return {
     advance() {
-      if (stopped || failed || !canAdvance || buffer.length <= 3) return
+      if (stopped || failed || !canAdvance || buffer.length <= 1) return
       buffer.shift()
       publish()
       if (buffer.length <= 8) void load()
