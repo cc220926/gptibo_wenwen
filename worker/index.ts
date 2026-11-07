@@ -15,6 +15,7 @@ import { sendDueRechargeReminders } from './recharge-reminders.ts'
 import { sendDueOrderNotifications } from './order-notifications.ts'
 import { reconcileGmail } from './account_supplier/service.ts'
 import { requireSecureTransport, secureResponse } from './security.ts'
+import { checkoutPresence, expireCheckoutPresence } from './checkout-presence.ts'
 const json = (value: unknown, status = 200) => Response.json(value, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...(status === 429 ? { 'Retry-After': '60' } : {}) },
 })
@@ -29,6 +30,8 @@ export default {
     await retryTelegramInvitations(env).catch(() => { console.error('Telegram invitation queue temporarily unavailable') })
     // Durable transactional email must continue even when supplier polling fails.
     await sendDueOrderNotifications(env).catch(() => { console.error('Order notification queue temporarily unavailable') })
+    // Cosmetic activity statistics must not interrupt financial reconciliation.
+    await expireCheckoutPresence(env).catch(() => { console.error('Checkout activity cleanup temporarily unavailable') })
     // Reminders run every minute; preserve the existing five-minute reconciliation cadence.
     if (event.scheduledTime === undefined || Math.floor(event.scheduledTime / 60_000) % 5 === 0) {
       // Refund confirmation also needs the original order snapshot. Give both
@@ -65,6 +68,10 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (url.pathname === '/api/visitors') {
       try { return await recordVisitor(request, env) }
       catch (caught) { return error(caught instanceof ApiError ? caught.message : '统计暂不可用。', caught instanceof ApiError ? caught.status : 503) }
+    }
+    if (url.pathname === '/api/checkout-presence') {
+      try { return await checkoutPresence(request, env) }
+      catch (caught) { return error(caught instanceof ApiError ? caught.message : '下单活动统计暂不可用。', caught instanceof ApiError ? caught.status : 503) }
     }
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request)
     if (url.pathname.startsWith('/api/admin/') || url.pathname.startsWith('/api/partner/') || url.pathname.startsWith('/api/orders') || url.pathname === '/api/catalog') return commerce(request, env)

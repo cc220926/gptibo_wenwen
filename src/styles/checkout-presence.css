@@ -1,0 +1,17 @@
+.checkout-presence {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 12px 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.checkout-presence > svg { flex: 0 0 auto; margin-top: 3px; }
+.checkout-presence strong { color: var(--foreground); font-weight: 600; }
+.checkout-presence small { display: block; font-size: 10px; margin-top: 2px; }
+.flow-header .checkout-presence { margin: 12px 0 0; }

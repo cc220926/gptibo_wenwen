@@ -1,3 +1,5 @@
+import { CheckoutPresence } from './checkout-presence'
+import { paymentDeadline } from '../../shared/payment-window'
 import type { PaymentMethodOption } from './payment-method-choices'
 import { emailProduct, productNameForId } from '../../shared/email-products'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
@@ -47,8 +49,8 @@ function FlowStage({ stage, children }: { stage: string; children: ReactNode }) 
   return <div ref={viewport} className="flow-viewport"><div ref={content} className="flow-stage">{children}</div></div>
 }
 
-type Props = CheckoutProps & { couponAvailable?: boolean; shopSlug?: string; onCloseComplete?: () => void; notice?: { supportsWarranty?: boolean; purchaseNote?: string; onContinue: () => void }; emailMode: boolean; paymentMethods?: PaymentMethodOption[]; draft: { plan: PlanId; price: number }; initialEmail?: string | null; onSubmitEmail: (email: string, username?: string, preflightToken?: string, paymentMethod?: string, expectedFeeBps?: number, turnstileToken?: string, couponCode?: string, couponPrice?: number) => Promise<void>; children?: ReactNode | ((refreshTarget: HTMLElement | null) => ReactNode) }
-export function PurchaseFlow({ couponAvailable = false, shopSlug, notice, onCloseComplete, emailMode, paymentMethods, draft, initialEmail, onSubmitEmail, children, ...checkout }: Props) {
+type Props = CheckoutProps & { presenceOthers?: number | null; onPresenceActivityChange?: (active: boolean) => void; couponAvailable?: boolean; shopSlug?: string; onCloseComplete?: () => void; notice?: { supportsWarranty?: boolean; purchaseNote?: string; onContinue: () => void }; emailMode: boolean; paymentMethods?: PaymentMethodOption[]; draft: { plan: PlanId; price: number }; initialEmail?: string | null; onSubmitEmail: (email: string, username?: string, preflightToken?: string, paymentMethod?: string, expectedFeeBps?: number, turnstileToken?: string, couponCode?: string, couponPrice?: number) => Promise<void>; children?: ReactNode | ((refreshTarget: HTMLElement | null) => ReactNode) }
+export function PurchaseFlow({ presenceOthers = null, onPresenceActivityChange, couponAvailable = false, shopSlug, notice, onCloseComplete, emailMode, paymentMethods, draft, initialEmail, onSubmitEmail, children, ...checkout }: Props) {
   const { order, open, onOpenChange, busy, error } = checkout
   const [refreshTarget, setRefreshTarget] = useState<HTMLDivElement | null>(null)
   const [supportReason, setSupportReason] = useState<string | null>(null)
@@ -76,6 +78,7 @@ export function PurchaseFlow({ couponAvailable = false, shopSlug, notice, onClos
   const [salesOrder, setSalesOrder] = useState<string | null>(null)
   const [salesOpen, setSalesOpen] = useState(false)
   const [salesBusy, setSalesBusy] = useState(false)
+  const [presenceClock, setPresenceClock] = useState(Date.now)
   const [compact, setCompact] = useState(() => matchMedia('(max-width: 959px)').matches)
   const showingSales = salesOpen && salesOrder === order?.id && !emailMode
   useEffect(() => {
@@ -121,9 +124,22 @@ export function PurchaseFlow({ couponAvailable = false, shopSlug, notice, onClos
   const result = !emailMode && (archived || !reconnect && ['processing', 'success', 'failed', 'cancelled'].includes(order?.status ?? '') || (sms && step === 2))
   const title = emailMode ? xgift ? '为哪个账号开通？' : '填写下单邮箱' : archived ? '订单已归档' : paused ? orderLabel(order!) : result ? orderLabel(order!) : step === 1 ? '确认本次付款' : step === 2 ? xgift ? '等待充值' : automaticDelivery ? '等待自动发货' : emailProductInfo ? '等待邮件发货' : manual ? '等待人工开通' : '连接你的账号' : '查询接码结果'
   const stage = emailMode ? 'email' : `${order?.id}-${order?.status}-${Boolean(order?.smsPhone)}-${Boolean(paused)}`
+  const presenceDeadline = !emailMode && order ? paymentDeadline(order.createdAt, order.fulfillment?.expiresAt) : null
+  const presenceActive = Boolean(open && plan.productId === 'chatgpt' && !showingNotice && !showingSales && !paused && !checkout.testingEnabled && (emailMode || (order?.mode === 'live' && !order.isTest && order.paymentStatus === 'unpaid' && order.status === 'pending' && !order.fulfillment?.paymentExpired && presenceDeadline! > presenceClock)))
+  useEffect(() => {
+    const refresh = setTimeout(() => setPresenceClock(Date.now()), 0)
+    const expiry = presenceDeadline !== null ? setTimeout(() => setPresenceClock(Date.now()), Math.max(0, presenceDeadline - Date.now())) : undefined
+    return () => { clearTimeout(refresh); clearTimeout(expiry) }
+  }, [presenceDeadline, open])
+  useEffect(() => {
+    // Guard an old order immediately, before the local display clock refreshes.
+    onPresenceActivityChange?.(presenceActive && (presenceDeadline === null || presenceDeadline > Date.now()))
+    const timer = presenceActive && presenceDeadline !== null ? setTimeout(() => onPresenceActivityChange?.(false), Math.max(0, presenceDeadline - Date.now())) : undefined
+    return () => { clearTimeout(timer); onPresenceActivityChange?.(false) }
+  }, [presenceActive, presenceDeadline, onPresenceActivityChange])
   const close = (value: boolean) => { if (busy || salesBusy) return; if (!value && showingSales) closeSales(); else onOpenChange(value) }
   return <OrderSupportGuideContext.Provider value={showSupportGuide}><Dialog open={open} disablePointerDismissal onOpenChange={close} onOpenChangeComplete={value => { if (!value) { setSalesOpen(false); setSalesOrder(null); setSalesHeight(null); setDismissedSupportReason(null); onCloseComplete?.() } }}>
-    <DialogContent ref={popupRef} style={{ height: !emailMode && salesHeight?.orderId === order?.id ? salesHeight?.height : undefined }} className={showingNotice ? 'motion-dialog purchase-notice' : `motion-dialog purchase-flow${xgift ? ' x-purchase-flow' : ''}`} data-sales-open={showingSales} showCloseButton={showingNotice} initialFocus={titleRef}>
+    <DialogContent data-checkout-presence-active={presenceActive} ref={popupRef} style={{ height: !emailMode && salesHeight?.orderId === order?.id ? salesHeight?.height : undefined }} className={showingNotice ? 'motion-dialog purchase-notice' : `motion-dialog purchase-flow${xgift ? ' x-purchase-flow' : ''}`} data-sales-open={showingSales} showCloseButton={showingNotice} initialFocus={titleRef}>
       {notice ? <PurchaseNotice plan={draft.plan} purchaseNote={notice.purchaseNote} supportsWarranty={notice.supportsWarranty} titleRef={titleRef} onCancel={() => close(false)} onContinue={notice.onContinue} /> : <>
       <header className="flow-ticket">
         <div className="flow-ticket-meta"><span className="flow-ticket-label">{emailMode && xgift ? '确认订单' : '订单编号'}</span>{!emailMode && order ? <span className="flow-order-id" title={order.id}>{order.id}</span> : !(emailMode && xgift) && <span className="flow-ticket-draft">待生成</span>}</div>
@@ -135,6 +151,7 @@ export function PurchaseFlow({ couponAvailable = false, shopSlug, notice, onClos
         <div className="flow-product"><ProductMark small productId={plan.productId} /><div className="flow-product-main"><strong>{productNameForId(plan.productId)}</strong><p>{!emailMode && order ? order.planName : plan.name}{!xgift && <> · {emailProductInfo ? emailProductInfo.duration + ' · 邮件发货' : sms ? '1 次服务' : plan.renewalOnly ? '按月续费' : '按月订阅'}</>}</p></div><div className="flow-product-meta"><strong className="flow-price"><small>¥</small>{(!emailMode && order?.paymentSummary ? order.paymentSummary.amountCents / 100 : current.price).toFixed(2)}</strong><span className="flow-product-qty">数量 × 1</span></div></div>
         <DialogDescription className="sr-only">{xgift ? '填写用户名与邮箱，验证账号后付款。' : current.plan === 'gmail-account' ? '填写收件邮箱并确认付款，账号资料自动邮件发货。' : emailProductInfo ? '填写收件邮箱并确认付款，自动发货后可在订单页与邮箱领取。' : sms ? '填写邮箱，确认付款后获取手机号，再查询接码结果。' : manual ? '填写邮箱并确认付款，联系支持人工开通后查看结果。' : '填写邮箱并确认付款，连接账号后查看开通结果。'}</DialogDescription>
         <ol className="flow-steps" aria-label="下单进度">{steps.map((label, i) => <li key={label} data-state={i < step || completed ? 'done' : i === step ? 'current' : 'next'} aria-current={!completed && i === step ? 'step' : undefined}><span>{i < step || completed ? <Check size={12} /> : i + 1}</span><span>{label}</span></li>)}</ol>
+        {presenceActive && <CheckoutPresence others={presenceOthers} />}
       </header>
       <FlowStage stage={stage}>
         <DialogTitle ref={titleRef} tabIndex={-1} data-stage-title className={(xgift && !emailMode) || (result && !paused) || step === 1 ? 'sr-only' : 'flow-title'}>{title}</DialogTitle>
