@@ -9,7 +9,7 @@ export function CheckoutPresence({ others, compact = false, metric }: { others: 
     const [before, after] = metric.displayText.split('{count}')
     return <div className={compact ? 'checkout-presence checkout-presence--compact' : 'checkout-presence'}>
       <UsersRound size={14} aria-hidden="true" />
-      <span>{before}<strong>{metric.displayCount}</strong>{after}<small>{locale === 'en' ? 'Illustrative figure' : '示意数字'}</small></span>
+      <span>{before}<strong>{metric.displayCount}</strong>{after}</span>
     </div>
   }
   if (others === null || !Number.isSafeInteger(others) || others < 0) return null
