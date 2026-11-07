@@ -52,10 +52,15 @@ export async function recoveryRoutes(request: Request, env: Env, path: string) {
     if (typeof data.challenge !== 'string' || data.challenge.length !== 36 || typeof data.code !== 'string' || !/^\d{6}$/.test(data.code)) throw new ApiError('验证码无效或已过期。', 401)
     const challenge = await db.prepare('UPDATE customer_login_codes SET attempts=attempts+1 WHERE id=? AND attempts<5 AND used=0 AND expires_at>? RETURNING *').bind(data.challenge, now).first<{ email: string; code_hash: string }>()
     if (!challenge || challenge.code_hash !== await hash(env.PARTNER_AUTH_SECRET + ':customer:' + data.challenge + ':' + data.code)) throw new ApiError('验证码无效或已过期。', 401)
-    const claimed = await db.prepare('UPDATE customer_login_codes SET used=1 WHERE id=? AND used=0 AND expires_at>? RETURNING email').bind(data.challenge, Date.now()).first()
-    if (!claimed) throw new ApiError('验证码无效或已过期。', 401)
-    const token = randomToken()
-    await db.prepare('INSERT INTO customer_email_sessions(token_hash,email,credential_version,expires_at) VALUES (?,?,?,?)').bind(await hash(token), challenge.email, await hash(env.PARTNER_AUTH_SECRET!), Date.now() + LOGIN_SESSION_SECONDS * 1000).run()
+    const token = randomToken(), tokenHash = await hash(token), version = await hash(env.PARTNER_AUTH_SECRET!)
+    const claimAt = Date.now()
+    // Issue the session and consume its code in one transaction. A concurrent
+    // request must create its own session before it can claim the code.
+    await db.batch([
+      db.prepare('INSERT INTO customer_email_sessions(token_hash,email,credential_version,expires_at) SELECT ?,email,?,? FROM customer_login_codes WHERE id=? AND email=? AND code_hash=? AND used=0 AND attempts<=5 AND expires_at>?').bind(tokenHash, version, claimAt + LOGIN_SESSION_SECONDS * 1000, data.challenge, challenge.email, challenge.code_hash, claimAt),
+      db.prepare('UPDATE customer_login_codes SET used=1 WHERE id=? AND email=? AND code_hash=? AND used=0 AND attempts<=5 AND expires_at>? AND EXISTS(SELECT 1 FROM customer_email_sessions WHERE token_hash=?)').bind(data.challenge, challenge.email, challenge.code_hash, claimAt, tokenHash),
+    ])
+    if (!await db.prepare('SELECT token_hash FROM customer_email_sessions WHERE token_hash=?').bind(tokenHash).first()) throw new ApiError('验证码无效或已过期。', 401)
     return json({ ok: true }, 200, { 'Set-Cookie': cookie(request, 'customer', token, LOGIN_SESSION_SECONDS) })
   }
   throw new ApiError('未找到找回接口。', 404)

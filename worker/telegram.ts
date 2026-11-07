@@ -2,10 +2,10 @@ import { ApiError, hash, json, type Env } from './platform.ts'
 import { boundedResponseText } from './bounded-response.ts'
 import { emailValue, mailConfigured, partnerLimit } from './partner-auth.ts'
 import { provisionPartner } from './partner-provision.ts'
-import { sendPartnerInvitationEmail } from './email.ts'
+import { emailPayload, partnerInvitationMessage, sendFrozenEmail } from './email.ts'
 
 type Session = { user_id: number; group_id: number | null; step: string; wechat: string; qq: string; email: string; expires_at: number; last_update_id: number; lock_token: string }
-type Application = { id: string; user_id: number; partner_id: string; email: string; created_at: number; mail_status: string; mail_attempts: number; notice_sent: number }
+type Application = { id: string; user_id: number; partner_id: string; email: string; created_at: number; mail_status: string; mail_attempts: number; mail_body: string | null; notice_sent: number }
 type Button = { text: string; callback_data?: string; url?: string }
 type Reply = { chat_id: number; text: string; reply_markup?: { inline_keyboard: Button[][] }; link_preview_options: { is_disabled: true } }
 type Update = { update_id: number; message?: { message_id: number; text?: string; from?: { id: number; is_bot?: boolean }; chat: { id: number; type: string } }; callback_query?: { id: string; data?: string; from: { id: number; is_bot?: boolean }; message?: { message_id: number; chat: { id: number; type: string } } } }
@@ -197,12 +197,15 @@ export async function retryTelegramInvitations(env: Env) {
       }
       if (claimed.mail_status === 'pending') {
         // Resend retains keys for 24h. Stop at 23h, preserving ambiguity for admin review.
-        if (claimed.mail_attempts >= 10 || Date.now() - claimed.created_at >= 23 * 3_600_000) {
+        if (claimed.mail_attempts >= 10 || Date.now() - claimed.created_at >= 23 * 3_600_000 || (claimed.mail_attempts > 0 && !claimed.mail_body)) {
           claimed.mail_status = 'failed'
           await db.prepare("UPDATE telegram_partner_applications SET mail_status='failed' WHERE id=? AND lock_token=?").bind(row.id, lockToken).run()
         } else {
-          await db.prepare('UPDATE telegram_partner_applications SET mail_attempts=mail_attempts+1 WHERE id=? AND lock_token=?').bind(row.id, lockToken).run()
-          try { await sendPartnerInvitationEmail(env, claimed.email, 'telegram-' + row.id) }
+          try {
+            const payload = claimed.mail_body ?? emailPayload(env, claimed.email, partnerInvitationMessage(env))
+            await db.prepare('UPDATE telegram_partner_applications SET mail_body=?,mail_attempts=mail_attempts+1 WHERE id=? AND lock_token=?').bind(payload, row.id, lockToken).run()
+            await sendFrozenEmail(env, payload, 'partner-welcome/telegram-' + row.id)
+          }
           catch {
             await db.prepare('UPDATE telegram_partner_applications SET next_attempt_at=? WHERE id=? AND lock_token=?').bind(Date.now() + Math.min(3_600_000, 60_000 * 2 ** claimed.mail_attempts), row.id, lockToken).run()
             continue

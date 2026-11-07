@@ -26,6 +26,11 @@ export interface Env {
   ADMIN_TOTP_SECRET?: string
   RESEND_API_KEY?: string
   RESEND_FROM?: string
+  /** Trusted public HTTPS origin used only to build outbound links and images. */
+  MAIL_PUBLIC_ORIGIN?: string
+  MAIL_BRAND_NAME?: string
+  ORDER_EMAIL_NOTIFICATIONS_ENABLED?: string
+  ORDER_EMAIL_NOTIFICATIONS_SINCE?: string
   /** Shared Feishu alert bot, the same app used for SMS restock alerts. */
   FEISHU_APP_ID?: string
   FEISHU_APP_SECRET?: string

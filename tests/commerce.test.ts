@@ -353,7 +353,7 @@ test('administrator configuration, authentication, CSRF, credential rotation and
 })
 
 function adminMail(t: Parameters<Parameters<typeof test>[1]>[0], s: Awaited<ReturnType<typeof setup>>) {
-  s.env.RESEND_API_KEY = 'test'; s.env.RESEND_FROM = 'GPTibo <noreply@shop.example.invalid>'
+  s.env.MAIL_PUBLIC_ORIGIN = 'https://mail-store.example.test'; s.env.RESEND_API_KEY = 'test'; s.env.RESEND_FROM = 'GPTibo <noreply@shop.example.invalid>'
   const mails: { to: string[]; text: string; html: string; subject: string }[] = []
   t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
     assert.equal(url, 'https://api.resend.com/emails')
@@ -672,7 +672,7 @@ test('Telegram initializes shop contacts, protects application metadata and reus
 })
 function mockPartnerMail(t: Parameters<Parameters<typeof test>[1]>[0], s: Awaited<ReturnType<typeof setup>>) {
   const mails: { to: string[]; text: string }[] = []
-  s.env.RESEND_API_KEY = 'test-only'; s.env.RESEND_FROM = 'login@example.test'; s.env.PARTNER_AUTH_SECRET = 'private-test-only-secret-32-characters-long'
+  s.env.MAIL_PUBLIC_ORIGIN = 'https://mail-store.example.test'; s.env.RESEND_API_KEY = 'test-only'; s.env.RESEND_FROM = 'login@example.test'; s.env.PARTNER_AUTH_SECRET = 'private-test-only-secret-32-characters-long'
   t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => { assert.equal(url, 'https://api.resend.com/emails'); mails.push(JSON.parse(String(options.body))); return Response.json({ id: 'test-mail' }) })
   return { mails, async send(email = 'corn-shop@example.test') { const r = await s.request('/api/partner/auth/send', { email }); assert.equal(r.status, 200); const data = await r.json(); return { challenge: data.challenge, code: mails.at(-1)!.text.match(/\b\d{6}\b/)![0] } }, async login(email = 'corn-shop@example.test') { const data = await this.send(email); const r = await s.request('/api/partner/auth/verify', data); assert.equal(r.status, 200, await r.clone().text()); return r.headers.get('set-cookie')!.split(';')[0] } }
 }
@@ -706,7 +706,7 @@ test('partner opening sends only a login link; the partner requests an OTP befor
   const result = await response.json()
   assert.match(result.slug, /^[A-Z0-9]{6}$/); assert.equal(result.invitationSent, true)
   assert.equal(mail.mails.length, 1); assert.deepEqual(mail.mails[0].to, ['new@example.test'])
-  assert.match(mail.mails[0].text, /账号已开通/); assert.match(mail.mails[0].text, /https:\/\/shop.example.invalid\/join/)
+  assert.match(mail.mails[0].text, /账号已开通/); assert.match(mail.mails[0].text, /https:\/\/mail-store.example.test\/join/)
   const stored = s.db.prepare('SELECT * FROM partners WHERE id=?').get(result.id)!
   assert.equal(stored.slug, result.slug)
   assert.equal(stored.name, '代理商店')
@@ -1567,6 +1567,29 @@ test('reviewed transfers must reconcile before refund, paid commissions become a
   const final=s.db.prepare("SELECT * FROM partner_payouts WHERE status='pending'").get()!; assert.equal(final.amount_cents,3900)
 })
 
+test('recovery session creation and code consumption roll back together on database failure', async t => {
+  for (const stage of ['session', 'challenge']) {
+    const s = await setup(); t.after(() => s.db.close()); const buyer = await s.buyer(); await s.create(buyer); const mail = mockPartnerMail(t, s)
+    const sent = await s.request('/api/orders/recovery/send', { email: 'buyer@example.test' })
+    assert.equal(sent.status, 200)
+    const data = { ...await sent.json(), code: mail.mails.at(-1)!.text.match(/\b\d{6}\b/)![0] }
+    s.db.exec(stage === 'session'
+      ? "CREATE TRIGGER fail_recovery BEFORE INSERT ON customer_email_sessions BEGIN SELECT RAISE(FAIL, 'session failure'); END"
+      : "CREATE TRIGGER fail_recovery BEFORE UPDATE OF used ON customer_login_codes WHEN NEW.used=1 BEGIN SELECT RAISE(FAIL, 'claim failure'); END")
+    const failed = await s.request('/api/orders/recovery/verify', data)
+    assert.equal(failed.status, 503, stage)
+    assert.equal(failed.headers.get('set-cookie'), null, stage)
+    assert.equal(s.db.prepare('SELECT used FROM customer_login_codes WHERE id=?').get(data.challenge)!.used, 0, stage)
+    assert.equal(s.db.prepare('SELECT COUNT(*) n FROM customer_email_sessions').get()!.n, 0, stage)
+    s.db.exec('DROP TRIGGER fail_recovery')
+    const retried = await s.request('/api/orders/recovery/verify', data)
+    assert.equal(retried.status, 200, stage)
+    assert.equal(s.db.prepare('SELECT used FROM customer_login_codes WHERE id=?').get(data.challenge)!.used, 1, stage)
+    assert.equal(s.db.prepare('SELECT COUNT(*) n FROM customer_email_sessions').get()!.n, 1, stage)
+    assert.equal((await s.request('/api/orders/recovery/verify', data)).status, 401, stage)
+  }
+})
+
 test('recovery expiry and delivery failure never create access, and secrets rotate sessions', async t=>{
   const s=await setup(); t.after(()=>s.db.close()); const buyer=await s.buyer(); await s.create(buyer); const mail=mockPartnerMail(t,s)
   const send=async()=> { s.db.exec('DELETE FROM admin_login_limits'); const r=await s.request('/api/orders/recovery/send',{email:'buyer@example.test'}); assert.equal(r.status,200); return {...await r.json(),code:mail.mails.at(-1)!.text.match(/\b\d{6}\b/)![0]} }
@@ -1574,6 +1597,7 @@ test('recovery expiry and delivery failure never create access, and secrets rota
   assert.equal((await s.request('/api/orders/recovery/verify',expired)).status,401)
   const data=await send(); const responses=await Promise.all([s.request('/api/orders/recovery/verify',data),s.request('/api/orders/recovery/verify',data)])
   assert.deepEqual(responses.map(r=>r.status).sort(),[200,401])
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM customer_email_sessions').get()!.n,1)
   const cookie=responses.find(r=>r.status===200)!.headers.get('set-cookie')!.split(';')[0]
   assert.equal((await (await s.request('/api/orders/recovery/session',undefined,cookie)).json()).email,'buyer@example.test')
   s.env.PARTNER_AUTH_SECRET='rotated-private-key-for-testing-only'

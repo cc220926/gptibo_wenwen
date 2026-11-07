@@ -17,6 +17,9 @@
     "RECHARGE_CHECKOUT_ENABLED": "false",
     "ACCOUNT_SUPPLIER_CHECKOUT_ENABLED": "false",
     "DELIVERY_SUPPLIER_CHECKOUT_ENABLED": "false",
+    "MAIL_PUBLIC_ORIGIN": "https://shop.example.invalid",
+    "ORDER_EMAIL_NOTIFICATIONS_ENABLED": "false",
+    "ORDER_EMAIL_NOTIFICATIONS_SINCE": "",
     "PAYMENT_NOTIFY_ORIGIN": "https://shop.example.invalid",
     "RECHARGE_NOTIFY_URL": "https://shop.example.invalid/api/recharge/webhook"
   },

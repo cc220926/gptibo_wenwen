@@ -12,6 +12,7 @@ import { recordVisitor } from './visitors.ts'
 import { retryPayoutNotifications } from './payout-notifications.ts'
 import { invoiceNotification, reconcileInvoicePayments } from './invoices.ts'
 import { sendDueRechargeReminders } from './recharge-reminders.ts'
+import { sendDueOrderNotifications } from './order-notifications.ts'
 import { reconcileGmail } from './account_supplier/service.ts'
 import { requireSecureTransport, secureResponse } from './security.ts'
 const json = (value: unknown, status = 200) => Response.json(value, {
@@ -26,6 +27,8 @@ export default {
   async scheduled(event: { scheduledTime?: number }, env: Env) {
     // Telegram's durable queue is independent of supplier reconciliation failures.
     await retryTelegramInvitations(env).catch(() => { console.error('Telegram invitation queue temporarily unavailable') })
+    // Durable transactional email must continue even when supplier polling fails.
+    await sendDueOrderNotifications(env).catch(() => { console.error('Order notification queue temporarily unavailable') })
     // Reminders run every minute; preserve the existing five-minute reconciliation cadence.
     if (event.scheduledTime === undefined || Math.floor(event.scheduledTime / 60_000) % 5 === 0) {
       // Refund confirmation also needs the original order snapshot. Give both

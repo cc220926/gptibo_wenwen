@@ -8,7 +8,7 @@ const NOW = 1_800_000_000_000
 async function setup(t: Parameters<Parameters<typeof test>[1]>[0]) {
   const s = await customerFixture(); t.after(() => s.db.close())
   t.mock.method(Date, 'now', () => NOW)
-  Object.assign(s.env, { RESEND_API_KEY:'test', RESEND_FROM:'GPTibo <noreply@shop.example.invalid>' })
+  Object.assign(s.env, { MAIL_PUBLIC_ORIGIN:'https://mail-store.example.test', RESEND_API_KEY:'test', RESEND_FROM:'GPTibo <noreply@shop.example.invalid>' })
   s.db.prepare("UPDATE support_contacts SET wechat='platform_support',email='support@example.test' WHERE owner='platform'").run()
   function order(id = 'o1', paidAt = NOW - 900_000, plan = 'plus') {
     s.db.prepare(`INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,mode,payment_status,status,customer_email,created_at,updated_at,last_event_id)
@@ -73,11 +73,14 @@ test('uses the order agent contacts, with platform fallback when absent', async 
 test('failures back off and retry the exact recipient and body; ambiguous retries expire before 24h', async t => {
   const s = await setup(t); s.order()
   const bodies: string[] = []
-  t.mock.method(globalThis,'fetch',async (_url:string,init:RequestInit)=>{bodies.push(String(init.body));return new Response('',{status:bodies.length===1?500:200})})
+  t.mock.method(globalThis,'fetch',async (_url:string,init:RequestInit)=>{bodies.push(String(init.body));return bodies.length===1 ? new Response('',{status:500}) : Response.json({id:'retry-mail'})})
   assert.equal((await sendDueRechargeReminders(s.env)).failed,1)
   await sendDueRechargeReminders(s.env); assert.equal(bodies.length,1)
   s.db.prepare("UPDATE support_contacts SET wechat='new-contact' WHERE owner='platform'").run()
   s.db.prepare("UPDATE orders SET customer_email='changed@example.test' WHERE id='o1'").run()
+  s.env.RESEND_FROM = 'rotated@example.test'
+  s.env.MAIL_PUBLIC_ORIGIN = 'https://rotated.example.test'
+  s.env.MAIL_BRAND_NAME = 'Changed brand'
   t.mock.method(Date,'now',()=>NOW+60_000)
   assert.equal((await sendDueRechargeReminders(s.env)).sent,1)
   assert.equal(bodies[0],bodies[1])
@@ -112,4 +115,19 @@ test('preview requires administrator auth and always sends to the server-owned r
   assert.equal((await s.request('/api/admin/recharge-reminders/preview',{to:'attacker@example.test'},s.admin)).status,200)
   assert.deepEqual(s.mails[0].body.to,['admin@example.invalid'])
   assert.match(String(s.mails[0].body.text),/非真实订单/)
+})
+
+
+test('legacy attempted reminders without a frozen sender stop; untouched legacy rows rebuild safely', async t => {
+  const s = await setup(t); s.order('ambiguous'); s.order('untouched')
+  const legacy = JSON.stringify(rechargeReminderMessage({orderId:'legacy',planName:'Plan',contacts:'Support'}))
+  s.db.prepare("UPDATE recharge_reminders SET message_json=?,first_attempt_at=? WHERE order_id='ambiguous'").run(legacy,NOW-60_000)
+  s.db.prepare("UPDATE recharge_reminders SET message_json=? WHERE order_id='untouched'").run(legacy)
+  assert.equal((await sendDueRechargeReminders(s.env)).sent,1)
+  assert.equal(s.mails.length,1)
+  assert.equal(s.mails[0].key,'recharge-reminder/untouched')
+  assert.match(String(s.mails[0].body.text),/https:\/\/mail-store.example.test\/orders/)
+  assert.ok(s.db.prepare("SELECT cancelled_at FROM recharge_reminders WHERE order_id='ambiguous'").get()!.cancelled_at)
+  const saved = JSON.parse(String(s.db.prepare("SELECT message_json FROM recharge_reminders WHERE order_id='untouched'").get()!.message_json))
+  assert.deepEqual(saved,s.mails[0].body)
 })

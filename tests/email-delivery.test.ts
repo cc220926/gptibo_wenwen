@@ -9,7 +9,7 @@ type Context = Parameters<Parameters<typeof test>[1]>[0]
 const keys = generateKeyPairSync('rsa', { modulusLength: 2048 })
 async function setup(t: Context, plan = 'gemini-pro-18m') {
   const s = await customerFixture(); t.after(() => s.db.close())
-  Object.assign(s.env, { ORDER_TESTING_ENABLED: 'false', EMAIL_PRODUCTS_ENABLED: 'true', RESEND_API_KEY: 'test-mail-key', RESEND_FROM: 'GPTibo <delivery@example.test>', PAYMENT_NOTIFY_ORIGIN: 'https://shop.example.invalid', ALIPAY_APP_ID: '2026000000000000', ALIPAY_SELLER_ID: '2088000000000000', ALIPAY_APP_PRIVATE_KEY: keys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), ALIPAY_PUBLIC_KEY: keys.publicKey.export({ type: 'spki', format: 'pem' }).toString() })
+  Object.assign(s.env, { ORDER_TESTING_ENABLED: 'false', EMAIL_PRODUCTS_ENABLED: 'true', MAIL_PUBLIC_ORIGIN:'https://mail-store.example.test', RESEND_API_KEY: 'test-mail-key', RESEND_FROM: 'GPTibo <delivery@example.test>', PAYMENT_NOTIFY_ORIGIN: 'https://shop.example.invalid', ALIPAY_APP_ID: '2026000000000000', ALIPAY_SELLER_ID: '2088000000000000', ALIPAY_APP_PRIVATE_KEY: keys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), ALIPAY_PUBLIC_KEY: keys.publicKey.export({ type: 'spki', format: 'pem' }).toString() })
   Object.assign(s.env, { DELIVERY_SUPPLIER_API_KEY: 'test-supplier-key', DELIVERY_SUPPLIER_CNY_PER_USD: '6.7', DELIVERY_SUPPLIER_CHECKOUT_ENABLED: 'true' })
   t.mock.method(globalThis, 'fetch', async () => Response.json({ services: [{ service_id: 'DEMO_PRODUCT_A', name: 'Gemini 18M', price: 0.6, stock: 10 }, { service_id: 'DEMO_PRODUCT_B', name: 'Duolingo 1Y', price: 0.38, stock: 10 }] }))
   const buyer = (await s.request('/api/orders/client', {})).headers.get('set-cookie')!.split(';')[0]
@@ -237,4 +237,16 @@ test('membership products remain platform-only until an administrator enables pa
   const plan = s.db.prepare("SELECT version FROM catalog_plans WHERE id='gemini-pro-18m'").get()!
   assert.equal((await s.request('/api/admin/plans/gemini-pro-18m', { priceCents: 1990, enabled: true, version: plan.version, note: '启用测试代理销售', partnerEnabled: true }, s.admin)).status, 200)
   assert.equal((await request()).status, 201)
+})
+
+
+test('email checkout closes before taking money when its public mail origin is missing or unsafe', async t => {
+  const s = await setup(t)
+  for (const origin of [undefined, 'http://mail-store.example.test', 'https://mail-store.example.test/path']) {
+    s.env.MAIL_PUBLIC_ORIGIN = origin
+    const catalog = await (await s.request('/api/catalog')).json()
+    assert.equal(catalog.checkoutEnabled, false)
+    const response = await s.request('/api/orders', {key:crypto.randomUUID(),plan:'duolingo-12m',expectedPrice:1990,email:'buyer@example.test'},s.buyer)
+    assert.equal(response.status,409)
+  }
 })

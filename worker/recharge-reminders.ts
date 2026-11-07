@@ -1,5 +1,5 @@
 import { ApiError, body, json, type Env } from './platform.ts'
-import { rechargeReminderMessage, sendRechargeReminderEmail } from './email.ts'
+import { emailPayload, rechargeReminderMessage, sendFrozenEmail, sendRechargeReminderEmail } from './email.ts'
 import { supportContactsSettings } from './support-contacts.ts'
 import { adminLoginEmail } from './admin-auth.ts'
 
@@ -21,7 +21,7 @@ async function messageFor(env: Env, orderId: string, planName: string, partnerId
     contacts = (await supportContactsSettings(env)).contacts
   }
   const lines = [contacts.wechat && '微信：' + contacts.wechat, contacts.qq && 'QQ：' + contacts.qq, contacts.email && '邮箱：' + contacts.email].filter(Boolean)
-  return rechargeReminderMessage({ orderId, planName, contacts: lines.join('\n') || '请返回订单页面查看客服联系方式，或联系向您提供购买链接的服务商。' })
+  return rechargeReminderMessage({ orderId, planName, contacts: lines.join('\n') || '请返回订单页面查看客服联系方式，或联系向您提供购买链接的服务商。' }, env)
 }
 
 export async function sendDueRechargeReminders(env: Env, limit = 20) {
@@ -51,16 +51,23 @@ export async function sendDueRechargeReminders(env: Env, limit = 20) {
         await env.INTEREST_DB.prepare('UPDATE recharge_reminders SET cancelled_at=?,locked_until=0 WHERE order_id=? AND lock_token=?').bind(Date.now(), row.order_id, token).run()
         continue
       }
-      const message = row.message_json ? JSON.parse(row.message_json) as ReturnType<typeof rechargeReminderMessage> : await messageFor(env, row.order_id, order.plan_name, order.partner_id)
-      // Persist the exact payload before sending so network retries keep the same idempotency body.
       const recipient = row.recipient ?? order.customer_email
-      await env.INTEREST_DB.prepare('UPDATE recharge_reminders SET message_json=?,recipient=?,first_attempt_at=COALESCE(first_attempt_at,?) WHERE order_id=? AND lock_token=?').bind(JSON.stringify(message), recipient, Date.now(), row.order_id, token).run()
+      const saved = row.message_json ? JSON.parse(row.message_json) as {from?: unknown} : null
+      // Older rows stored only the message; their original sender is unknowable after an attempt.
+      // Stop rather than reuse an idempotency key with a changed body.
+      if (saved && !saved.from && row.first_attempt_at !== null) {
+        await env.INTEREST_DB.prepare('UPDATE recharge_reminders SET cancelled_at=?,locked_until=0 WHERE order_id=? AND lock_token=?').bind(Date.now(), row.order_id, token).run()
+        continue
+      }
+      const payload = saved?.from ? row.message_json! : emailPayload(env, recipient, await messageFor(env, row.order_id, order.plan_name, order.partner_id))
+      // Persist exact bytes (including sender and recipient) before the first network attempt.
+      await env.INTEREST_DB.prepare('UPDATE recharge_reminders SET message_json=?,recipient=?,first_attempt_at=COALESCE(first_attempt_at,?) WHERE order_id=? AND lock_token=?').bind(payload, recipient, Date.now(), row.order_id, token).run()
       // Recheck after loading contacts; a customer may submit while we prepare the email.
       if (!await env.INTEREST_DB.prepare(`SELECT o.id FROM orders o WHERE o.id=? AND ${eligible}`).bind(row.order_id).first()) {
         await env.INTEREST_DB.prepare('UPDATE recharge_reminders SET cancelled_at=?,locked_until=0 WHERE order_id=? AND lock_token=?').bind(Date.now(), row.order_id, token).run()
         continue
       }
-      await sendRechargeReminderEmail(env, recipient, message, row.order_id)
+      await sendFrozenEmail(env, payload, 'recharge-reminder/' + row.order_id)
       await env.INTEREST_DB.prepare('UPDATE recharge_reminders SET delivered_at=?,locked_until=0,attempt_count=attempt_count+1 WHERE order_id=? AND lock_token=?').bind(Date.now(), row.order_id, token).run()
       sent++
     } catch {

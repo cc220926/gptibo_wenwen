@@ -1,6 +1,6 @@
 import { ApiError, body, cookie, hash, json, LOGIN_SESSION_SECONDS, randomToken, readCookie, type Env } from './platform.ts'
 import { validTotpSecret, verifyTotp } from './totp.ts'
-import { sendVerificationEmail } from './email.ts'
+import { mailBrand, sendVerificationEmail } from './email.ts'
 
 // Server-owned destination; request parameters cannot override it.
 export function adminLoginEmail(env: Env) {
@@ -12,7 +12,9 @@ export function adminLoginEmail(env: Env) {
 export function configured(env: Env) {
   try { return Boolean(adminLoginEmail(env) && env.ADMIN_USERNAME && validTotpSecret(env.ADMIN_TOTP_SECRET)) } catch { return false }
 }
-const mailReady = (env: Env) => Boolean(env.RESEND_API_KEY && env.RESEND_FROM)
+const mailReady = (env: Env) => {
+  try { mailBrand(env); return Boolean(env.RESEND_API_KEY && env.RESEND_FROM) } catch { return false }
+}
 const credentialVersion = (env: Env) => hash('admin-email-totp-v1:' + adminLoginEmail(env) + ':' + env.ADMIN_USERNAME + ':' + env.ADMIN_TOTP_SECRET)
 const codeHash = (env: Env, version: string, id: string, code: string) => hash('admin-email:' + env.ADMIN_TOTP_SECRET + ':' + version + ':' + id + ':' + code)
 const invalidLogin = () => new ApiError('用户名、邮箱验证码或 2FA 验证码不正确，或验证码已失效。', 401)

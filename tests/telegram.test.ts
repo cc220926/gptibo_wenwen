@@ -14,7 +14,7 @@ function fixture(t: TestContext) {
   const statements = new WeakMap<Statement, { sql: string; values: Value[] }>()
   const env: Env = {
     TELEGRAM_BOT_TOKEN: 'test-token', TELEGRAM_BOT_USERNAME: 'ExampleBot', TELEGRAM_WEBHOOK_SECRET: 'a'.repeat(64), TELEGRAM_ALLOWED_GROUP_IDS: '-10042',
-    RESEND_API_KEY: 'test-only', RESEND_FROM: 'test@example.invalid', PARTNER_AUTH_SECRET: 'b'.repeat(64),
+    MAIL_PUBLIC_ORIGIN:'https://mail-store.example.test', RESEND_API_KEY: 'test-only', RESEND_FROM: 'test@example.invalid', PARTNER_AUTH_SECRET: 'b'.repeat(64),
     ASSETS: { fetch: async () => new Response('asset') }, INTEREST_LIMITER: { limit: async () => ({ success: true }) }, API_LIMITER: { limit: async () => ({ success: true }) }, EXPENSIVE_LIMITER: { limit: async () => ({ success: true }) },
     INTEREST_DB: {
       prepare(sql) {
@@ -194,7 +194,7 @@ test('confirmed application provisions once using current default prices, initia
   await retryTelegramInvitations(s.env)
   assert.equal(s.failures.mailCount, 1)
   const mail = s.calls.find(c => c.method === 'email')!
-  assert.deepEqual(mail.data.to, ['new@example.test']); assert.match(mail.data.text, /shop.example.invalid\/join/)
+  assert.deepEqual(mail.data.to, ['new@example.test']); assert.match(mail.data.text, /mail-store.example.test\/join/)
   assert.match(mail.key!, /^partner-welcome\/telegram-/)
   assert.equal(s.db.prepare('SELECT mail_status FROM telegram_partner_applications').get()!.mail_status, 'sent')
   assert.match(s.lastText(), /邀请邮件已发送/)
@@ -288,9 +288,12 @@ test('failed invitations retry with the same key; Telegram notification failure 
   assert.equal(s.db.prepare('SELECT mail_status FROM telegram_partner_applications').get()!.mail_status, 'pending')
   s.db.prepare('UPDATE telegram_partner_applications SET next_attempt_at=0').run()
   s.failures.mail = false; s.failures.send = true
+  Object.assign(s.env,{RESEND_FROM:'rotated@example.test',MAIL_PUBLIC_ORIGIN:'https://rotated.example.test',MAIL_BRAND_NAME:'Rotated'})
   await retryTelegramInvitations(s.env)
   const mails = s.calls.filter(c => c.method === 'email')
   assert.equal(mails.length, 2); assert.equal(mails[0].key, mails[1].key)
+  assert.deepEqual(mails[0].data, mails[1].data)
+  assert.equal(s.db.prepare('SELECT mail_body FROM telegram_partner_applications').get()!.mail_body,JSON.stringify(mails[0].data))
   assert.equal(s.db.prepare('SELECT mail_status FROM telegram_partner_applications').get()!.mail_status, 'sent')
   s.db.prepare('UPDATE telegram_partner_applications SET next_attempt_at=0').run(); s.failures.send = false
   await retryTelegramInvitations(s.env)
@@ -397,4 +400,18 @@ test('legacy Telegram contact migration fills missing or untouched settings once
   s.db.exec(migration)
   assert.deepEqual(s.db.prepare('SELECT * FROM support_contacts ORDER BY owner').all(), before)
   assert.equal(s.count('admin_audit'), 2)
+})
+
+
+test('legacy attempted invitations without a payload remain unconfirmed instead of sending a changed body', async t => {
+  const s = fixture(t), data = await s.fill()
+  await s.request(s.callback(data))
+  s.db.prepare('UPDATE telegram_partner_applications SET mail_attempts=1,mail_body=NULL').run()
+  await retryTelegramInvitations(s.env)
+  assert.equal(s.failures.mailCount,0)
+  const row = s.db.prepare('SELECT mail_status,mail_body FROM telegram_partner_applications').get()!
+  assert.equal(row.mail_status,'failed')
+  assert.equal(row.mail_body,null)
+  assert.match(s.lastText(),/暂未确认发送成功/)
+  assert.doesNotMatch(s.lastText(),/邀请邮件已发送/)
 })

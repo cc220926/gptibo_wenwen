@@ -107,6 +107,61 @@ npx wrangler deploy -c wrangler.production.jsonc
 
 生产配置初始关闭模拟下单与全部真实交易，商城展示商品但不开放购买。管理员、邮件和充值密钥通过该 Worker 的 Secrets 单独配置；`.dev.vars` 不会作为生产秘密上传。平台回调使用正式 HTTPS 域名下的 `/api/recharge/webhook`，核验登录、回调与交易流程后再开启所需通道。真实域名、云资源配置及回退记录保存在本地，不随公开源码发布。
 
+### Workers 管理员、邮件与订单找回
+
+在 Node.js 24 环境初始化本机私有管理员配置：
+
+```sh
+npm run admin:setup -- --email owner@example.invalid --username store-admin
+```
+
+命令把管理员身份、独立 TOTP 密钥和邮箱会话签名密钥保存到被 Git 忽略的 `.secrets/admin-setup/secrets.json`，配对二维码保存在同目录 `totp.png`。用自己的验证器应用扫描二维码；不要公开二维码或密钥。重复执行保留现有凭据，身份不一致时拒绝覆盖。初始化只写本机文件，不自动部署或发送邮件；已有生产安装应保留原凭据，避免使现有会话和验证器失效。
+
+在 Resend 验证自己的发信域名，把 `RESEND_API_KEY` 和 `RESEND_FROM` 放入本机私有配置，再通过目标 Worker 的 Secrets 上传。发送地址必须属于已验证域名，运行时使用受限的发信 Key。`MAIL_PUBLIC_ORIGIN` 设置为自己的 HTTPS 商城 origin；邮件中的订单、后台、邀请和图片地址据此生成，不读取浏览器请求头。可用 `MAIL_BRAND_NAME` 设置邮件显示名称。
+
+```sh
+npx wrangler secret bulk .secrets/admin-setup/secrets.json -c wrangler.production.jsonc
+# 私有邮件配置文件包含 RESEND_API_KEY 和 RESEND_FROM：
+npx wrangler secret bulk .secrets/production-mail.env -c wrangler.production.jsonc
+```
+
+管理员在 `/admin` 使用用户名、邮箱验证码和验证器动态码登录。买家在新浏览器的 `/orders` 使用下单邮箱接收验证码，验证后仅找回该邮箱的订单；退出邮箱登录后恢复浏览器原有的订单权限。
+
+关键订单邮件使用独立队列，不影响收款和充值状态。部署前先备份 D1 并应用全部迁移：`0047_order_email_notifications.sql` 创建关键订单邮件队列，`0048_telegram_invitation_mail_payload.sql` 为 Telegram 代理邀请保存冻结的邮件请求。然后设置 `ORDER_EMAIL_NOTIFICATIONS_ENABLED=true` 和明确的 UTC `ORDER_EMAIL_NOTIFICATIONS_SINCE` 上线时间（例如 `2026-11-07T12:00:00.000Z`，请换成自己的实际启用时间）。关键订单邮件要求**订单创建时间和事件创建时间都不早于该时间**，因此历史订单后来发生的新事件也不会补发。通知范围为付款确认、明确充值结果和退款确认；首次尝试前冻结发件人、收件人和完整正文，同事件重试复用幂等键。首次上线应实际验证管理员收信与登录、新浏览器订单找回、通知投递；配置字段非空不代表邮件已送达。
+
+管理员可在目标 D1 数据库控制台只读检查 `order_email_notifications`。这版没有邮件队列管理页面或操作接口。队列状态含义如下：
+
+| 状态 | 含义 |
+| --- | --- |
+| `pending` | 待发送、等待业务状态核验，或等待失败重试。 |
+| `sent` | Resend 已返回有效消息 ID，应用已保存受理结果；**不等于邮件已送达收件箱**。实际投递、退信等结果需到邮件服务商核查。 |
+| `cancelled` | 通知已过时或不再满足发送条件，例如付款通知发送前订单已完成、失败任务已被新尝试取代。 |
+| `manual_review` | 首次发送尝试已满 23 小时，结果仍未确认；为避免幂等保护窗口失效后重复发送，已停止自动重试。 |
+
+按状态与通知种类统计，以下查询不读取邮件正文、收件人或凭据：
+
+```sql
+SELECT status, kind, COUNT(*) AS notification_count,
+       MIN(next_attempt_at) AS earliest_next_attempt_at,
+       MAX(attempt_count) AS highest_attempt_count
+FROM order_email_notifications
+GROUP BY status, kind
+ORDER BY status, kind;
+```
+
+排查指定订单时，将下面的占位订单号替换为实际订单号。时间字段为 Unix 毫秒；`provider_message_id` 可用于核查服务商记录，未确认受理时可能为空。避免查询或导出 `payload_json`，其中包含收件地址和邮件全文。
+
+```sql
+SELECT id, order_id, kind, status, event_created_at,
+       first_attempt_at, next_attempt_at, attempt_count,
+       delivered_at, provider_message_id, closed_reason
+FROM order_email_notifications
+WHERE order_id = 'REPLACE_WITH_ORDER_ID'
+ORDER BY event_created_at, id;
+```
+
+`manual_review` 的 `closed_reason` 为 `idempotency_window_expired`。遇到该状态，先根据已保存的消息 ID（如有）、发送时间和对应幂等键核查 Resend 的受理与投递记录，再决定人工处理方式。不要直接把状态改回 `pending`、清空首次尝试时间、删除队列行或更换幂等键；发送请求可能已经成功，只是本地未确认，盲目重置会造成重复通知。上述队列查询只用于诊断，不应据此修改付款、充值或退款状态。
+
 ### 页面入口
 
 | 页面 | 路径 |

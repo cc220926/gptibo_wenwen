@@ -24,7 +24,7 @@ function setup() {
     },
     async batch() { return [] },
   }
-  const env = { INTEREST_DB: database, FEISHU_APP_ID: 'cli_test', FEISHU_APP_SECRET: 'secret', FEISHU_PAYOUT_RECIPIENT: 'ou_abc123' } as Env
+  const env = { INTEREST_DB: database, MAIL_PUBLIC_ORIGIN:'https://mail-store.example.test', FEISHU_APP_ID: 'cli_test', FEISHU_APP_SECRET: 'secret', FEISHU_PAYOUT_RECIPIENT: 'ou_abc123' } as Env
   return { db, env }
 }
 
@@ -47,6 +47,8 @@ test('payout notification sends amount, deduction and recipient to the shared bo
   assert.equal(sent[0].receive_id, 'ou_abc123')
   const text = JSON.parse(sent[0].content).text
   assert.match(text, /【提现申请】/)
+  assert.match(text, /https:\/\/mail-store.example.test\/admin\/partners/)
+  assert.doesNotMatch(text, /shop.example.invalid/)
   assert.match(text, /代理 A（ABCDEF）/)
   assert.match(text, /¥58\.50/)
   assert.match(text, /抵扣售后退款 ¥19\.50/)

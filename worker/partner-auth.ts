@@ -1,8 +1,10 @@
-import { sendPartnerInvitationEmail, sendVerificationEmail } from './email.ts'
+import { mailBrand, sendPartnerInvitationEmail, sendVerificationEmail } from './email.ts'
 import { ApiError, body, cookie, hash, json, LOGIN_SESSION_SECONDS, randomToken, readCookie, type Env } from './platform.ts'
 
 export type Partner = { id: string; slug: string; name: string; email: string; active: number; version: number; auth_version: number; created_at: number }
-export const mailConfigured = (env: Env) => Boolean(env.RESEND_API_KEY && env.RESEND_FROM && env.PARTNER_AUTH_SECRET && env.PARTNER_AUTH_SECRET.length >= 32)
+export const mailConfigured = (env: Env) => {
+  try { mailBrand(env); return Boolean(env.RESEND_API_KEY && env.RESEND_FROM && env.PARTNER_AUTH_SECRET && env.PARTNER_AUTH_SECRET.length >= 32) } catch { return false }
+}
 export function emailValue(value: unknown) {
   const email = typeof value === 'string' ? value.trim().toLowerCase() : ''
   if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ApiError('请输入有效的邮箱地址。')

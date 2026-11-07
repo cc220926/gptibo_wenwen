@@ -16,7 +16,7 @@ for (const role of roles) test(`${role.name}: cookie and server session last exa
   let now = Date.now()
   t.mock.method(Date, 'now', () => now)
   const s = await customerFixture(); t.after(() => s.db.close())
-  Object.assign(s.env, { RESEND_API_KEY: 'fixture-mail-key', RESEND_FROM: 'fixture@example.test' })
+  Object.assign(s.env, { MAIL_PUBLIC_ORIGIN:'https://mail-store.example.test', RESEND_API_KEY: 'fixture-mail-key', RESEND_FROM: 'fixture@example.test' })
   now += 30_000 // A fresh TOTP step after the fixture's administrator login.
   async function login() {
     if (role.name === 'admin') return s.request('/api/admin/login', {

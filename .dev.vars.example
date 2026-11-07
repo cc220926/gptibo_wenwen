@@ -6,6 +6,10 @@ ADMIN_TOTP_SECRET= # Configure locally; never commit a real value.
 # Partner email login (optional)
 RESEND_API_KEY= # Configure locally; never commit a real value.
 RESEND_FROM= # Configure locally; never commit a real value.
+MAIL_PUBLIC_ORIGIN=https://shop.example.invalid
+MAIL_BRAND_NAME=Recharge AI
+ORDER_EMAIL_NOTIFICATIONS_ENABLED=false
+ORDER_EMAIL_NOTIFICATIONS_SINCE= # UTC activation timestamp; never send historical events by default.
 PARTNER_AUTH_SECRET= # Configure locally; never commit a real value.
 
 FEISHU_APP_ID= # Configure locally; never commit a real value.

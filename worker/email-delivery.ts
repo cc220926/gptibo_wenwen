@@ -2,15 +2,14 @@ import { emailProduct, type AdminDelivery, type DeliverySummary } from '../share
 import { ApiError, body, json, type Env } from './platform.ts'
 import { getOrder, type Order } from './order-state.ts'
 import { alipayConfigured } from './payments/providers.ts'
-import { membershipDeliveryMessage, sendMembershipPreviewEmail } from './email.ts'
-import { boundedResponseText } from './bounded-response.ts'
+import { emailPayload, mailBrand, membershipDeliveryMessage, sendFrozenEmail, sendMembershipPreviewEmail } from './email.ts'
 import { adminLoginEmail } from './admin-auth.ts'
 
 type Delivery = { order_id: string; kind: 'link' | 'cdk'; value: string; instructions: string; mail_body: string; request_key: string; status: 'draft' | 'sending' | 'unknown' | 'sent'; version: number; first_attempt_at: number | null; sent_at: number | null; provider_id: string | null; lease_token: string | null; lease_until: number }
 const find = (env: Env, id: string) => env.INTEREST_DB.prepare('SELECT * FROM email_deliveries WHERE order_id=?').bind(id).first<Delivery>()
 export function emailCheckoutEnabled(env: Env) {
   if (env.ORDER_TESTING_ENABLED === 'true' || env.EMAIL_PRODUCTS_ENABLED !== 'true' || !alipayConfigured(env) || !env.RESEND_API_KEY || !env.RESEND_FROM) return false
-  try { const url = new URL(env.PAYMENT_NOTIFY_ORIGIN ?? ''); return url.protocol === 'https:' && !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash } catch { return false }
+  try { mailBrand(env); const url = new URL(env.PAYMENT_NOTIFY_ORIGIN ?? ''); return url.protocol === 'https:' && !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash } catch { return false }
 }
 export async function emailDeliverySummary(env: Env, order: Order): Promise<DeliverySummary | undefined> {
   const product = emailProduct(order.plan); if (!product) return undefined
@@ -40,7 +39,7 @@ export async function membershipDeliveryPreview(request: Request, env: Env) {
   const plan = await env.INTEREST_DB.prepare('SELECT delivery_instructions FROM catalog_plans WHERE id=?').bind(data.plan).first<{ delivery_instructions: string }>()
   if (!plan) throw new ApiError('未找到套餐。', 404)
   const value = data.plan === 'duolingo-12m' ? 'https://www.duolingo.com/claim/super?code=PREVIEW-ONLY-NOT-A-REAL-CODE' : 'https://example.com/claim/gemini-preview'
-  const message = membershipDeliveryMessage(emailProduct(data.plan)!.kind, 'YMX-PREVIEW', value, plan.delivery_instructions, data.plan)
+  const message = membershipDeliveryMessage(emailProduct(data.plan)!.kind, 'YMX-PREVIEW', value, plan.delivery_instructions, data.plan, env)
   try {
     const providerId = await sendMembershipPreviewEmail(env, adminLoginEmail(env), message, data.key)
     return json({ ok: true, to: adminLoginEmail(env), providerId })
@@ -85,7 +84,7 @@ export async function emailDeliveryRoute(request: Request, env: Env, order: Orde
     const value = validateValue(product.kind, data.value)
     if (typeof data.instructions !== 'string' || !data.instructions.trim() || data.instructions.length > 2000) throw new ApiError('请填写 1–2000 字的领取说明。')
     const instructions = data.instructions.trim()
-    const payload = JSON.stringify({ from: env.RESEND_FROM, to: [order.customer_email], ...membershipDeliveryMessage(product.kind, order.id, value, instructions, order.plan) })
+    const payload = emailPayload(env, order.customer_email!, membershipDeliveryMessage(product.kind, order.id, value, instructions, order.plan, env))
     const event = crypto.randomUUID()
     await env.INTEREST_DB.batch([
       env.INTEREST_DB.prepare(`UPDATE orders SET version=version+1,updated_at=?,last_event_id=? WHERE id=? AND version=? AND ${eligibilitySql} AND NOT EXISTS(SELECT 1 FROM email_deliveries WHERE order_id=orders.id AND (status<>'draft' OR version<>?))`).bind(now, event, order.id, order.version, row?.version ?? -1),
@@ -111,11 +110,8 @@ export async function emailDeliveryRoute(request: Request, env: Env, order: Orde
   try {
     if (confirm) await finish(env, row, lease, null, actor, '管理员已核实原邮件发送：' + String(data.note).trim())
     else {
-      const response = await fetch('https://api.resend.com/emails', { method: 'POST', redirect: 'manual', headers: { Authorization: 'Bearer ' + env.RESEND_API_KEY, 'Content-Type': 'application/json', 'Idempotency-Key': 'membership-delivery/' + row.request_key }, body: row.mail_body, signal: AbortSignal.timeout(10000) })
-      if (!response.ok) throw new Error('Mail not confirmed')
-      const result = JSON.parse(await boundedResponseText(response, 16384)) as { id?: unknown }
-      if (typeof result.id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(result.id)) throw new Error('Mail response invalid')
-      await finish(env, row, lease, result.id, actor, '发货邮件已被邮件服务接收，请客户查看收件箱')
+      const providerId = await sendFrozenEmail(env, row.mail_body, 'membership-delivery/' + row.request_key)
+      await finish(env, row, lease, providerId, actor, '发货邮件已被邮件服务接收，请客户查看收件箱')
     }
   } catch {
     await env.INTEREST_DB.prepare("UPDATE email_deliveries SET status='unknown',lease_until=0,updated_at=?,version=version+1 WHERE order_id=? AND lease_token=? AND status='sending'").bind(Date.now(), order.id, lease).run()
