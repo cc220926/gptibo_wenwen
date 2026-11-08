@@ -1,4 +1,5 @@
 import '@/styles/service-product.css'
+import { isMuseOffer, serviceProductRoute } from '../../shared/service-presentation'
 import { useStorefrontI18n } from '@/lib/storefront-i18n'
 import { normalizeProductOrder } from '../../shared/product-order'
 import { XPremiumScene } from './x-premium'
@@ -72,9 +73,10 @@ export function ProductCatalog({ onHelp, onOrders, onNavigate, offers, catalogRe
     const variants = serviceOffers.filter(p => p.product_id === id)
     const first = variants[0]
     if (!matches(serviceCategory(first.category ?? '其他商品'), (first.product_name ?? '') + ' ' + (first.description ?? ''))) continue
+    const route = serviceProductRoute(first)
     const available = variants.filter(p => p.enabled)
     const minimum = Math.min(...(available.length ? available : variants).map(p => p.price_cents))
-    cards.push({ id, node: <article className="store-product"><div className="store-product-heading"><h3>{first.product_name}</h3>{!available.length && <span>暂不可购买</span>}</div><p className="store-spec">{first.category} · {variants.some(p => p.delivery_type === 'stock') ? '库存自动交付' : '人工服务'}</p><div className="service-catalog-visual"><Package size={76} strokeWidth={1} /></div><div className="store-product-bottom"><span className="store-starting-price">¥{(minimum / 100).toFixed(2)}<small> 起</small></span><a className="store-detail-link" href={storefrontHref('product/' + id)} onClick={e => navigate(e, 'product/' + id)}>查看商品<ChevronRight size={15} /></a></div></article> })
+    cards.push({ id, node: <article className="store-product"><div className="store-product-heading"><h3>{first.product_name}</h3>{!available.length && <span>暂不可购买</span>}</div><p className="store-spec">{first.category} · {variants.some(p => p.delivery_type === 'stock') ? '库存自动交付' : '人工服务'}</p><div className={'service-catalog-visual' + (isMuseOffer(first) ? ' muse' : '')}>{isMuseOffer(first) ? <span className="service-muse-mark large" aria-hidden="true">M</span> : <Package size={76} strokeWidth={1} />}</div><div className="store-product-bottom"><span className="store-starting-price">¥{(minimum / 100).toFixed(2)}<small> 起</small></span><a className="store-detail-link" href={storefrontHref(route)} onClick={e => navigate(e, route)}>查看商品<ChevronRight size={15} /></a></div></article> })
   }
   const groups: typeof cards[] = []
   for (const id of [...normalizeProductOrder(productOrder), ...serviceOffers.map(p => p.product_id).filter((id, index, ids) => ids.indexOf(id) === index)]) {
