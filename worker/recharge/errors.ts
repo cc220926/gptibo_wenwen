@@ -3,7 +3,7 @@
 export const failureMessages: Record<string, string> = {
   session_invalid: '登录凭据已失效，请重新登录后提交。',
   mailbox_login_failed: '邮箱登录失败，请核对登录资料，或在允许重新提交后改用 Session。',
-  account_has_subscription: '账号已有订阅，请核对账号或联系客服。',
+  account_has_subscription: '该账号已有有效订阅，本次未充值。请核对当前套餐及到期时间，通过原订单继续处理，无需再次付款。',
   subscription_required: '该套餐要求账号已有有效订阅，请核对续费资格。',
   precheck_rejected: '账号未通过预检，请完成账号验证或联系客服。',
   account_unavailable: '当前账号暂不可用，请核对账号或联系客服。',
@@ -52,6 +52,24 @@ export const requestMessages: Record<string, string> = {
 }
 export function publicCode(value: unknown, codes: Record<string, unknown>) {
   return typeof value === 'string' && Object.hasOwn(codes, value) ? value : null
+}
+
+/** Extract digits only from the known active-plan error, never forward prose. */
+export function subscriptionExpiryHint(message: unknown) {
+  if (typeof message !== 'string' || message.length > 4000 || !message.includes('GPT_PLAN_ALREADY_ACTIVE')) return null
+  const value = /目标套餐有效至\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2})(?=[，,\s（(]|$)/.exec(message)?.[1]
+  if (!value) return null
+  const [year, month, day, hour, minute] = value.split(/[- :]/).map(Number)
+  if (year < 2000 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) return null
+  const date = new Date(Date.UTC(year, month - 1, day, hour, minute))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? value : null
+}
+
+export function subscriptionFailureMessage(hint: string | null, canRetry = false) {
+  const safeHint = hint ? subscriptionExpiryHint(`目标套餐有效至 ${hint}（GPT_PLAN_ALREADY_ACTIVE）`) : null
+  if (!safeHint && !canRetry) return failureMessages.account_has_subscription
+  return (safeHint ? `当前目标套餐尚未到期，本次未充值。上游提示有效至 ${safeHint}（上游未注明时区，请以账号订阅页为准）。` : '该账号已有有效订阅，本次未充值。请先核对当前套餐及到期时间。') +
+    (canRetry ? '核对到期后，可在本订单重新提交充值资料，无需再次付款。' : '请通过原订单核对或联系支持，无需再次付款。')
 }
 
 export const resultStages = {

@@ -245,6 +245,31 @@ test('mailbox failures and public error categories give safe reasons while unkno
   assert.doesNotMatch(JSON.stringify(current) + JSON.stringify(s.db.prepare('SELECT * FROM recharge_redemptions').all()), /PRIVATE-TOKEN/)
 })
 
+test('active-subscription details survive polling without storing supplier prose or replaying a recharge', async t => {
+  const s = setup(t); const buyer = await s.buyer(); const order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer); await s.submit(order.id, buyer)
+  s.setTask('failed', true)
+  let patch: Record<string, unknown> = { failure_code: 'account_has_subscription', progress_version: 3, message: 'PRIVATE-TOKEN target@example.test 当前账号的目标套餐有效至 2026-11-08 05:26，到期后才能再次购买（GPT_PLAN_ALREADY_ACTIVE）' }
+  s.override(path => path.startsWith('/v1/redemptions/') ? Response.json({ data: { ...s.redemption(), ...patch } }) : undefined)
+  const writes = s.calls.filter(call => call.path === '/v1/redemptions').length
+  let current = (await (await s.query(order.id, buyer)).json()).order
+  assert.equal(current.fulfillment.canSubmit, true)
+  assert.match(current.fulfillment.message, /2026-11-08 05:26/)
+  assert.match(current.fulfillment.message, /未注明时区/)
+  assert.match(current.fulfillment.message, /本订单重新提交/)
+  assert.equal(s.db.prepare('SELECT subscription_expires_hint FROM recharge_redemptions').get()!.subscription_expires_hint, '2026-11-08 05:26')
+  assert.doesNotMatch(JSON.stringify(current) + JSON.stringify(s.db.prepare('SELECT * FROM recharge_redemptions').all()), /PRIVATE-TOKEN|target@example/)
+  patch = { ...patch, progress_version: 2, message: '目标套餐有效至 2027-01-01 00:00（GPT_PLAN_ALREADY_ACTIVE）' }
+  current = (await (await s.query(order.id, buyer)).json()).order
+  assert.match(current.fulfillment.message, /2026-11-08 05:26/)
+  patch = { ...patch, progress_version: 4, message: '目标套餐有效至 2026-02-30 05:26（GPT_PLAN_ALREADY_ACTIVE）', retry_allowed: false }
+  current = (await (await s.query(order.id, buyer)).json()).order
+  assert.equal(current.fulfillment.canSubmit, false)
+  assert.doesNotMatch(current.fulfillment.message, /可在本订单重新提交|2026-02-30/)
+  assert.equal(s.calls.filter(call => call.path === '/v1/redemptions').length, writes)
+  assert.equal(current.paymentStatus, 'paid')
+})
+
 test('confirmed recharge progress is versioned per attempt, survives stale or failed queries and never forwards supplier text', async t => {
   const s = setup(t); const buyer = await s.buyer(); const order = await s.create(buyer)
   await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)

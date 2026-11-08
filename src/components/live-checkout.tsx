@@ -46,7 +46,7 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
   const input = checkoutSession(session, info.retryMode)
   const unknown = info.rechargeStatus === 'unknown'
   const failed = order.status === 'failed' || info.rechargeStatus === 'rejected'
-  const failureTitle = info.failureCode === 'account_has_subscription' ? '账号已有订阅' : info.message?.includes('登录凭据已失效') ? 'Session 已失效' : '充值未完成'
+  const failureTitle = info.failureCode === 'account_has_subscription' ? '当前订阅尚未到期' : info.message?.includes('登录凭据已失效') ? 'Session 已失效' : '充值未完成'
   const deadline = paymentDeadline(order.createdAt, info.expiresAt)
   const expired = order.paymentStatus === 'unpaid' && (info.paymentExpired || deadline <= clock)
   const qr = open && !paused && !expired && order.status === 'pending' && order.paymentStatus === 'unpaid' ? publicAlipayQr(info.paymentQr) : null
@@ -146,7 +146,7 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
       <CheckoutStageTransition stage={info.canSubmit ? 'input' : order.status === 'processing' && !unknown ? 'processing' : 'other'}>{stage => <>
       {stage === 'input' && <>
         {unknown && busy !== 'submit' ? <Alert className="live-notice" role="status"><TriangleAlert aria-hidden="true" /><AlertTitle>提交待确认</AlertTitle><AlertDescription>{submitFailure && <>{submitFailure}<br /></>}充值服务尚未确认收到本次提交，暂不能确认已开始充值。先刷新查询；仍未确认时，粘贴原 Session 核对同一次提交。请勿重新付款。</AlertDescription></Alert>
-          : failed && busy !== 'submit' ? <Alert className="live-notice" role="status"><TriangleAlert aria-hidden="true" /><AlertTitle>{failureTitle}</AlertTitle><AlertDescription>{info.message ?? '请获取新的 Session 后重试。'} 本订单无需重复付款。</AlertDescription></Alert>
+          : failed && busy !== 'submit' ? <Alert className="live-notice" role="status"><TriangleAlert aria-hidden="true" /><AlertTitle>{failureTitle}</AlertTitle><AlertDescription>{info.message ?? '请获取新的 Session 后重试。'}{info.failureCode !== 'account_has_subscription' && ' 本订单无需重复付款。'}</AlertDescription></Alert>
           : <PaymentConfirmed>付款已确认，请连接要充值的账号。</PaymentConfirmed>}
         <LiveSessionForm session={session} confirmed={confirmed} touched={touched} busy={busy} precheckRequired={info.precheckRequired} precheck={precheck} retryMode={info.retryMode} retryKey={info.retryKey} failed={failed} onSessionChange={value => { setSession(value); setConfirmed(false); setTouched(false); setPrecheck(null) }} onConfirmChange={setConfirmed} onTouch={() => setTouched(true)} onSubmit={() => void run(true)} />
       </>}
