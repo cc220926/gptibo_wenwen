@@ -6,6 +6,8 @@
 
 服务端固定访问 `https://api.gptibo.com/v1`，人民币分整数。每单采购一份成品号，不传 quantity、客户邮箱、Session 或密码。商品代码、价格、enabled、available 和 account_delivery 类型以当前渠道 GET /products 为准，不使用文档示例的默认价。
 
+Cloudflare Workers 不支持 Node 示例使用的 `redirect:error`；适配器使用 `redirect:manual` 并明确拒绝全部 3xx，不将签名头转发到重定向地址。见 [Cloudflare Request 文档](https://developers.cloudflare.com/workers/runtime-apis/request/)。
+
 本次只读联调发现精品手搓代码为 `muse_1b_pro`，渠道价 800 分；`muse-account-31b` 为 4900 分；示例 `muse-account` 已停用。这是当时的渠道快照，不是固定价格保证。用户选择精品手搓零售价 3500 分、采购上限 800 分，暂不实际采购。新规格暂停销售；旧本地库存不切换货源。
 
 ## 配置

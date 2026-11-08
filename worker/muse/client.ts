@@ -27,12 +27,15 @@ export async function museRequest<T>(env: Env, path: string, raw = '', idempoten
   const timestamp = String(Math.floor(Date.now() / 1000)), nonce = crypto.randomUUID()
   try {
     const response = await fetch(url, {
-      method, ...(raw ? { body: raw } : {}), redirect: 'error', signal: AbortSignal.timeout(12000),
+      // Workers rejects redirect:'error' before sending. Manual + rejection
+      // preserves the no-redirect boundary without forwarding signed headers.
+      method, ...(raw ? { body: raw } : {}), redirect: 'manual', signal: AbortSignal.timeout(12000),
       headers: { Accept: 'application/json', ...(raw ? { 'Content-Type': 'application/json' } : {}),
         'X-Key-Id': env.MUSE_KEY_ID!, 'X-Timestamp': timestamp, 'X-Nonce': nonce,
         'X-Signature': await signature(env.MUSE_API_SECRET!, method, url, timestamp, nonce, env.MUSE_KEY_ID!, idempotency, raw),
         ...(idempotency ? { 'Idempotency-Key': idempotency } : {}) },
     })
+    if (response.status >= 300 && response.status < 400) throw new MuseError('redirect_refused', response.status)
     let value
     try { value = JSON.parse(await boundedResponseText(response)) }
     catch { throw new MuseError('invalid_response', response.status) }

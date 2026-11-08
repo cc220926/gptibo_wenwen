@@ -24,7 +24,7 @@ async function setup(t: Context) {
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const url = new URL(String(input)), path = url.pathname.replace(/^\/v1/, ''), headers = new Headers(init?.headers), raw = String(init?.body ?? '')
     if (url.hostname === 'api.resend.com') return Response.json({ id: 'muse-mail' })
-    assert.equal(url.origin, 'https://api.gptibo.com'); assert.equal(init?.redirect, 'error')
+    assert.equal(url.origin, 'https://api.gptibo.com'); assert.equal(init?.redirect, 'manual')
     const canonical = [init?.method, url.pathname, '', headers.get('X-Timestamp'), headers.get('X-Nonce'), headers.get('X-Key-Id'), headers.get('Idempotency-Key') ?? '', createHash('sha256').update(raw).digest('hex')].join('\n')
     assert.equal(headers.get('X-Signature'), createHmac('sha256', s.env.MUSE_API_SECRET!).update(canonical).digest('hex'))
     calls.push({ path, raw, headers })
@@ -244,4 +244,15 @@ test('admin health reports only a safe error code and HTTP status, never upstrea
   assert.equal(result.status, 503)
   const text = await result.text()
   assert.match(text, /invalid_response.*403/); assert.doesNotMatch(text, /PRIVATE-UPSTREAM|fixture-muse-secret/)
+})
+
+test('supplier redirects are refused without forwarding signed headers to another origin', async t => {
+  const s = await setup(t)
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    calls++; assert.equal(init?.redirect, 'manual')
+    return new Response(null, { status: 302, headers: { Location: 'https://other.example.test/collect' } })
+  })
+  await assert.rejects(() => museProducts(s.env), { code: 'redirect_refused', status: 302 })
+  assert.equal(calls, 1)
 })
