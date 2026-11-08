@@ -1,4 +1,4 @@
-import { museBalance, museConfigured, museProducts } from '../muse/client.ts'
+import { museBalance, museConfigured, MuseError, museProducts } from '../muse/client.ts'
 import { fulfillMuse, museCheckoutEnabled, museMapping, musePurchase } from '../muse/service.ts'
 import { ApiError, body, json, type Env } from '../platform.ts'
 import { getOrder } from '../order-state.ts'
@@ -25,7 +25,11 @@ export async function inventoryAdmin(request: Request, env: Env, url: URL) {
   }
   if (path === '/api/admin/inventory/muse' && request.method === 'GET') {
     if (!museConfigured(env)) return json({ configured: false, checkoutReady: false, products: [] })
-    return json({ configured: true, checkoutReady: museCheckoutEnabled(env), products: await museProducts(env), balance: await museBalance(env) })
+    try { return json({ configured: true, checkoutReady: museCheckoutEnabled(env), products: await museProducts(env), balance: await museBalance(env) }) }
+    catch (error) {
+      if (error instanceof MuseError) return json({ error: `Muse 供货查询未确认（${error.code}；HTTP ${error.status}）。请检查原渠道配置。` }, 503)
+      throw error
+    }
   }
   if (request.method !== 'POST' && !path.endsWith('/stock')) throw new ApiError('请求方式不支持。', 405)
   if (path === '/api/admin/inventory/products/visibility') {

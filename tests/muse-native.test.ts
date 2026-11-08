@@ -236,3 +236,12 @@ test('changed supplier price blocks QR creation; shared channel budget prevents 
   await assert.rejects(() => museProducts(s.env), { status: 429 })
   assert.equal(s.calls.length, count); assert.equal(s.posted, 0)
 })
+
+test('admin health reports only a safe error code and HTTP status, never upstream HTML or credentials', async t => {
+  const s = await setup(t)
+  t.mock.method(globalThis, 'fetch', async () => new Response('<html>PRIVATE-UPSTREAM-ERROR-CONTENT</html>', { status: 403 }))
+  const result = await s.request('/api/admin/inventory/muse', undefined, s.admin)
+  assert.equal(result.status, 503)
+  const text = await result.text()
+  assert.match(text, /invalid_response.*403/); assert.doesNotMatch(text, /PRIVATE-UPSTREAM|fixture-muse-secret/)
+})

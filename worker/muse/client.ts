@@ -33,24 +33,29 @@ export async function museRequest<T>(env: Env, path: string, raw = '', idempoten
         'X-Signature': await signature(env.MUSE_API_SECRET!, method, url, timestamp, nonce, env.MUSE_KEY_ID!, idempotency, raw),
         ...(idempotency ? { 'Idempotency-Key': idempotency } : {}) },
     })
-    const value = JSON.parse(await boundedResponseText(response))
+    let value
+    try { value = JSON.parse(await boundedResponseText(response)) }
+    catch { throw new MuseError('invalid_response', response.status) }
     if (!response.ok || !value || !Object.hasOwn(value, 'data')) {
       throw new MuseError(typeof value?.error?.code === 'string' && /^[a-z0-9_]{1,64}$/.test(value.error.code) ? value.error.code : 'unconfirmed', response.ok ? 503 : response.status)
     }
     return value.data as T
-  } catch (error) { if (error instanceof MuseError) throw error; throw new MuseError() }
+  } catch (error) {
+    if (error instanceof MuseError) throw error
+    throw new MuseError(error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name) ? 'timeout' : 'transport_error')
+  }
 }
 export type MuseProduct = { code: string; name: string; supply_minor: number; enabled: boolean; available: boolean; fulfillment_type: string }
 export const minor = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 10000000
 export async function museProducts(env: Env) {
   const rows = await museRequest<MuseProduct[]>(env, '/products')
-  if (!Array.isArray(rows)) throw new MuseError()
+  if (!Array.isArray(rows)) throw new MuseError('products_invalid')
   const products = rows.filter(p => /^muse(?:[-_]|$)/i.test(p.code) && p.fulfillment_type === 'account_delivery')
-  if (new Set(products.map(p => p.code)).size !== products.length || products.some(p => !/^[A-Za-z0-9_.:-]{1,100}$/.test(p.code) || typeof p.name !== 'string' || !minor(p.supply_minor) || typeof p.enabled !== 'boolean' || typeof p.available !== 'boolean')) throw new MuseError()
+  if (new Set(products.map(p => p.code)).size !== products.length || products.some(p => !/^[A-Za-z0-9_.:-]{1,100}$/.test(p.code) || typeof p.name !== 'string' || !minor(p.supply_minor) || typeof p.enabled !== 'boolean' || typeof p.available !== 'boolean')) throw new MuseError('products_invalid')
   return products.map(p => ({ code: p.code, name: p.name.slice(0, 150), supply_minor: p.supply_minor, enabled: p.enabled, available: p.available, fulfillment_type: p.fulfillment_type }))
 }
 export async function museBalance(env: Env) {
   const b = await museRequest<{ currency: string; available_minor: number; frozen_minor: number }>(env, '/balance')
-  if (b?.currency !== 'CNY' || !minor(b.available_minor) || !minor(b.frozen_minor)) throw new MuseError()
+  if (b?.currency !== 'CNY' || !minor(b.available_minor) || !minor(b.frozen_minor)) throw new MuseError('balance_invalid')
   return b
 }
