@@ -1,3 +1,4 @@
+import { museCheckoutEnabled } from './muse/service.ts'
 import { platformBranding, platformAnnouncement, platformBrandingRoute, platformAnnouncementRoute } from './platform-store-settings.ts'
 import { verificationConfig, verifyOrderChallenge } from './turnstile.ts'
 import { inventoryAdmin } from './fulfillment/admin.ts'
@@ -116,13 +117,13 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
         partner ? null : platformBranding(env),
       ])
       // Storefront prices are configured retail prices, independent of supplier latency.
-      const customOffers = partner ? [] : await serviceCatalog(env) as (Plan & { stock_available: number; delivery_type: string; hidden: number })[]
+      const customOffers = partner ? [] : await serviceCatalog(env) as (Plan & { stock_available: number; delivery_type: string; hidden: number; delivery_provider: string | null; muse_product_code: string | null; muse_max_cost_cents: number | null })[]
       const customOpen = await serviceCheckoutEnabled(env)
       const offers = (catalog.plans as Plan[]).filter(plan => !isServicePlan(plan.id)).map(plan => ({ ...plan, enabled: plan.enabled && (
         isXGiftPlan(plan.id) ? xgiftCheckoutEnabled(env) : plan.id === 'gmail-account' ? gmail : isDeliverySupplierPlan(plan.id) ? delivery_supplier : emailProduct(plan.id) ? email : testing || (live && Boolean(mapped[plan.id]))
       ) ? 1 : 0 }))
       const hiddenProductIds: readonly string[] = platformVisibility?.hiddenProductIds ?? ('hiddenProductIds' in catalog ? catalog.hiddenProductIds : [])
-      return json({ ...catalog, platformBranding: branding, hiddenProductIds, marketingMetric: marketingMetric && { enabled: marketingMetric.enabled, displayText: marketingMetric.displayText, displayCount: marketingMetric.displayCount }, supportContacts: support.contacts, announcement, plans: [...offers, ...customOffers.filter(plan => !plan.hidden).map(plan => ({ ...plan, enabled: plan.enabled && customOpen && (servicePaymentProviderId(env) !== 'zpay' || plan.delivery_type === 'stock') && (plan.delivery_type !== 'stock' || plan.stock_available > 0) ? 1 : 0 }))].filter(plan => !hiddenProductIds.includes(plan.product_id)), mode: live ? 'live' : 'demo', checkoutEnabled: testing || live || email || xgiftCheckoutEnabled(env) || customOpen, testingEnabled: testing }, 200, { 'Server-Timing': `catalog;dur=${(performance.now() - started).toFixed(1)}` })
+      return json({ ...catalog, platformBranding: branding, hiddenProductIds, marketingMetric: marketingMetric && { enabled: marketingMetric.enabled, displayText: marketingMetric.displayText, displayCount: marketingMetric.displayCount }, supportContacts: support.contacts, announcement, plans: [...offers, ...customOffers.filter(plan => !plan.hidden).map(({ muse_product_code: _code, muse_max_cost_cents: _cost, ...plan }) => ({ ...plan, enabled: plan.enabled && customOpen && (plan.delivery_provider === 'muse' ? museCheckoutEnabled(env) : servicePaymentProviderId(env) !== 'zpay' || plan.delivery_type === 'stock') && (plan.delivery_type !== 'stock' || plan.stock_available > 0) ? 1 : 0 }))].filter(plan => !hiddenProductIds.includes(plan.product_id)), mode: live ? 'live' : 'demo', checkoutEnabled: testing || live || email || xgiftCheckoutEnabled(env) || customOpen, testingEnabled: testing }, 200, { 'Server-Timing': `catalog;dur=${(performance.now() - started).toFixed(1)}` })
     }
     if (path === '/api/orders/client' && method === 'POST') {
       await body(request)

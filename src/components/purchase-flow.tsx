@@ -50,7 +50,7 @@ function FlowStage({ stage, children }: { stage: string; children: ReactNode }) 
   return <div ref={viewport} className="flow-viewport"><div ref={content} className="flow-stage">{children}</div></div>
 }
 
-type Props = CheckoutProps & { presenceOthers?: number | null; marketingMetric?: MarketingMetric | null; onPresenceActivityChange?: (active: boolean) => void; couponAvailable?: boolean; shopSlug?: string; onCloseComplete?: () => void; notice?: { supportsWarranty?: boolean; purchaseNote?: string; onContinue: () => void }; purchaseNote?: string; supportsWarranty?: boolean; emailMode: boolean; paymentMethods?: PaymentMethodOption[]; draft: { plan: PlanId; price: number; productId?: string; productName?: string; planName?: string; deliveryType?: 'stock' | 'manual' }; initialEmail?: string | null; onSubmitEmail: (email: string, username?: string, preflightToken?: string, paymentMethod?: string, expectedFeeBps?: number, turnstileToken?: string, couponCode?: string, couponPrice?: number) => Promise<void>; children?: ReactNode | ((refreshTarget: HTMLElement | null) => ReactNode) }
+type Props = CheckoutProps & { presenceOthers?: number | null; marketingMetric?: MarketingMetric | null; onPresenceActivityChange?: (active: boolean) => void; couponAvailable?: boolean; shopSlug?: string; onCloseComplete?: () => void; notice?: { supportsWarranty?: boolean; purchaseNote?: string; onContinue: () => void }; purchaseNote?: string; supportsWarranty?: boolean; emailMode: boolean; paymentMethods?: PaymentMethodOption[]; draft: { plan: PlanId; price: number; productId?: string; productName?: string; planName?: string; deliveryType?: 'stock' | 'manual' | 'muse' }; initialEmail?: string | null; onSubmitEmail: (email: string, username?: string, preflightToken?: string, paymentMethod?: string, expectedFeeBps?: number, turnstileToken?: string, couponCode?: string, couponPrice?: number) => Promise<void>; children?: ReactNode | ((refreshTarget: HTMLElement | null) => ReactNode) }
 export function PurchaseFlow({ presenceOthers = null, marketingMetric, onPresenceActivityChange, couponAvailable = false, shopSlug, notice, purchaseNote, supportsWarranty, onCloseComplete, emailMode, paymentMethods, draft, initialEmail, onSubmitEmail, children, ...checkout }: Props) {
   const { order, open, onOpenChange, busy, error } = checkout
   const [refreshTarget, setRefreshTarget] = useState<HTMLDivElement | null>(null)
@@ -114,7 +114,7 @@ export function PurchaseFlow({ presenceOthers = null, marketingMetric, onPresenc
   const plan = ORDER_PLANS.find(p => p.id === current.plan) ?? { id: current.plan, productId: !emailMode && order?.serviceDelivery?.productId || draft.productId || 'custom', name: !emailMode && order?.planName || draft.planName || '商品', renewalOnly: false }
   const serviceName = !emailMode && order?.serviceDelivery?.productName || draft.productName || '商品'
   const emailProductInfo = emailProduct(current.plan)
-  const automaticDelivery = service && emailMode && draft.deliveryType === 'stock' || order?.delivery?.automatic || emailMode && ['gemini-pro-18m', 'duolingo-12m'].includes(current.plan)
+  const automaticDelivery = service && emailMode && (draft.deliveryType === 'stock' || draft.deliveryType === 'muse') || order?.delivery?.automatic || emailMode && ['gemini-pro-18m', 'duolingo-12m'].includes(current.plan)
   const xgift = plan.productId === 'x-premium'
   const chatgptEmailStep = emailMode && plan.productId === 'chatgpt'
   const sms = plan.productId === 'codex-sms'

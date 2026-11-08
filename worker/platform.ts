@@ -21,6 +21,11 @@ export interface Env {
   CDK_ENCRYPTION_KEY?: string
   SERVICE_CHECKOUT_ENABLED?: string
   SERVICE_PAYMENT_PROVIDER?: string
+  MUSE_KEY_ID?: string
+  MUSE_API_SECRET?: string
+  MUSE_WEBHOOK_SECRET?: string
+  MUSE_CHECKOUT_ENABLED?: string
+  MUSE_ACCOUNT_PAYMENT_APPROVED?: string
   ZPAY_PID?: string
   ZPAY_KEY?: string
   ASSETS: { fetch(request: Request): Promise<Response> }

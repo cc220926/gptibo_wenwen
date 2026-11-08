@@ -1,3 +1,5 @@
+import { museBalance, museConfigured, museProducts } from '../muse/client.ts'
+import { fulfillMuse, museCheckoutEnabled, museMapping, musePurchase } from '../muse/service.ts'
 import { ApiError, body, json, type Env } from '../platform.ts'
 import { getOrder } from '../order-state.ts'
 import { isServicePlan } from '../../shared/fulfillment.ts'
@@ -20,6 +22,10 @@ export async function inventoryAdmin(request: Request, env: Env, url: URL) {
   if (path === '/api/admin/inventory' && request.method === 'GET') {
     const products = (await db.prepare('SELECT * FROM service_products ORDER BY category,name').all()).results
     return json({ products, plans: await serviceCatalog(env), encryptionReady: await vaultReady(env), checkoutReady: await serviceCheckoutEnabled(env) })
+  }
+  if (path === '/api/admin/inventory/muse' && request.method === 'GET') {
+    if (!museConfigured(env)) return json({ configured: false, checkoutReady: false, products: [] })
+    return json({ configured: true, checkoutReady: museCheckoutEnabled(env), products: await museProducts(env), balance: await museBalance(env) })
   }
   if (request.method !== 'POST' && !path.endsWith('/stock')) throw new ApiError('请求方式不支持。', 405)
   if (path === '/api/admin/inventory/products/visibility') {
@@ -61,7 +67,11 @@ export async function inventoryAdmin(request: Request, env: Env, url: URL) {
   if (path === '/api/admin/inventory/plans') {
     const data = await body(request, 14000), name = text(data.name, '规格名称'), price = cents(data.priceCents)
     const instructions = text(data.instructions ?? '', '交付说明', 2000), purchaseNote = text(data.purchaseNote ?? '', '购买说明', 2000)
-    if (!['stock', 'manual'].includes(String(data.kind))) throw new ApiError('请选择已实现的交付方式。')
+    if (!['stock', 'manual', 'muse'].includes(String(data.kind))) throw new ApiError('请选择已实现的交付方式。')
+    const isMuse = data.kind === 'muse'
+    const kind = isMuse ? 'manual' : String(data.kind)
+    const supplierCode = isMuse ? text(data.supplierCode, '供货商品代码') : ''
+    if (isMuse && (!/^muse(?:[-_]|$)[A-Za-z0-9_.:-]*$/i.test(supplierCode) || !Number.isSafeInteger(data.maxCostCents) || Number(data.maxCostCents) <= 0 || Number(data.maxCostCents) >= price)) throw new ApiError('供货商品代码或采购上限无效；上限必须低于售价。')
     if (typeof data.enabled !== 'boolean') throw new ApiError('销售状态无效。')
     const productId = text(data.productId, '商品编号')
     if (!await db.prepare('SELECT id FROM service_products WHERE id=?').bind(productId).first()) throw new ApiError('商品不存在。', 404)
@@ -70,7 +80,9 @@ export async function inventoryAdmin(request: Request, env: Env, url: URL) {
     if (!isServicePlan(id)) throw new ApiError('规格编号无效。')
     if (current) {
       if (current.version !== data.version) throw new ApiError('规格已更新，请刷新。', 409)
-      if (current.delivery_type !== data.kind || current.product_id !== productId) throw new ApiError('已有规格不能切换交付方式或所属商品，请新建规格。', 409)
+      const mapping = await museMapping(env, id)
+      if (Boolean(mapping) !== isMuse || (mapping && (mapping.product_code !== supplierCode || mapping.max_cost_cents !== data.maxCostCents))) throw new ApiError('已有供货规格不能修改货源或采购上限，请新建规格。', 409)
+      if (current.delivery_type !== kind || current.product_id !== productId) throw new ApiError('已有规格不能切换交付方式或所属商品，请新建规格。', 409)
       const event = crypto.randomUUID()
       await db.batch([
         db.prepare("INSERT INTO admin_audit(id,action,target_id,note,created_at) SELECT ?,'service-plan-update',id,'更新规格价格、说明及销售状态',? FROM catalog_plans WHERE id=? AND version=?").bind(event, Date.now(), id, current.version),
@@ -80,7 +92,8 @@ export async function inventoryAdmin(request: Request, env: Env, url: URL) {
     } else {
       if (data.id) throw new ApiError('规格不存在。', 404)
       await db.batch([
-        db.prepare('INSERT INTO catalog_plans(id,product_id,name,price_cents,enabled,partner_enabled,purchase_note,delivery_instructions,delivery_type,updated_at) VALUES(?,?,?,?,?,0,?,?,?,?)').bind(id, productId, name, price, Number(data.enabled), purchaseNote, instructions, String(data.kind), Date.now()),
+        db.prepare('INSERT INTO catalog_plans(id,product_id,name,price_cents,enabled,partner_enabled,purchase_note,delivery_instructions,delivery_type,updated_at) VALUES(?,?,?,?,?,0,?,?,?,?)').bind(id, productId, name, price, Number(data.enabled), purchaseNote, instructions, kind, Date.now()),
+        ...(isMuse ? [db.prepare('INSERT INTO muse_plans(plan,product_code,max_cost_cents) VALUES(?,?,?)').bind(id, supplierCode, Number(data.maxCostCents))] : []),
         audit(env, 'service-plan-create', id, '创建规格：' + name + '；交付方式：' + String(data.kind)),
       ])
     }
@@ -139,6 +152,11 @@ export async function inventoryAdmin(request: Request, env: Env, url: URL) {
     const data = await body(request, 20000), order = await getOrder(env, task[1]), current = await taskFor(env, order.id)
     if (!current) throw new ApiError('交付任务不存在。', 404)
     if (data.action === 'retry-mail') { await db.batch([audit(env, 'service-mail-retry', order.id, '核对原交付邮件，不重新分配库存')]); await sendServiceMail(env, order.id); return json({ ok: true }) }
+    if (await musePurchase(env, order.id)) {
+      if (data.action !== 'sync') throw new ApiError('供货订单只能核对原采购单，不能手工替换交付内容。', 409)
+      await fulfillMuse(env, order.id); await sendServiceMail(env, order.id)
+      return json({ ok: true })
+    }
     if (current.kind !== 'manual') throw new ApiError('自有库存订单由系统分配，不能替换交付内容。', 409)
     if (current.state === 'delivered' && data.action === 'complete') return json(await serviceOrderSummary(env, order))
     if (!['start', 'complete'].includes(String(data.action))) throw new ApiError('交付操作无效。')

@@ -1,3 +1,4 @@
+import { fulfillMuse, museCheckoutEnabled, museMapping, musePurchase, museSnapshot, prepareMuse } from '../muse/service.ts'
 import { ApiError, type Env, type Statement } from '../platform.ts'
 import { getOrder, type Order } from '../order-state.ts'
 import { deliveryMailReady } from '../email-delivery.ts'
@@ -16,9 +17,9 @@ export async function serviceCheckoutEnabled(env: Env) {
   return env.SERVICE_CHECKOUT_ENABLED === 'true' && servicePaymentConfigured(env) && deliveryMailReady(env) && await vaultReady(env)
 }
 export async function serviceCatalog(env: Env) {
-  return (await env.INTEREST_DB.prepare(`SELECT c.*,p.name product_name,p.category,p.description,p.hidden,
+  return (await env.INTEREST_DB.prepare(`SELECT c.*,p.name product_name,p.category,p.description,p.hidden,m.product_code muse_product_code,m.max_cost_cents muse_max_cost_cents,CASE WHEN m.plan IS NOT NULL THEN 'muse' ELSE NULL END delivery_provider,
     (SELECT COUNT(*) FROM cdk_stock s WHERE s.plan=c.id AND s.state='available') stock_available
-    FROM catalog_plans c JOIN service_products p ON p.id=c.product_id WHERE c.delivery_type<>'legacy' ORDER BY p.category,p.name,c.rowid`).all()).results
+    FROM catalog_plans c JOIN service_products p ON p.id=c.product_id LEFT JOIN muse_plans m ON m.plan=c.id WHERE c.delivery_type<>'legacy' ORDER BY p.category,p.name,c.rowid`).all()).results
 }
 
 /** Order + immutable delivery snapshot + reservation commit in one transaction. */
@@ -28,8 +29,10 @@ export async function createServiceOrder(env: Env, ownerHash: string, email: str
   await expireReservations(env)
   const plan = await env.INTEREST_DB.prepare(`SELECT c.*,p.name product_name FROM catalog_plans c JOIN service_products p ON p.id=c.product_id WHERE c.id=? AND c.enabled=1 AND p.hidden=0 AND c.delivery_type IN ('stock','manual')`).bind(String(data.plan)).first<{ id: string; product_id: string; product_name: string; name: string; price_cents: number; version: number; delivery_type: DeliveryKind; purchase_note: string; delivery_instructions: string }>()
   if (!plan) throw new ApiError('该商品已暂停销售。', 409)
-  if (servicePaymentProviderId(env) === 'zpay' && plan.delivery_type !== 'stock') throw new ApiError('该商品暂不支持此支付渠道。', 409)
+  const mapping = await museMapping(env, plan.id)
+  if (servicePaymentProviderId(env) === 'zpay' && plan.delivery_type !== 'stock' && !(mapping && museCheckoutEnabled(env))) throw new ApiError('该商品暂不支持此支付渠道。', 409)
   if (data.expectedPrice !== plan.price_cents) throw new ApiError('价格已更新，请刷新后重新确认。', 409)
+  const cost = mapping ? await prepareMuse(env, mapping, plan.price_cents) : 0
   const now = Date.now(), id = 'YMX-' + crypto.randomUUID().replaceAll('-', '').toUpperCase(), event = crypto.randomUUID()
   const statements: Statement[] = [
     env.INTEREST_DB.prepare(`INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,mode,status,created_at,updated_at,last_event_id,customer_email,purchase_note)
@@ -45,6 +48,7 @@ export async function createServiceOrder(env: Env, ownerHash: string, email: str
     env.INTEREST_DB.prepare("UPDATE cdk_stock SET state='reserved',order_id=? WHERE id=(SELECT stock_id FROM fulfillment_tasks WHERE order_id=?) AND state='available'").bind(id, id),
     env.INTEREST_DB.prepare("INSERT INTO order_events(id,order_id,actor,action,to_status,note,order_version,created_at) SELECT ?,id,'customer','create','pending','创建订单，等待付款；交付方式已保存',0,? FROM orders WHERE id=?").bind(event, now, id),
   )
+  if (mapping) statements.push(museSnapshot(env, id, mapping, cost))
   await env.INTEREST_DB.batch(statements)
   const created = await env.INTEREST_DB.prepare('SELECT * FROM orders WHERE owner_hash=? AND idempotency_key=?').bind(ownerHash, String(data.key)).first<Order>()
   if (!created) throw new ApiError('库存不足或商品已更新，请刷新后重试。', 409)
@@ -82,18 +86,20 @@ export async function fulfillService(env: Env, id: string) {
     env.INTEREST_DB.prepare(`UPDATE orders SET status=CASE WHEN t.state='delivered' THEN 'success' WHEN t.state='review' THEN 'failed' ELSE 'processing' END,
       started_at=COALESCE(started_at,?),updated_at=?,version=version+1,last_event_id=? FROM fulfillment_tasks t
       WHERE orders.id=? AND t.order_id=orders.id AND ${eligible} AND orders.status IN ('session','pending','cancelled') AND t.state IN ('delivered','queued','review')`).bind(now, now, event, id),
-    env.INTEREST_DB.prepare("INSERT INTO order_events(id,order_id,actor,action,from_status,to_status,note,order_version,created_at) SELECT ?,id,'system','service-dispatch','session',status,CASE status WHEN 'success' THEN '自有库存已交付，可在原订单领取' WHEN 'failed' THEN '到期后确认收款，请人工核对原订单，未重复分配库存' ELSE '付款已确认，等待人工交付' END,version,? FROM orders WHERE id=? AND last_event_id=?").bind(event, now, id, event),
+    env.INTEREST_DB.prepare("INSERT INTO order_events(id,order_id,actor,action,from_status,to_status,note,order_version,created_at) SELECT ?,id,'system','service-dispatch','session',status,CASE status WHEN 'success' THEN '自有库存已交付，可在原订单领取' WHEN 'failed' THEN '到期后确认收款，请人工核对原订单，未重复分配库存' WHEN EXISTS(SELECT 1 FROM muse_orders m WHERE m.order_id=orders.id) THEN '付款已确认，等待原订单自动采购' ELSE '付款已确认，等待人工交付' END,version,? FROM orders WHERE id=? AND last_event_id=?").bind(event, now, id, event),
   ])
+  if (await musePurchase(env, id)) await fulfillMuse(env, id)
 }
 
 export async function serviceOrderSummary(env: Env, order: Order, reveal = true) {
   if (!isServicePlan(order.plan)) return {}
   const task = await taskFor(env, order.id)
   if (!task) return {}
-  const serviceDelivery: ServiceTask = { kind: task.kind, state: task.state, productId: task.product_id, productName: task.product_name, expiresAt: task.expires_at, mailState: task.mail_state }
+  const supplier = await musePurchase(env, order.id)
+  const serviceDelivery: ServiceTask = { ...(supplier ? { provider: 'muse' as const, supplierState: supplier.state } : {}), kind: task.kind, state: task.state, productId: task.product_id, productName: task.product_name, expiresAt: task.expires_at, mailState: task.mail_state }
   const visible = reveal && task.state === 'delivered' && order.mode === 'live' && !order.is_test && order.payment_status === 'paid' && !order.refund_hold && order.refunded_cents < order.price_cents && !order.redemption_blocked
   const value = visible && task.encrypted_value ? await unseal(env, task.encrypted_value, task.stock_id ? 'stock:' + task.stock_id : 'task:' + order.id) : undefined
-  return { serviceDelivery, manualFulfillment: true, delivery: { kind: 'cdk' as const, automatic: task.kind === 'stock', status: task.mail_state === 'sent' ? 'sent' as const : task.mail_state === 'sending' ? 'sending' as const : 'waiting' as const, sentAt: null, ...(visible ? { value, instructions: task.instructions } : {}) } }
+  return { serviceDelivery, manualFulfillment: true, delivery: { kind: 'cdk' as const, automatic: task.kind === 'stock' || Boolean(supplier), status: task.mail_state === 'sent' ? 'sent' as const : task.mail_state === 'sending' ? 'sending' as const : 'waiting' as const, sentAt: null, ...(visible ? { value, instructions: task.instructions } : {}) } }
 }
 
 const escape = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!)

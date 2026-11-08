@@ -12,7 +12,7 @@ export async function setRedemptionBlocked(env: Env, order: Order, blocked: bool
       WHERE id=? AND version=? AND redemption_blocked<>?
       AND NOT EXISTS(SELECT 1 FROM recharge_orders t WHERE t.order_id=orders.id AND t.lease_until>?)
       AND NOT EXISTS(SELECT 1 FROM email_deliveries d WHERE d.order_id=orders.id AND d.lease_until>?)
-      AND NOT EXISTS(SELECT 1 FROM fulfillment_tasks f WHERE f.order_id=orders.id AND f.lease_until>?)
+      AND NOT EXISTS(SELECT 1 FROM fulfillment_tasks f WHERE f.order_id=orders.id AND f.lease_until>?) AND NOT EXISTS(SELECT 1 FROM muse_orders m WHERE m.order_id=orders.id AND (m.lease_until>strftime('%s','now')*1000 OR (m.attempted=1 AND m.state NOT IN ('succeeded','failed'))))
       AND NOT EXISTS(SELECT 1 FROM account_supplier_orders k WHERE k.order_id=orders.id AND (k.lease_until>? OR k.state IN ('creating','unknown'))) AND NOT EXISTS(SELECT 1 FROM delivery_supplier_orders n WHERE n.order_id=orders.id AND (n.lease_until>? OR n.state IN ('creating','unknown','pending'))) AND NOT EXISTS(SELECT 1 FROM xgift_purchases x WHERE x.order_id=orders.id AND (x.lease_until>? OR x.state IN ('creating','unknown','pending')))
       AND NOT EXISTS(SELECT 1 FROM payments p WHERE p.order_id=orders.id AND p.lease_until>?)`)
       .bind(Number(blocked), now, event, order.id, order.version, Number(blocked), now, now, now, now, now, now, now),

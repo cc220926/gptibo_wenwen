@@ -1,3 +1,5 @@
+import { museWebhook } from './muse/webhook.ts'
+import { reconcileMuse } from './muse/service.ts'
 import { reconcileServices } from './fulfillment/service.ts'
 import { telegramWebhook, retryTelegramInvitations } from './telegram.ts'
 import { reconcileXGift } from './xgift/service.ts'
@@ -36,6 +38,7 @@ export default {
     await runScheduled('Telegram invitation queue', () => retryTelegramInvitations(env))
     // Durable transactional email must continue even when supplier polling fails.
     await runScheduled('Order notification queue', () => sendDueOrderNotifications(env))
+    await runScheduled('Muse procurement queue', () => reconcileMuse(env))
     await runScheduled('Service delivery queue', () => reconcileServices(env))
     // Cosmetic activity statistics must not interrupt financial reconciliation.
     await runScheduled('Checkout activity cleanup', () => expireCheckoutPresence(env))
@@ -78,6 +81,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       return error('请求保护服务暂时不可用，请稍后重试。', 503)
     }
     if (url.pathname === '/api/telegram/webhook') return telegramWebhook(request, env)
+    if (url.pathname === '/api/muse/webhook') return museWebhook(request, env)
     if (url.pathname === '/api/recharge/webhook') return rechargeWebhook(request, env)
     if (url.pathname === '/api/invoices/notify/alipay') return invoiceNotification(request, env)
     const notification = url.pathname.match(/^\/api\/payments\/notify\/([a-z0-9-]+)$/)

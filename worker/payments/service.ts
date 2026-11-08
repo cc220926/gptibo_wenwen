@@ -1,3 +1,4 @@
+import { museCheckoutEnabled, musePaymentReady, musePurchase } from '../muse/service.ts'
 import { isServicePlan } from '../../shared/fulfillment.ts'
 import { fulfillService, serviceCheckoutEnabled, taskFor } from '../fulfillment/service.ts'
 import { isXGiftPlan } from '../../shared/xgift-products.ts'
@@ -101,6 +102,7 @@ export async function paymentAction(request: Request, env: Env, order: Order, ad
   if (!(await env.INTEREST_LIMITER.limit({ key: 'payment:' + order.owner_hash })).success) throw new ApiError('操作较频繁，请稍后再试。', 429)
   let payment = await findPayment(env, order.id)
   if (data.action === 'options') return json({ payment: payment ? { provider: payment.provider, status: payment.state, qr: null, expiresAt: payment.expires_at } : null, methods: canCreate ? [{ method: 'alipay', name: '支付宝', feeBps: 0 }] : [] })
+  if (data.action === 'create' && await musePurchase(env, order.id) && !museCheckoutEnabled(env)) throw new ApiError('Muse 收款暂未开放，请联系商家。', 409)
   if (!payment && data.action === 'create') {
     if (!canCreate) throw new ApiError('真实收款尚未开放。', 503)
     const provider = paymentProvider(env, isServicePlan(order.plan) ? servicePaymentProviderId(env) : emailProduct(order.plan) || isXGiftPlan(order.plan) ? 'alipay' : env.PAYMENT_PROVIDER ?? '')
@@ -109,7 +111,7 @@ export async function paymentAction(request: Request, env: Env, order: Order, ad
     const now = Date.now()
     const task = isServicePlan(order.plan) ? await taskFor(env, order.id) : null
     if (isServicePlan(order.plan) && (!task || task.state !== 'reserved' || task.expires_at <= now)) throw new ApiError('库存预留已到期，请重新下单；如已付款请核对原订单。', 409)
-    if (provider.id === 'zpay' && task?.kind !== 'stock') throw new ApiError('该商品暂不支持此支付渠道。', 409)
+    if (provider.id === 'zpay' && task?.kind !== 'stock' && !(await musePurchase(env, order.id) && museCheckoutEnabled(env))) throw new ApiError('该商品暂不支持此支付渠道。', 409)
     await env.INTEREST_DB.prepare("INSERT INTO payments(order_id,provider,account,amount_cents,expires_at,created_at,updated_at) SELECT id,?,?,price_cents,?,?,? FROM orders WHERE id=? AND mode='live' AND payment_status='unpaid' AND status='pending' AND redemption_blocked=0 AND refund_hold=0 AND refunded_cents=0 AND (NOT EXISTS(SELECT 1 FROM fulfillment_tasks t WHERE t.order_id=orders.id) OR EXISTS(SELECT 1 FROM fulfillment_tasks t WHERE t.order_id=orders.id AND t.state='reserved' AND t.expires_at>?)) ON CONFLICT(order_id) DO NOTHING")
       .bind(provider.id, provider.account, task?.expires_at ?? now + 15 * 60000, now, now, order.id, now).run()
     payment = await findPayment(env, order.id)
@@ -125,6 +127,7 @@ export async function paymentAction(request: Request, env: Env, order: Order, ad
       if (currentOrder.redemption_blocked) throw new ApiError('本订单已禁止再次兑换，请联系支持。', 409)
       if (!fresh.qr) {
         if (currentOrder.payment_status !== 'unpaid' || currentOrder.status !== 'pending' || currentOrder.refund_hold) throw new ApiError('当前订单不能继续付款。', 409)
+        await musePaymentReady(env, currentOrder.id)
         const qr = await providerFor(env, fresh).create(details(fresh, currentOrder), notifyUrl(env, fresh.provider))
         await env.INTEREST_DB.prepare("UPDATE payments SET qr=?,updated_at=? WHERE order_id=? AND state='pending'").bind(qr.qr, Date.now(), fresh.order_id).run()
       }
