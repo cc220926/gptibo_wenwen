@@ -22,6 +22,22 @@ export async function inventoryAdmin(request: Request, env: Env, url: URL) {
     return json({ products, plans: await serviceCatalog(env), encryptionReady: await vaultReady(env), checkoutReady: await serviceCheckoutEnabled(env) })
   }
   if (request.method !== 'POST' && !path.endsWith('/stock')) throw new ApiError('请求方式不支持。', 405)
+  if (path === '/api/admin/inventory/products/visibility') {
+    const data = await body(request)
+    if (typeof data.id !== 'string' || !isServicePlan(data.id) || typeof data.hidden !== 'boolean' || !Number.isSafeInteger(data.version) || Number(data.version) < 0) throw new ApiError('商品上下架参数无效。')
+    const current = await db.prepare('SELECT id,name,hidden,version FROM service_products WHERE id=?').bind(data.id).first<{ id: string; name: string; hidden: number; version: number }>()
+    if (!current) throw new ApiError('商品不存在。', 404)
+    if (current.version !== data.version) throw new ApiError('商品已更新，请刷新。', 409)
+    if (Boolean(current.hidden) === data.hidden) return json({ id: current.id, hidden: current.hidden, version: current.version })
+    const event = crypto.randomUUID()
+    await db.batch([
+      db.prepare('UPDATE service_products SET hidden=?,version=version+1 WHERE id=? AND version=?').bind(Number(data.hidden), current.id, current.version),
+      db.prepare("INSERT INTO admin_audit(id,action,target_id,note,created_at) SELECT ?,'service-product-visibility',id,?,? FROM service_products WHERE id=? AND version=? AND hidden=?")
+        .bind(event, `${env.ADMIN_USERNAME}: ${data.hidden ? '下架并隐藏' : '恢复展示'} ${current.name}`, Date.now(), current.id, current.version + 1, Number(data.hidden)),
+    ])
+    if (!await db.prepare('SELECT id FROM admin_audit WHERE id=?').bind(event).first()) throw new ApiError('商品已更新，请刷新。', 409)
+    return json({ id: current.id, hidden: Number(data.hidden), version: current.version + 1 })
+  }
   if (path === '/api/admin/inventory/products') {
     const data = await body(request, 12000)
     const name = text(data.name, '商品名称'), category = text(data.category, '分类', 60), description = text(data.description ?? '', '商品说明', 2000, true)

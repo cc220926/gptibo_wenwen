@@ -16,7 +16,7 @@ export async function serviceCheckoutEnabled(env: Env) {
   return env.SERVICE_CHECKOUT_ENABLED === 'true' && servicePaymentConfigured(env) && deliveryMailReady(env) && await vaultReady(env)
 }
 export async function serviceCatalog(env: Env) {
-  return (await env.INTEREST_DB.prepare(`SELECT c.*,p.name product_name,p.category,p.description,
+  return (await env.INTEREST_DB.prepare(`SELECT c.*,p.name product_name,p.category,p.description,p.hidden,
     (SELECT COUNT(*) FROM cdk_stock s WHERE s.plan=c.id AND s.state='available') stock_available
     FROM catalog_plans c JOIN service_products p ON p.id=c.product_id WHERE c.delivery_type<>'legacy' ORDER BY p.category,p.name,c.rowid`).all()).results
 }
@@ -26,7 +26,7 @@ export async function createServiceOrder(env: Env, ownerHash: string, email: str
   if (data.partner) throw new ApiError('该商品暂仅支持平台直营购买。', 409)
   if (!await serviceCheckoutEnabled(env)) throw new ApiError('自有商品暂未开放购买。', 409)
   await expireReservations(env)
-  const plan = await env.INTEREST_DB.prepare(`SELECT c.*,p.name product_name FROM catalog_plans c JOIN service_products p ON p.id=c.product_id WHERE c.id=? AND c.enabled=1 AND c.delivery_type IN ('stock','manual')`).bind(String(data.plan)).first<{ id: string; product_id: string; product_name: string; name: string; price_cents: number; version: number; delivery_type: DeliveryKind; purchase_note: string; delivery_instructions: string }>()
+  const plan = await env.INTEREST_DB.prepare(`SELECT c.*,p.name product_name FROM catalog_plans c JOIN service_products p ON p.id=c.product_id WHERE c.id=? AND c.enabled=1 AND p.hidden=0 AND c.delivery_type IN ('stock','manual')`).bind(String(data.plan)).first<{ id: string; product_id: string; product_name: string; name: string; price_cents: number; version: number; delivery_type: DeliveryKind; purchase_note: string; delivery_instructions: string }>()
   if (!plan) throw new ApiError('该商品已暂停销售。', 409)
   if (servicePaymentProviderId(env) === 'zpay' && plan.delivery_type !== 'stock') throw new ApiError('该商品暂不支持此支付渠道。', 409)
   if (data.expectedPrice !== plan.price_cents) throw new ApiError('价格已更新，请刷新后重新确认。', 409)
@@ -34,7 +34,7 @@ export async function createServiceOrder(env: Env, ownerHash: string, email: str
   const statements: Statement[] = [
     env.INTEREST_DB.prepare(`INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,mode,status,created_at,updated_at,last_event_id,customer_email,purchase_note)
       SELECT ?,?,?,c.id,c.name,c.price_cents,'live','pending',?,?,?,?,c.purchase_note FROM catalog_plans c
-      WHERE c.id=? AND c.version=? AND c.enabled=1 AND (c.delivery_type='manual' OR EXISTS(SELECT 1 FROM cdk_stock s WHERE s.plan=c.id AND s.state='available'))
+      WHERE c.id=? AND c.version=? AND c.enabled=1 AND EXISTS(SELECT 1 FROM service_products p WHERE p.id=c.product_id AND p.hidden=0) AND (c.delivery_type='manual' OR EXISTS(SELECT 1 FROM cdk_stock s WHERE s.plan=c.id AND s.state='available'))
       ON CONFLICT(owner_hash,idempotency_key) DO NOTHING`).bind(id, ownerHash, String(data.key), now, now, event, email, plan.id, plan.version),
   ]
   // Bind the first still-available unit while the order transaction owns the write lock.

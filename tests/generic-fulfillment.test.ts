@@ -51,6 +51,27 @@ test('catalog is database driven and stock import is encrypted, atomic, deduplic
   assert.equal((await s.create()).status, 409)
 })
 
+test('hiding a self-owned product removes every plan from the storefront and blocks new orders', async t => {
+  const s = await setup(t)
+  const existing = await s.order()
+  const path = '/api/admin/inventory/products/visibility'
+  const change = (hidden: boolean, version: number, cookie = s.admin) => s.request(path, { id: s.productId, hidden, version }, cookie)
+  assert.equal((await change(true, 0, s.buyer)).status, 401)
+  assert.equal((await change(true, 0)).status, 200)
+  assert.equal((await change(false, 0)).status, 409)
+  const catalog = await (await s.request('/api/catalog')).json()
+  assert.equal(catalog.plans.some((plan: { id: string }) => plan.id === s.plan), false)
+  assert.equal((await s.create()).status, 409)
+  assert.equal((await s.read(existing.id)).id, existing.id)
+  const admin = await (await s.request('/api/admin/inventory', undefined, s.admin)).json()
+  assert.equal(admin.products.find((product: { id: string }) => product.id === s.productId).hidden, 1)
+  assert.equal(admin.plans.some((plan: { id: string }) => plan.id === s.plan), true)
+  assert.equal((await change(false, 1)).status, 200)
+  const restored = await (await s.request('/api/catalog')).json()
+  assert.equal(restored.plans.some((plan: { id: string }) => plan.id === s.plan), true)
+  assert.equal((await s.create()).status, 201)
+})
+
 test('last unit is reserved atomically, duplicate requests reuse it, unpaid buyers cannot read it', async t => {
   const s = await setup(t, 'stock', ['LAST-PRIVATE-CODE'])
   const key = crypto.randomUUID()
