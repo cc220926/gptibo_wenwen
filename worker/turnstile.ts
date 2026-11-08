@@ -34,8 +34,16 @@ export async function verifyOrderChallenge(request: Request, env: Env, token: un
     if (response.status !== 200) { await response.body?.cancel(); throw new Error() }
     result = JSON.parse(await boundedResponseText(response, 16384))
     if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error()
-  } catch { throw unavailable() }
-  if (Array.isArray(result['error-codes']) && result['error-codes'].some(code => ['missing-input-secret', 'invalid-input-secret', 'internal-error'].includes(code))) throw unavailable()
+  } catch {
+    console.warn('Turnstile provider request failed')
+    throw unavailable()
+  }
+  const providerError = Array.isArray(result['error-codes']) && result['error-codes'].find(code => ['missing-input-secret', 'invalid-input-secret', 'internal-error'].includes(code))
+  if (providerError) {
+    // Only provider-defined configuration/service codes; never log tokens, keys or bodies.
+    console.warn('Turnstile provider unavailable', providerError)
+    throw unavailable()
+  }
   const timestamp = typeof result.challenge_ts === 'string' ? Date.parse(result.challenge_ts) : NaN
   const age = Date.now() - timestamp
   if (result.success !== true || result.hostname !== config.hostname || result.action !== action || !Number.isFinite(age) || age > 300000 || age < -60000) throw new ApiError('人机验证未通过或已过期，请重新验证。')
