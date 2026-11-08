@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { credentialExpiryProblem } from '../shared/credential-expiry.ts'
+import { credentialExpiryAt, credentialExpiryProblem } from '../shared/credential-expiry.ts'
 import { checkoutSession } from '../src/lib/checkout-session.ts'
 
 const jwt = (claims: unknown) => 'eyJhbGciOiJub25lIn0.' + Buffer.from(JSON.stringify(claims)).toString('base64url') + '.fixture'
@@ -24,4 +24,12 @@ test('checkout rejects expired input while original session and token recoveries
   assert.match(checkoutSession(raw).problem, /已过期/)
   assert.deepEqual(checkoutSession(raw, 'session').credential, { mode: 'session', session: raw })
   assert.deepEqual(checkoutSession(raw, 'access_token').credential, { mode: 'access_token', access_token: token })
+})
+
+test('saved credential metadata uses the earlier declared expiry and leaves unknown formats unknown', () => {
+  assert.equal(credentialExpiryAt(jwt({ exp: now / 1000 + 60 }), '2099-01-01T00:00:00Z'), now + 60000)
+  assert.equal(credentialExpiryAt(jwt({ exp: now / 1000 + 3600 }), new Date(now + 60000).toISOString()), now + 60000)
+  assert.equal(credentialExpiryAt('opaque', 'not-a-date'), null)
+  assert.equal(credentialExpiryAt(jwt({ exp: 1e100 })), null)
+  assert.equal(credentialExpiryAt(jwt({ exp: 0 })), 0)
 })

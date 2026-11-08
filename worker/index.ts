@@ -1,3 +1,4 @@
+import { purgeRetainedCredentials } from './recharge/saved-credentials.ts'
 import { museWebhook } from './muse/webhook.ts'
 import { reconcileMuse } from './muse/service.ts'
 import { reconcileServices } from './fulfillment/service.ts'
@@ -34,6 +35,7 @@ async function runScheduled(name: string, operation: () => Promise<unknown>) {
 
 export default {
   async scheduled(event: { scheduledTime?: number }, env: Env) {
+    await runScheduled('Saved credential expiry', () => purgeRetainedCredentials(env))
     // Telegram's durable queue is independent of supplier reconciliation failures.
     await runScheduled('Telegram invitation queue', () => retryTelegramInvitations(env))
     // Durable transactional email must continue even when supplier polling fails.

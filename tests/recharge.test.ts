@@ -7,6 +7,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import worker from '../worker/index.ts'
 import { alipayQr, canonicalQuery, request as supplierRequest, signature, marginCents, moneyCents, RechargeError } from '../worker/recharge/client.ts'
 import { reconcileRecharge } from '../worker/recharge/service.ts'
+import { purgeRetainedCredentials, retainedCredential, retainedRequest } from '../worker/recharge/saved-credentials.ts'
 import { getOrder } from '../worker/order-state.ts'
 import { orderLabel } from '../src/lib/demo-orders.ts'
 import { confirmedRefundLabel } from '../shared/platform-order-status.ts'
@@ -104,6 +105,184 @@ function setup(t: Context) {
   }
   return { db, env, call, buyer, create, query, submit, login, partner, notice, calls, products, remoteOrder, redemption, faceToFace: () => { faceToFace = true }, quote: (patch: Record<string, unknown>) => { quotePatch = patch }, setExpiry: (value: number) => { expiry = new Date(value).toISOString() }, setQr: (value: string | null) => { qr = value }, setPayment: (v: string) => { payment = v }, setTask: (v: string, retry = false) => { taskStatus = v; fallback = retry }, setRefund: (v: string) => { refundStatus = v }, override: (v: typeof override) => { override = v } }
 }
+
+async function retainedSetup(t: Context, rawSession = session) {
+  const s = setup(t)
+  s.env.CDK_ENCRYPTION_KEY = Buffer.alloc(32, 51).toString('base64')
+  const buyer = await s.buyer(), order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)
+  const key = crypto.randomUUID()
+  const submit = (raw: string, retain = true, attemptKey = crypto.randomUUID()) => s.call(`/api/orders/${order.id}/fulfillment`, { action: 'submit', key: attemptKey, customerConfirmedEmail: true, retainCredential: retain, credential: { mode: 'session', session: raw } }, buyer)
+  assert.equal((await submit(rawSession, true, key)).status, 200)
+  const read = async () => (await (await s.call('/api/orders/' + order.id, undefined, buyer)).json()).order
+  const failSubscription = async () => {
+    s.setTask('failed', true)
+    s.override(path => path.startsWith('/v1/redemptions/') ? Response.json({ data: { ...s.redemption(), failure_code: 'account_has_subscription' } }) : undefined)
+    return (await (await s.query(order.id, buyer)).json()).order
+  }
+  const reuse = (source = key, attemptKey = crypto.randomUUID(), cookie = buyer) => s.call(`/api/orders/${order.id}/fulfillment`, { action: 'retry-saved', key: attemptKey, sourceAttemptId: source, customerConfirmedEmail: true }, cookie)
+  return { ...s, buyer, order, key, submitSaved: submit, read, failSubscription, reuse }
+}
+
+test('saved Session is encrypted and order scoped; failure exposes only safe retry metadata', async t => {
+  const s = await retainedSetup(t)
+  const before = await s.read()
+  assert.equal(before.fulfillment.canRetainCredential, true)
+  assert.equal(before.fulfillment.savedCredential.canReuse, false)
+  const current = await s.failSubscription()
+  assert.equal(current.fulfillment.savedCredential.canReuse, true)
+  assert.equal(current.fulfillment.savedCredential.attemptId, s.key)
+  assert.doesNotMatch(JSON.stringify(current), /PRIVATE-TOKEN|encrypted_request|request_hash/)
+  const stored = s.db.prepare('SELECT * FROM recharge_saved_credentials').get()!
+  assert.notEqual(stored.encrypted_request, session)
+  assert.doesNotMatch(JSON.stringify(stored), /PRIVATE-TOKEN|target@example/)
+  assert.equal(Number(stored.retain_until) - Number(stored.saved_at), 30 * 86400000)
+  const stranger = (await s.call('/api/orders/client', {})).headers.get('Set-Cookie')!.split(';')[0]
+  assert.equal((await s.reuse(s.key, crypto.randomUUID(), stranger)).status, 404)
+  const admin = await s.login()
+  assert.doesNotMatch(await (await s.call('/api/admin/orders', undefined, admin)).text(), /PRIVATE-TOKEN|encrypted_request/)
+})
+
+test('reuse creates one new attempt on the same paid order, preserving exact bytes and retention deadline', async t => {
+  const exact = '  ' + session + '\n', s = await retainedSetup(t, exact)
+  await s.failSubscription()
+  const until = s.db.prepare('SELECT retain_until FROM recharge_saved_credentials').get()!.retain_until
+  const retryKey = crypto.randomUUID()
+  const response = await s.reuse(s.key, retryKey)
+  assert.equal(response.status, 200, await response.clone().text())
+  const posts = s.calls.filter(c => c.path === '/v1/redemptions')
+  assert.equal(posts.length, 2); assert.equal(posts[0].body, posts[1].body)
+  assert.equal(JSON.parse(posts[1].body).credential.session, exact)
+  assert.notEqual(posts[0].key, posts[1].key)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM orders').get()!.n, 1)
+  assert.equal(s.calls.filter(c => c.path === '/v1/orders').length, 1)
+  assert.equal(s.db.prepare('SELECT retain_until FROM recharge_saved_credentials').get()!.retain_until, until)
+  assert.equal((await s.reuse(s.key, retryKey)).status, 200)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 2)
+})
+
+test('a newly submitted Session replaces saved data; a stale original-data button cannot reuse the replacement', async t => {
+  const s = await retainedSetup(t); await s.failSubscription()
+  const replacement = JSON.stringify({ user: { email: 'replacement@example.test' }, accessToken: 'REPLACEMENT-TOKEN' })
+  s.override(undefined); s.setTask('queued')
+  assert.equal((await s.submitSaved(replacement)).status, 200)
+  await s.failSubscription()
+  const count = s.calls.filter(c => c.path === '/v1/redemptions').length
+  assert.equal((await s.reuse()).status, 409)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, count)
+  const next = (await s.read()).fulfillment.savedCredential.attemptId
+  assert.equal((await s.reuse(next)).status, 200)
+  assert.equal(JSON.parse(s.calls.filter(c => c.path === '/v1/redemptions').at(-1)!.body).credential.session, replacement)
+})
+
+test('opting out on a replacement removes the old saved snapshot; old orders without a snapshot require new input', async t => {
+  const s = await retainedSetup(t); await s.failSubscription()
+  s.override(undefined); s.setTask('queued')
+  assert.equal((await s.submitSaved(session, false)).status, 200)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_saved_credentials').get()!.n, 0)
+  await s.failSubscription(); assert.equal((await s.read()).fulfillment.savedCredential, null)
+  assert.equal((await s.reuse()).status, 409)
+})
+
+test('unknown submission reuses the original key and bytes even after token expiry, never creates a second attempt', async t => {
+  const s = setup(t); s.env.CDK_ENCRYPTION_KEY = Buffer.alloc(32, 51).toString('base64')
+  const buyer = await s.buyer(), order = await s.create(buyer), key = crypto.randomUUID()
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)
+  const raw = JSON.stringify({ user: { email: 'target@example.test' }, accessToken: 'OPAQUE-TOKEN', expires: new Date(Date.now() + 3600000).toISOString() })
+  s.override(path => { if (path === '/v1/redemptions') throw new Error('lost request') })
+  assert.equal((await s.call(`/api/orders/${order.id}/fulfillment`, { action: 'submit', key, customerConfirmedEmail: true, retainCredential: true, credential: { mode: 'session', session: raw } }, buyer)).status, 503)
+  s.db.prepare('UPDATE recharge_saved_credentials SET credential_expires_at=1').run()
+  s.override(undefined)
+  const response = await s.call(`/api/orders/${order.id}/fulfillment`, { action: 'retry-saved', key, sourceAttemptId: key, customerConfirmedEmail: true }, buyer)
+  assert.equal(response.status, 200, await response.clone().text())
+  const posts = s.calls.filter(c => c.path === '/v1/redemptions')
+  assert.equal(posts.length, 2); assert.equal(posts[0].key, posts[1].key); assert.equal(posts[0].body, posts[1].body)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_redemptions').get()!.n, 1)
+})
+
+test('fresh supplier state, pending execution and refund hold all block new saved-data attempts', async t => {
+  const s = await retainedSetup(t); await s.failSubscription()
+  s.override(path => path.startsWith('/v1/redemptions/') ? Response.json({ data: { ...s.redemption(), fallback_recharge_available: false, retry_allowed: false, next_action: 'none' } }) : undefined)
+  assert.equal((await s.reuse()).status, 409)
+  const count = s.calls.filter(c => c.path === '/v1/redemptions').length
+  await s.failSubscription()
+  s.db.prepare('UPDATE orders SET refund_hold=1 WHERE id=?').run(s.order.id)
+  assert.equal((await s.reuse()).status, 409)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, count)
+})
+
+test('known-expired or provider-invalid saved credentials require a fresh Session, while new Session remains possible', async t => {
+  const s = await retainedSetup(t); await s.failSubscription()
+  s.db.prepare('UPDATE recharge_saved_credentials SET credential_expires_at=1').run()
+  assert.equal((await s.read()).fulfillment.savedCredential.canReuse, false)
+  assert.equal((await s.reuse()).status, 409)
+  s.db.prepare('UPDATE recharge_saved_credentials SET credential_expires_at=NULL').run()
+  s.db.prepare("UPDATE recharge_redemptions SET failure_code='session_invalid'").run()
+  s.override(path => path.startsWith('/v1/redemptions/') ? Response.json({ data: { ...s.redemption(), failure_code: 'session_invalid' } }) : undefined)
+  const count = s.calls.filter(c => c.path === '/v1/redemptions').length
+  assert.equal((await s.reuse()).status, 409)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, count)
+  s.override(undefined); s.setTask('queued')
+  assert.equal((await s.submitSaved(session)).status, 200)
+})
+
+test('success, refund, redemption stop and retention expiry purge saved secrets', async t => {
+  const s = await retainedSetup(t)
+  s.setTask('succeeded'); await s.query(s.order.id, s.buyer)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_saved_credentials').get()!.n, 0)
+  const cases = ['refund', 'block', 'expiry']
+  for (const kind of cases) {
+    const next = await retainedSetup(t)
+    if (kind === 'refund') next.db.prepare('UPDATE orders SET refunded_cents=1 WHERE id=?').run(next.order.id)
+    if (kind === 'block') next.db.prepare('UPDATE orders SET redemption_blocked=1 WHERE id=?').run(next.order.id)
+    if (kind === 'expiry') { next.db.prepare('UPDATE recharge_saved_credentials SET saved_at=0,retain_until=1').run(); await purgeRetainedCredentials(next.env) }
+    assert.equal(next.db.prepare('SELECT COUNT(*) n FROM recharge_saved_credentials').get()!.n, 0, kind)
+  }
+})
+
+test('ciphertext corruption, mismatched encryption key and audit rollback do not forward new credentials', async t => {
+  const s = await retainedSetup(t); await s.failSubscription()
+  s.db.prepare("UPDATE recharge_saved_credentials SET encrypted_request='invalid'").run()
+  const before = s.calls.filter(c => c.path === '/v1/redemptions').length
+  assert.equal((await s.reuse()).status, 409)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, before)
+  s.db.exec("CREATE TRIGGER fail_saved_audit BEFORE INSERT ON order_events WHEN NEW.action='recharge-submit' BEGIN SELECT RAISE(ABORT,'stop'); END")
+  assert.equal((await s.submitSaved(session)).status, 503)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_redemptions').get()!.n, 1)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, before)
+})
+
+test('saved retries require fresh finance and task reads; query backoff cannot reuse stale retry permission', async t => {
+  const s = await retainedSetup(t); await s.failSubscription()
+  const before = s.calls.filter(c => c.path === '/v1/redemptions').length
+  s.override(path => path === '/v1/orders/ord_test' ? Response.json({ error: { code: 'api_poll_too_frequent', retryable: true, retry_after: 60 } }, { status: 429, headers: { 'Retry-After': '60' } }) : undefined)
+  const first = await s.reuse()
+  assert.equal(first.ok, false)
+  s.override(undefined)
+  assert.equal((await s.reuse()).ok, false)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, before)
+})
+
+test('simultaneous saved retry clicks serialize before forwarding a new attempt', async t => {
+  const s = await retainedSetup(t); await s.failSubscription()
+  const retry = crypto.randomUUID()
+  const results = await Promise.all([s.reuse(s.key, retry), s.reuse(s.key, retry)])
+  assert.equal(results.filter(r => r.status === 200).length, 1)
+  assert.equal(results.filter(r => r.status === 409).length, 1)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 2)
+})
+
+test('unknown ciphertext cannot be moved across orders; the encryption key must match the original vault', async t => {
+  const s = await retainedSetup(t); await s.failSubscription()
+  const before = s.calls.filter(c => c.path === '/v1/redemptions').length
+  const saved = (await retainedCredential(s.env, s.order.id))!
+  const attempt = s.db.prepare('SELECT request_hash FROM recharge_redemptions WHERE id=?').get(s.key)!
+  await assert.rejects(() => retainedRequest(s.env, { ...saved, order_id: 'YMX-ANOTHER-ORDER' }, String(attempt.request_hash)), /暂时无法读取/)
+  s.env.CDK_ENCRYPTION_KEY = Buffer.alloc(32, 52).toString('base64')
+  assert.equal((await s.read()).fulfillment.savedCredential.canReuse, false)
+  assert.equal((await s.reuse()).status, 409)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, before)
+})
 
 test('admin can read and search the stored upstream order without contacting the supplier', async t => {
   const s = setup(t); const buyer = await s.buyer(); const order = await s.create(buyer); const admin = await s.login()

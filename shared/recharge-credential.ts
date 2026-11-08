@@ -1,5 +1,5 @@
 // Validate the extracted token while retaining the caller's exact bytes for
-// idempotent recovery. Credentials must never be persisted by the storefront.
+// idempotent recovery. Any retained request must use the order-scoped encrypted vault.
 export function rechargeCredentialToken(raw: string, mode: 'session' | 'access_token'): { token: string; expires?: unknown } {
   const text = raw.trim()
   if (!text) throw new Error('Empty credential')

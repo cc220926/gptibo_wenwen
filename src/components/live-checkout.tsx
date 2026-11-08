@@ -23,6 +23,9 @@ import '@/styles/live-checkout.css'
 type Props = { order: ServerOrder; open: boolean; onUpdated?: () => void; onOrderUpdated?: (order: ServerOrder) => void; onOrders: () => void; error?: string; refreshTarget?: HTMLElement | null; refreshDisabled?: boolean; transport?: typeof api; initialSession?: string }
 export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders, error, refreshTarget, refreshDisabled, transport = api, initialSession = '' }: Props) {
   const [session, setSession] = useState(initialSession)
+  const [retainCredential, setRetainCredential] = useState(true)
+  const [showReplacement, setShowReplacement] = useState(false)
+  const savedAttemptKey = useRef<{ source: string; key: string } | null>(null)
   const [confirmed, setConfirmed] = useState(false)
   const [touched, setTouched] = useState(false)
   const [busy, setBusy] = useState<'' | 'query' | 'check' | 'submit'>('')
@@ -120,7 +123,7 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
           }
           setBusy('submit'); setSession(''); setConfirmed(false)
           const submittedAt = performance.now()
-          const result = await transport<{ order: ServerOrder }>(`/api/orders/${order.id}/fulfillment`, { action: 'submit', key: attemptKey.current, customerConfirmedEmail: true, credential, precheckReceipt })
+          const result = await transport<{ order: ServerOrder }>(`/api/orders/${order.id}/fulfillment`, { action: 'submit', key: attemptKey.current, customerConfirmedEmail: true, credential, precheckReceipt, retainCredential: Boolean(info.canRetainCredential && !unknown && retainCredential) })
           // Dispatch immediately; only the visual handoff has a brief minimum dwell.
           if (precheckReceipt && !matchMedia('(prefers-reduced-motion: reduce)').matches) await new Promise(resolve => setTimeout(resolve, Math.max(0, 450 - (performance.now() - submittedAt))))
           callbacks.current.onOrderUpdated?.(result.order)
@@ -135,6 +138,22 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
     } catch (e) { if (submit) { setPrecheck(null); setSubmitFailure(errorMessage(e)) } else setFailure(errorMessage(e)) }
     finally { submitting.current = false; setBusy(''); callbacks.current.onUpdated?.() }
   }
+  async function reuseSaved() {
+    const saved = info.savedCredential
+    if (submitting.current || busy || !saved?.canReuse) return
+    submitting.current = true; setBusy('submit'); setSubmitFailure(''); setFailure('')
+    const key = info.retryKey ?? (savedAttemptKey.current?.source === saved.attemptId ? savedAttemptKey.current.key : crypto.randomUUID())
+    savedAttemptKey.current = { source: saved.attemptId, key }
+    try {
+      await lane.current.run(async () => {
+        const result = await transport<{ order: ServerOrder }>(`/api/orders/${order.id}/fulfillment`, { action: 'retry-saved', key, sourceAttemptId: saved.attemptId, customerConfirmedEmail: true })
+        setSession(''); setConfirmed(false); setShowReplacement(false); setPrecheck(null)
+        callbacks.current.onOrderUpdated?.(result.order)
+        savedAttemptKey.current = null
+      })
+    } catch (e) { setSubmitFailure(errorMessage(e)) }
+    finally { submitting.current = false; setBusy(''); callbacks.current.onUpdated?.() }
+  }
   // Place the original refresh control in the footer while sharing the submit lock and errors.
   const refresh = <Button variant="ghost" className="flow-refresh-action" disabled={Boolean(busy) || refreshDisabled} onClick={() => void run()}><RefreshCw className={busy === 'query' ? 'processing-spinner' : undefined} size={13} />{busy === 'query' ? '正在核对…' : expired ? '核对付款结果' : '刷新进度'}</Button>
   return <div className="checkout-body live-checkout" aria-busy={Boolean(busy)}>
@@ -145,10 +164,11 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
 
       <CheckoutStageTransition stage={info.canSubmit ? 'input' : order.status === 'processing' && !unknown ? 'processing' : 'other'}>{stage => <>
       {stage === 'input' && <>
-        {unknown && busy !== 'submit' ? <Alert className="live-notice" role="status"><TriangleAlert aria-hidden="true" /><AlertTitle>提交待确认</AlertTitle><AlertDescription>{submitFailure && <>{submitFailure}<br /></>}充值服务尚未确认收到本次提交，暂不能确认已开始充值。先刷新查询；仍未确认时，粘贴原 Session 核对同一次提交。请勿重新付款。</AlertDescription></Alert>
+        {unknown && busy !== 'submit' ? <Alert className="live-notice" role="status"><TriangleAlert aria-hidden="true" /><AlertTitle>提交待确认</AlertTitle><AlertDescription>{submitFailure && <>{submitFailure}<br /></>}充值服务尚未确认收到本次提交，暂不能确认已开始充值。先刷新查询；仍未确认时，使用原资料或粘贴原 Session 核对同一次提交。请勿重新付款。</AlertDescription></Alert>
           : failed && busy !== 'submit' ? <Alert className="live-notice" role="status"><TriangleAlert aria-hidden="true" /><AlertTitle>{failureTitle}</AlertTitle><AlertDescription>{info.message ?? '请获取新的 Session 后重试。'}{info.failureCode !== 'account_has_subscription' && ' 本订单无需重复付款。'}</AlertDescription></Alert>
           : <PaymentConfirmed>付款已确认，请连接要充值的账号。</PaymentConfirmed>}
-        <LiveSessionForm session={session} confirmed={confirmed} touched={touched} busy={busy} precheckRequired={info.precheckRequired} precheck={precheck} retryMode={info.retryMode} retryKey={info.retryKey} failed={failed} onSessionChange={value => { setSession(value); setConfirmed(false); setTouched(false); setPrecheck(null) }} onConfirmChange={setConfirmed} onTouch={() => setTouched(true)} onSubmit={() => void run(true)} />
+        {info.savedCredential && <section className="live-saved-credential" aria-label="原资料重试"><h4>使用原资料，或重新提交 Session</h4><p>{unknown ? '已加密保存原提交资料。可核对同一次提交；结果未确认前，不能更换资料或新建充值任务。' : info.savedCredential.expired ? '原资料已失效，请重新获取并提交 Session，无需再次付款。' : '已加密保存上次提交的资料。点击下方按钮即授权使用原资料重试本订单，无需再次付款。'}{info.accountEmailMasked && <> 账号：<strong>{info.accountEmailMasked}</strong>。</>}</p><div className="live-saved-actions"><Button className="primary-action" disabled={Boolean(busy) || !info.savedCredential.canReuse} onClick={() => void reuseSaved()}><RefreshCw size={15} />{busy === 'submit' && !showReplacement ? '正在核对原资料…' : unknown ? '核对原提交' : '使用原资料重试'}</Button><Button variant="outline" disabled={Boolean(busy)} onClick={() => { setShowReplacement(true); setSession(''); setConfirmed(false); setTouched(false); setPrecheck(null) }}>{unknown ? '手动粘贴原资料' : '重新提交 Session'}</Button></div><small>资料仅用于本订单，最多保留 30 天；即使未到保存期限，也可能提前失效。</small></section>}
+        {(!info.savedCredential || showReplacement || !info.savedCredential.canReuse) && <LiveSessionForm retentionAvailable={Boolean(info.canRetainCredential && !unknown)} retainCredential={retainCredential} onRetainChange={setRetainCredential} session={session} confirmed={confirmed} touched={touched} busy={busy} precheckRequired={info.precheckRequired} precheck={precheck} retryMode={info.retryMode} retryKey={info.retryKey} failed={failed} onSessionChange={value => { setSession(value); setConfirmed(false); setTouched(false); setPrecheck(null) }} onConfirmChange={setConfirmed} onTouch={() => setTouched(true)} onSubmit={() => void run(true)} />}
       </>}
 
       {stage === 'processing' && <LiveRechargeProcessing progressStage={info.progressStage} progressUpdatedAt={info.progressUpdatedAt} rechargeStatus={info.rechargeStatus} syncError={Boolean(info.syncError || failure || error)} />}

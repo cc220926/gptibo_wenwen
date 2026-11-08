@@ -1,5 +1,6 @@
+import { canRetainCredential, retainedCredential, retainedMetadata, retainedRequest, retainedStatement, type SavedCredential } from './saved-credentials.ts'
 import { categoryMessages, failureMessages, publicCode, resultStages, subscriptionExpiryHint, subscriptionFailureMessage } from './errors.ts'
-import { credentialExpiryProblem } from '../../shared/credential-expiry.ts'
+import { credentialExpiryAt, credentialExpiryProblem } from '../../shared/credential-expiry.ts'
 import { rechargeCredentialToken } from '../../shared/recharge-credential.ts'
 import { ApiError, body, hash, json, type Env, type Statement } from '../platform.ts'
 import { change, getOrder, type Order } from '../order-state.ts'
@@ -181,7 +182,7 @@ async function applyRedemption(env: Env, row: SupplierOrder, attempt: Attempt, r
       .bind(event, order.status, status === 'success' ? '充值服务已确认完成' : status === 'failed' ? failureMessage(failure, category, expiryHint) : '充值任务已受理，等待完成', now, row.order_id, event),
   ])
 }
-async function syncUnlocked(env: Env, row: SupplierOrder) {
+async function syncUnlocked(env: Env, row: SupplierOrder, strict = false) {
   const current = await expireRechargeOrder(env, await getOrder(env, row.order_id))
   if (!row.remote_id && !row.attempted_at && current.status === 'cancelled') return current
   const ready = await ensureRemote(env, row)
@@ -206,6 +207,7 @@ async function syncUnlocked(env: Env, row: SupplierOrder) {
     env.INTEREST_DB.prepare('UPDATE recharge_orders SET order_checked_notify_version=MAX(order_checked_notify_version,?),redemption_checked_notify_version=MAX(redemption_checked_notify_version,?) WHERE order_id=? AND lease_token=?').bind(orderSynced ? row.notify_version : 0, redemptionSynced ? row.notify_version : 0, row.order_id, row.lease_token),
     env.INTEREST_DB.prepare('UPDATE recharge_orders SET checked_notify_version=MAX(checked_notify_version,MIN(order_checked_notify_version,redemption_checked_notify_version)) WHERE order_id=? AND lease_token=?').bind(row.order_id, row.lease_token),
   ])
+  if (strict && failures.length) throw failures[0]
   const failure = failures.find(error => !(error instanceof RechargeReadDeferred))
   if (failure) throw failure
   return expireRechargeOrder(env, await getOrder(env, row.order_id))
@@ -273,7 +275,13 @@ export async function rechargeSummary(env: Env, order: Order) {
   // Never publish the supplier cashier URL/token, including legacy link orders.
   const paymentKind = payable ? 'qr' : null
   const publicQr = payable ? publicAlipayQr(row.payment_qr) : null
-  return { financialHold: !!row.financial_hold && !!row.remote_id && order.payment_status === 'paid', paymentUrl: null, paymentQr: publicQr, paymentKind, expiresAt, paymentExpired, rechargeStatus: completed ? 'succeeded' : attempt?.status ?? null, failureCode: attempt?.failure_code ?? null, errorCategory: attempt?.error_category ?? null, resultCode: attempt?.result_code ?? null, progressStage: completed ? 'completed' : attempt?.progress_stage ?? null, progressVersion: attempt?.progress_version ?? 0, progressUpdatedAt: attempt?.progress_updated_at ?? null, attemptNo: attempt?.remote_attempt_no ?? null, retryKey: attempt?.status === 'unknown' ? attempt.id : null, retryMode: attempt?.status === 'unknown' ? attempt.credential_mode : null, canSubmit: available && order.status !== 'success' && (!attempt || (attempt.status === 'unknown' && !unknownExpired(attempt)) || attempt.status === 'rejected' || !!attempt.fallback), message: row.financial_hold && order.payment_status === 'paid' ? '平台退款金额正在核对，充值与代理收益暂时冻结，请联系客服。' : attempt && unknownExpired(attempt) ? '提交结果长期未确认，请联系客服核对原任务，不要重新付款或提交新任务。' : attempt && (attempt.failure_code || (terminal(attempt.status) && attempt.status !== 'succeeded')) ? failureMessage(attempt.failure_code, attempt.error_category, attempt.subscription_expires_hint, available && !!attempt.fallback) : null, accountEmailMasked: attempt?.account_email_masked ?? null, finishedAt: attempt?.finished_at ?? null }
+  const retentionReady = available && !completed && await canRetainCredential(env)
+  const saved = !completed ? await retainedMetadata(env, order.id) : null
+  const canSubmit = available && !completed && (!attempt || (attempt.status === 'unknown' && !unknownExpired(attempt)) || attempt.status === 'rejected' || !!attempt.fallback)
+  const savedCurrent = saved && saved.attempt_id === attempt?.id && saved.retain_until > Date.now()
+  const savedExpired = savedCurrent && ((saved.credential_expires_at !== null && saved.credential_expires_at <= Date.now()) || attempt?.failure_code === 'session_invalid')
+  const savedCredential = savedCurrent ? { attemptId: saved.attempt_id, savedAt: saved.saved_at, retainUntil: saved.retain_until, expired: Boolean(savedExpired), canReuse: Boolean(canSubmit && retentionReady && (attempt?.status === 'unknown' || !savedExpired)) } : null
+  return { canRetainCredential: Boolean(retentionReady), savedCredential, financialHold: !!row.financial_hold && !!row.remote_id && order.payment_status === 'paid', paymentUrl: null, paymentQr: publicQr, paymentKind, expiresAt, paymentExpired, rechargeStatus: completed ? 'succeeded' : attempt?.status ?? null, failureCode: attempt?.failure_code ?? null, errorCategory: attempt?.error_category ?? null, resultCode: attempt?.result_code ?? null, progressStage: completed ? 'completed' : attempt?.progress_stage ?? null, progressVersion: attempt?.progress_version ?? 0, progressUpdatedAt: attempt?.progress_updated_at ?? null, attemptNo: attempt?.remote_attempt_no ?? null, retryKey: attempt?.status === 'unknown' ? attempt.id : null, retryMode: attempt?.status === 'unknown' ? attempt.credential_mode : null, canSubmit, message: row.financial_hold && order.payment_status === 'paid' ? '平台退款金额正在核对，充值与代理收益暂时冻结，请联系客服。' : attempt && unknownExpired(attempt) ? '提交结果长期未确认，请联系客服核对原任务，不要重新付款或提交新任务。' : attempt && (attempt.failure_code || (terminal(attempt.status) && attempt.status !== 'succeeded')) ? failureMessage(attempt.failure_code, attempt.error_category, attempt.subscription_expires_hint, available && !!attempt.fallback) : null, accountEmailMasked: attempt?.account_email_masked ?? null, finishedAt: attempt?.finished_at ?? null }
 }
 export async function rechargeAction(requestMessage: Request, env: Env, order: Order) {
   if (requestMessage.method !== 'POST') throw new ApiError('请求方式不支持。', 405)
@@ -282,23 +290,46 @@ export async function rechargeAction(requestMessage: Request, env: Env, order: O
   if (order.mode !== 'live' || !row) throw new ApiError('此订单没有充值通道。', 409)
   if (!(await env.INTEREST_LIMITER.limit({ key: 'recharge:' + order.owner_hash })).success) throw new ApiError('操作较频繁，请稍后重试。', 429)
   if (data.action === 'query' || data.action === 'poll') { await locked(env, row, fresh => syncUnlocked(env, fresh)); return }
-  if (data.action !== 'submit' || typeof data.key !== 'string' || !/^[a-f0-9-]{36}$/.test(data.key) || data.customerConfirmedEmail !== true) throw new ApiError('请确认账号并重新提交。')
-  const credential = data.credential as Record<string, unknown> | undefined
-  let normalized: { mode: string; session?: string; access_token?: string }
-  if (credential?.mode === 'session' && typeof credential.session === 'string') {
-    normalized = { mode: 'session', session: credential.session }
-  } else if (credential?.mode === 'access_token' && typeof credential.access_token === 'string') normalized = { mode: 'access_token', access_token: credential.access_token }
-  else throw new ApiError('请选择 Session 或 Access Token，并填写有效凭据。')
-  let extracted: ReturnType<typeof rechargeCredentialToken>
-  try { extracted = rechargeCredentialToken(normalized.session ?? normalized.access_token!, normalized.mode as 'session' | 'access_token') }
-  catch { throw new ApiError('登录资料不完整或令牌过长，请重新获取完整内容。') }
-  await locked(env, row, async () => {
+  const reuse = data.action === 'retry-saved'
+  if ((!reuse && data.action !== 'submit') || typeof data.key !== 'string' || !/^[a-f0-9-]{36}$/.test(data.key) || data.customerConfirmedEmail !== true) throw new ApiError('请确认账号并重新提交。')
+  if (reuse && (typeof data.sourceAttemptId !== 'string' || !/^[a-f0-9-]{36}$/.test(data.sourceAttemptId))) throw new ApiError('原资料编号无效，请刷新订单。')
+  await locked(env, row, async fresh => {
+    if (reuse) {
+      if (!fresh.remote_id || fresh.payment_status !== 'paid') throw new ApiError('请先核对原订单付款状态。', 409)
+      // Fresh signed reads must confirm the original paid order and retry right.
+      await syncUnlocked(env, fresh, true)
+    }
     const current = await getOrder(env, order.id); const ready = await findRechargeOrder(env, order.id)
     if (current.redemption_blocked) throw new ApiError('本订单已禁止再次兑换，请联系支持。', 409)
     if (!ready?.remote_id || ready.financial_hold || ready.payment_status !== 'paid' || current.payment_status !== 'paid' || current.refund_hold || current.refunded_cents || current.status === 'success') throw new ApiError('当前订单不能提交充值，请先刷新付款和售后状态。', 409)
-    const raw = JSON.stringify({ mode: 'auto_recharge', order_id: ready.remote_id, credential: normalized, customer_confirmed_email: true })
+    let attempt = await latestAttempt(env, order.id)
+    let saved: SavedCredential | null = null
+    let raw: string
+    let normalized: { mode: string; session?: string; access_token?: string }
+    if (reuse) {
+      saved = await retainedCredential(env, order.id)
+      if (!saved || saved.attempt_id !== attempt?.id || (saved.attempt_id !== data.sourceAttemptId && attempt?.id !== data.key)) throw new ApiError('原资料已更新或未保存，请刷新订单或重新提交 Session。', 409)
+      raw = await retainedRequest(env, saved, attempt.request_hash)
+      let payload
+      try { payload = JSON.parse(raw) } catch { throw new ApiError('原资料暂不可用，请重新提交 Session。', 409) }
+      if (payload.mode !== 'auto_recharge' || payload.order_id !== ready.remote_id || payload.customer_confirmed_email !== true) throw new ApiError('原资料与本订单不匹配，请重新提交 Session。', 409)
+      normalized = payload.credential
+      if (attempt.id !== data.key && (attempt.failure_code === 'session_invalid' || (saved.credential_expires_at !== null && saved.credential_expires_at <= Date.now()))) throw new ApiError('原资料已失效，请重新提交新的 Session。', 409)
+    } else {
+      const credential = data.credential as Record<string, unknown> | undefined
+      if (credential?.mode === 'session' && typeof credential.session === 'string') normalized = { mode: 'session', session: credential.session }
+      else if (credential?.mode === 'access_token' && typeof credential.access_token === 'string') normalized = { mode: 'access_token', access_token: credential.access_token }
+      else throw new ApiError('请选择 Session 或 Access Token，并填写有效凭据。')
+      raw = JSON.stringify({ mode: 'auto_recharge', order_id: ready.remote_id, credential: normalized, customer_confirmed_email: true })
+    }
+    if (!normalized || !['session','access_token'].includes(normalized.mode)) throw new ApiError('登录资料不完整，请重新获取完整内容。')
+    let extracted: ReturnType<typeof rechargeCredentialToken>
+    try { extracted = rechargeCredentialToken(normalized.session ?? normalized.access_token!, normalized.mode as 'session' | 'access_token') }
+    catch { throw new ApiError('登录资料不完整或令牌过长，请重新获取完整内容。') }
+    const retain = reuse || data.retainCredential === true
+    if (retain && !await canRetainCredential(env)) throw new ApiError('资料加密保存暂不可用，请稍后重试或取消保存。', 503)
     if (new TextEncoder().encode(raw).byteLength > 256 * 1024) throw new ApiError('提交内容过长，请仅提交本次充值所需的账号资料。', 413)
-    const digest = await hash(raw); let attempt = await latestAttempt(env, order.id)
+    const digest = await hash(raw)
     if (attempt && attempt.id === data.key) {
       if (unknownExpired(attempt)) throw new ApiError('原提交已超过幂等保护期，请联系客服核对，不能再次提交。', 409)
       if (attempt.request_hash !== digest) throw new ApiError('该提交编号已用于其他资料。结果未知时请重交原资料。', 409)
@@ -308,10 +339,13 @@ export async function rechargeAction(requestMessage: Request, env: Env, order: O
       const expiryProblem = credentialExpiryProblem(extracted.token, extracted.expires)
       if (expiryProblem) throw new ApiError(expiryProblem)
       const now = Date.now(); const event = crypto.randomUUID()
+      const retained = retain ? await retainedStatement(env, order.id, String(data.key), raw, credentialExpiryAt(extracted.token, extracted.expires), saved ?? undefined) : null
       await env.INTEREST_DB.batch([
         env.INTEREST_DB.prepare("INSERT INTO recharge_redemptions(id,order_id,attempt_no,request_hash,credential_mode,created_at) SELECT ?,id,?,?,?,? FROM orders WHERE id=? AND version=? AND redemption_blocked=0 AND refund_hold=0 AND refunded_cents=0 AND payment_status='paid'").bind(String(data.key), (attempt?.attempt_no ?? 0) + 1, digest, normalized.mode, now, order.id, current.version),
         env.INTEREST_DB.prepare("UPDATE orders SET status='processing',started_at=?,updated_at=?,version=version+1,last_event_id=? WHERE id=? AND EXISTS(SELECT 1 FROM recharge_redemptions WHERE id=? AND order_id=?)").bind(now, now, event, order.id, String(data.key), order.id),
         env.INTEREST_DB.prepare("INSERT INTO order_events(id,order_id,actor,action,from_status,to_status,note,order_version,created_at) SELECT ?,id,'customer','recharge-submit',?,'processing','客户已授权提交充值资料',version,? FROM orders WHERE id=? AND last_event_id=?").bind(event, current.status, now, order.id, event),
+        env.INTEREST_DB.prepare('DELETE FROM recharge_saved_credentials WHERE order_id=? AND EXISTS(SELECT 1 FROM recharge_redemptions WHERE id=? AND order_id=?)').bind(order.id, String(data.key), order.id),
+        ...(retained ? [retained] : []),
       ])
       attempt = await latestAttempt(env, order.id)
       if (!attempt || attempt.id !== data.key) throw new ApiError('订单已更新，请刷新重试。', 409)
