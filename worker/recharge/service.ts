@@ -1,4 +1,4 @@
-import { canRetainCredential, retainedCredential, retainedMetadata, retainedRequest, retainedStatement, type SavedCredential } from './saved-credentials.ts'
+import { credentialRetentionEnabled, canRetainCredential, retainedCredential, retainedMetadata, retainedRequest, retainedStatement, type SavedCredential } from './saved-credentials.ts'
 import { categoryMessages, failureMessages, publicCode, resultStages, subscriptionExpiryHint, subscriptionFailureMessage } from './errors.ts'
 import { credentialExpiryAt, credentialExpiryProblem } from '../../shared/credential-expiry.ts'
 import { rechargeCredentialToken } from '../../shared/recharge-credential.ts'
@@ -276,7 +276,7 @@ export async function rechargeSummary(env: Env, order: Order) {
   const paymentKind = payable ? 'qr' : null
   const publicQr = payable ? publicAlipayQr(row.payment_qr) : null
   const retentionReady = available && !completed && await canRetainCredential(env)
-  const saved = !completed ? await retainedMetadata(env, order.id) : null
+  const saved = !completed && credentialRetentionEnabled(env) ? await retainedMetadata(env, order.id) : null
   const canSubmit = available && !completed && (!attempt || (attempt.status === 'unknown' && !unknownExpired(attempt)) || attempt.status === 'rejected' || !!attempt.fallback)
   const savedCurrent = saved && saved.attempt_id === attempt?.id && saved.retain_until > Date.now()
   const savedExpired = savedCurrent && ((saved.credential_expires_at !== null && saved.credential_expires_at <= Date.now()) || attempt?.failure_code === 'session_invalid')
@@ -291,6 +291,7 @@ export async function rechargeAction(requestMessage: Request, env: Env, order: O
   if (!(await env.INTEREST_LIMITER.limit({ key: 'recharge:' + order.owner_hash })).success) throw new ApiError('操作较频繁，请稍后重试。', 429)
   if (data.action === 'query' || data.action === 'poll') { await locked(env, row, fresh => syncUnlocked(env, fresh)); return }
   const reuse = data.action === 'retry-saved'
+  if (reuse && !credentialRetentionEnabled(env)) throw new ApiError('原资料留存与重试已关闭，请重新提交 Session。', 409)
   if ((!reuse && data.action !== 'submit') || typeof data.key !== 'string' || !/^[a-f0-9-]{36}$/.test(data.key) || data.customerConfirmedEmail !== true) throw new ApiError('请确认账号并重新提交。')
   if (reuse && (typeof data.sourceAttemptId !== 'string' || !/^[a-f0-9-]{36}$/.test(data.sourceAttemptId))) throw new ApiError('原资料编号无效，请刷新订单。')
   await locked(env, row, async fresh => {
@@ -327,7 +328,8 @@ export async function rechargeAction(requestMessage: Request, env: Env, order: O
     let extracted: ReturnType<typeof rechargeCredentialToken>
     try { extracted = rechargeCredentialToken(normalized.session ?? normalized.access_token!, normalized.mode as 'session' | 'access_token') }
     catch { throw new ApiError('登录资料不完整或令牌过长，请重新获取完整内容。') }
-    const retain = reuse || data.retainCredential === true
+    // Old open pages may still opt in; disabling retention must not block a paid submission.
+    const retain = credentialRetentionEnabled(env) && (reuse || data.retainCredential === true)
     if (retain && !await canRetainCredential(env)) throw new ApiError('资料加密保存暂不可用，请稍后重试或取消保存。', 503)
     if (new TextEncoder().encode(raw).byteLength > 256 * 1024) throw new ApiError('提交内容过长，请仅提交本次充值所需的账号资料。', 413)
     const digest = await hash(raw)

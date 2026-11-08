@@ -48,6 +48,8 @@ RECHARGE_WEBHOOK_SECRET= # Configure locally; never commit a real value.
 RECHARGE_NOTIFY_URL="https://shop.example.invalid/api/recharge/webhook"
 RECHARGE_PRODUCT_MAP='{}'
 RECHARGE_CHECKOUT_ENABLED="false"
+# Saved login credentials are disabled by default.
+RECHARGE_SAVED_CREDENTIALS_ENABLED="false"
 # Opt into the signed /v1/orders/{id}/payment-code API; false keeps the legacy cashier.
 RECHARGE_PAYMENT_CODE_ENABLED="false"
 

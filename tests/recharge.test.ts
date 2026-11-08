@@ -109,6 +109,7 @@ function setup(t: Context) {
 async function retainedSetup(t: Context, rawSession = session) {
   const s = setup(t)
   s.env.CDK_ENCRYPTION_KEY = Buffer.alloc(32, 51).toString('base64')
+  s.env.RECHARGE_SAVED_CREDENTIALS_ENABLED = 'true'
   const buyer = await s.buyer(), order = await s.create(buyer)
   await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)
   const key = crypto.randomUUID()
@@ -123,6 +124,53 @@ async function retainedSetup(t: Context, rawSession = session) {
   const reuse = (source = key, attemptKey = crypto.randomUUID(), cookie = buyer) => s.call(`/api/orders/${order.id}/fulfillment`, { action: 'retry-saved', key: attemptKey, sourceAttemptId: source, customerConfirmedEmail: true }, cookie)
   return { ...s, buyer, order, key, submitSaved: submit, read, failSubscription, reuse }
 }
+
+test('disabled Session retention ignores old client opt-ins while allowing ordinary paid submission', async t => {
+  for (const flag of [undefined, 'false']) {
+    const s = setup(t); s.env.CDK_ENCRYPTION_KEY = Buffer.alloc(32, 51).toString('base64')
+    s.env.RECHARGE_SAVED_CREDENTIALS_ENABLED = flag
+    const buyer = await s.buyer(), order = await s.create(buyer)
+    await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)
+    const r = await s.call(`/api/orders/${order.id}/fulfillment`, { action: 'submit', key: crypto.randomUUID(), customerConfirmedEmail: true, retainCredential: true, credential: { mode: 'session', session } }, buyer)
+    assert.equal(r.status, 200, await r.clone().text())
+    assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_saved_credentials').get()!.n, 0)
+    const current = (await r.json()).order
+    assert.equal(current.fulfillment.canRetainCredential, false)
+    assert.equal(current.fulfillment.savedCredential, null)
+    assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 1)
+    t.mock.restoreAll()
+  }
+})
+
+test('disabling Session retention blocks stale saved-retry buttons but permits a replacement Session', async t => {
+  const s = await retainedSetup(t); await s.failSubscription()
+  s.env.RECHARGE_SAVED_CREDENTIALS_ENABLED = 'false'
+  const before = s.calls.length
+  assert.equal((await s.reuse()).status, 409)
+  assert.equal(s.calls.length, before)
+  const current = await s.read()
+  assert.equal(current.fulfillment.canRetainCredential, false)
+  assert.equal(current.fulfillment.savedCredential, null)
+  s.override(undefined); s.setTask('queued')
+  assert.equal((await s.submitSaved(session.replace('PRIVATE-TOKEN', 'REPLACEMENT-TOKEN'))).status, 200)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_saved_credentials').get()!.n, 0)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM orders').get()!.n, 1)
+  assert.equal(s.calls.filter(c => c.path === '/v1/orders').length, 1)
+})
+
+test('disabled Session retention clears saved snapshots after active submissions finish without altering orders', async t => {
+  const s = await retainedSetup(t)
+  s.env.RECHARGE_SAVED_CREDENTIALS_ENABLED = 'false'
+  const before = s.db.prepare('SELECT status,payment_status,version FROM orders').get()
+  s.db.prepare('UPDATE recharge_orders SET lease_until=?').run(Date.now() + 60000)
+  await purgeRetainedCredentials(s.env)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_saved_credentials').get()!.n, 1)
+  s.db.prepare('UPDATE recharge_orders SET lease_until=0').run()
+  await purgeRetainedCredentials(s.env)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_saved_credentials').get()!.n, 0)
+  assert.deepEqual(s.db.prepare('SELECT status,payment_status,version FROM orders').get(), before)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_redemptions').get()!.n, 1)
+})
 
 test('saved Session is encrypted and order scoped; failure exposes only safe retry metadata', async t => {
   const s = await retainedSetup(t)
@@ -186,6 +234,7 @@ test('opting out on a replacement removes the old saved snapshot; old orders wit
 
 test('unknown submission reuses the original key and bytes even after token expiry, never creates a second attempt', async t => {
   const s = setup(t); s.env.CDK_ENCRYPTION_KEY = Buffer.alloc(32, 51).toString('base64')
+  s.env.RECHARGE_SAVED_CREDENTIALS_ENABLED = 'true'
   const buyer = await s.buyer(), order = await s.create(buyer), key = crypto.randomUUID()
   await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)
   const raw = JSON.stringify({ user: { email: 'target@example.test' }, accessToken: 'OPAQUE-TOKEN', expires: new Date(Date.now() + 3600000).toISOString() })

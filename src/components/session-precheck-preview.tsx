@@ -11,8 +11,8 @@ import '@/styles/motion.css'
 import '@/styles/session-precheck-preview.css'
 
 const cases: { id: string; label: string; note: string; state: SessionPrecheck['state']; code: string }[] = [
-  { id: 'saved-retry', label: '使用原资料重试', note: '失败后复用资料，或重新提交', state: 'wait', code: 'web_wait_expiry' },
-  { id: 'saved-expired', label: '原资料已过期', note: '停用旧资料重试，显示输入框', state: 'expired', code: 'locally_expired' },
+  { id: 'replacement-failed', label: '重新提交 Session', note: '失败后重新粘贴资料', state: 'wait', code: 'web_wait_expiry' },
+  { id: 'replacement-expired', label: '资料已过期', note: '获取新 Session 后重新提交', state: 'expired', code: 'locally_expired' },
   { id: 'pass', label: '检测通过', note: 'PHP 网页 Plus 升级 Pro', state: 'eligible', code: 'php_web_plus_upgrade' },
   { id: 'store', label: '商店订阅等待期', note: '到期后还未满 72 小时', state: 'wait', code: 'store_wait_72h' },
   { id: 'web', label: '网页订阅未到期', note: '普通续费需要等待', state: 'wait', code: 'web_wait_expiry' },
@@ -32,28 +32,28 @@ const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, 
   signal?.addEventListener('abort', abort, { once: true })
 })
 function PreviewOrder({ selected }: { selected: typeof cases[number] }) {
-  const retained = selected.id.startsWith('saved-')
-  const plan: PlanId = retained || selected.id === 'web' || selected.id === 'store' ? 'plus' : 'pro-20x'
+  const replacement = selected.id.startsWith('replacement-')
+  const plan: PlanId = replacement || selected.id === 'web' || selected.id === 'store' ? 'plus' : 'pro-20x'
   const [submitted, setSubmitted] = useState(false)
-  const [order, setOrder] = useState<ServerOrder>(() => ({ id: 'LOCAL-PREVIEW', plan, planName: plan === 'plus' ? 'Plus' : 'Pro 10×', price: 100, createdAt: Date.now(), updatedAt: Date.now(), version: 1, mode: 'live', status: retained ? 'failed' : 'session', paymentStatus: 'paid', fulfillment: { canRetainCredential: true, savedCredential: retained ? { attemptId: 'local-preview-attempt', savedAt: Date.now(), retainUntil: Date.now() + 30 * 86400000, expired: selected.id === 'saved-expired', canReuse: selected.id !== 'saved-expired' } : null, failureCode: retained ? 'account_has_subscription' : null, precheckRequired: !retained, paymentUrl: null, expiresAt: null, rechargeStatus: retained ? 'failed' : null, retryKey: null, retryMode: null, canSubmit: true, message: retained ? '该账号已有有效订阅，本次未充值；到期后可通过原订单重试，无需再次付款。' : null, accountEmailMasked: retained ? 'd***@example.com' : null, finishedAt: null } }))
+  const [order, setOrder] = useState<ServerOrder>(() => ({ id: 'LOCAL-PREVIEW', plan, planName: plan === 'plus' ? 'Plus' : 'Pro 10×', price: 100, createdAt: Date.now(), updatedAt: Date.now(), version: 1, mode: 'live', status: replacement ? 'failed' : 'session', paymentStatus: 'paid', fulfillment: { canRetainCredential: false, savedCredential: null, failureCode: replacement ? selected.id === 'replacement-expired' ? 'session_invalid' : 'account_has_subscription' : null, precheckRequired: !replacement, paymentUrl: null, expiresAt: null, rechargeStatus: replacement ? 'failed' : null, retryKey: null, retryMode: null, canSubmit: true, message: replacement ? selected.id === 'replacement-expired' ? '登录凭据已失效，请重新获取 Session 后提交，无需再次付款。' : '该账号已有有效订阅，本次未充值；到期后可通过原订单重新提交 Session，无需再次付款。' : null, accountEmailMasked: replacement ? 'd***@example.com' : null, finishedAt: null } }))
   const transport: typeof api = async <T,>(path: string, data?: unknown, signal?: AbortSignal): Promise<T> => {
     if (path.endsWith('/session-precheck')) {
       await sleep(selected.id === 'timeout' ? 10000 : 1800, signal)
       return { precheck: { state: selected.state, code: selected.code, target: plan, eligibleAt: selected.state === 'wait' ? new Date(Date.now() + (selected.id === 'store' ? 24 : 12) * 3600000).toISOString() : null, receipt: ['eligible', 'deferred'].includes(selected.state) ? 'local-preview-no-authority' : undefined } } as T
     }
-    if (['submit', 'retry-saved'].includes((data as { action?: string })?.action ?? '')) {
+    if ((data as { action?: string })?.action === 'submit') {
       await sleep(1600, signal); setSubmitted(true)
       return { order: { ...order, status: 'processing', fulfillment: { ...order.fulfillment, canSubmit: false, rechargeStatus: 'queued', progressStage: 'queued' } } } as T
     }
     return { order } as T
   }
   return <div className="precheck-preview-order"><div className="precheck-preview-receipt"><span>完成付款 · 连接账号</span><strong>ChatGPT {order.planName}<ArrowUpRight size={16} /></strong></div>
-    <LiveCheckout order={order} open onOrderUpdated={setOrder} onOrders={() => {}} transport={transport} initialSession={retained ? '' : sample} />
-    <div className="precheck-preview-proof"><ShieldCheck size={14} /><span>{submitted ? '演示：已进入充值流程。未创建真实充值。' : retained ? '演示：可使用原资料，或输入新 Session，均不会发起真实充值。' : '演示账号已填入。勾选确认后，点击按钮体验完整流程。'}</span></div>
+    <LiveCheckout order={order} open onOrderUpdated={setOrder} onOrders={() => {}} transport={transport} initialSession={replacement ? '' : sample} />
+    <div className="precheck-preview-proof"><ShieldCheck size={14} /><span>{submitted ? '演示：已进入充值流程。未创建真实充值。' : replacement ? '演示：重新粘贴 Session 后提交，不会发起真实充值。' : '演示账号已填入。勾选确认后，点击按钮体验完整流程。'}</span></div>
   </div>
 }
 export default function SessionPrecheckPreview() {
-  const [selected, setSelected] = useState(cases[1])
+  const [selected, setSelected] = useState(cases[0])
   const [revision, setRevision] = useState(0)
   const [dark, setDark] = useState(document.documentElement.classList.contains('dark'))
   return <main className="precheck-preview"><header><div><BrandMark /><span>GPTibo <small>本地体验</small></span></div><button type="button" onClick={() => { document.documentElement.classList.toggle('dark'); setDark(!dark) }} aria-label="切换深浅色">{dark ? <Sun size={18} /> : <Moon size={18} />}</button></header>

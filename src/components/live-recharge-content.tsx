@@ -17,14 +17,13 @@ import '@/styles/live-checkout.css'
 type SessionFormProps = {
   session: string; confirmed: boolean; touched: boolean; busy?: '' | 'query' | 'check' | 'submit'
   precheckRequired?: boolean; precheck?: SessionPrecheck | null
-  retentionAvailable?: boolean
   retryMode?: 'session' | 'access_token' | null; retryKey?: string | null; failed?: boolean
   onSessionChange: (value: string) => void; onConfirmChange: (value: boolean) => void
   onTouch: () => void; onSubmit: () => void
 }
 
 // Shared by the actual order and the isolated walkthrough, with no API side effects.
-export function LiveSessionForm({ session, confirmed, touched, busy = '', retentionAvailable = false, precheckRequired, precheck = null, retryMode = null, retryKey, failed, onSessionChange, onConfirmChange, onTouch, onSubmit }: SessionFormProps) {
+export function LiveSessionForm({ session, confirmed, touched, busy = '', precheckRequired, precheck = null, retryMode = null, retryKey, failed, onSessionChange, onConfirmChange, onTouch, onSubmit }: SessionFormProps) {
   const input = checkoutSession(session, retryMode)
   // Submission clears the sensitive draft immediately; keep only its display email.
   const [lastEmail, setLastEmail] = useState(input.email)
@@ -41,7 +40,7 @@ export function LiveSessionForm({ session, confirmed, touched, busy = '', retent
             <p className="live-session-help-tip">如果只显示 <code>{'{}'}</code>，可能尚未登录或登录已失效。请先登录，再刷新获取页；两步请使用同一浏览器，不要混用普通与无痕窗口。</p>
           </section>}
           <Textarea id="live-session" value={session} onChange={e => onSessionChange(e.target.value)} onPaste={onTouch} onBlur={onTouch} rows={4} maxLength={128 * 1024} autoComplete="off" autoCorrect="off" spellCheck={false} disabled={Boolean(busy)} aria-invalid={touched && Boolean(input.problem)} aria-describedby="live-session-hint live-session-validation" placeholder="登录 ChatGPT 后，在这里粘贴完整 Session JSON" />
-          <div className="live-session-validation" id="live-session-validation">{touched && input.problem ? <p role="alert"><TriangleAlert size={12} />{input.problem}</p> : <p><LockKeyhole size={12} />{retentionAvailable ? '加密保存，便于重试' : '资料仅用于本订单充值，浏览器不会持久保存。'}</p>}</div>
+          <div className="live-session-validation" id="live-session-validation">{touched && input.problem ? <p role="alert"><TriangleAlert size={12} />{input.problem}</p> : <p><LockKeyhole size={12} />资料仅用于本订单充值，浏览器不会持久保存。</p>}</div>
           <SessionAccountCard email={displayEmail} phase={precheckRequired && busy === 'check' ? 'checking' : busy === 'submit' ? 'submitting' : 'idle'} result={precheckRequired ? precheck : null} />
           <Field orientation="horizontal" className="live-account-confirmation" data-disabled={Boolean(busy) || !input.credential}>
             <Checkbox id="live-account-confirmation" checked={confirmed} onCheckedChange={onConfirmChange} disabled={Boolean(busy) || !input.credential} />

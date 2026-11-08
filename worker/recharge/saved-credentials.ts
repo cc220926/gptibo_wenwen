@@ -5,7 +5,8 @@ const RETENTION_MS = 30 * 86400000
 export type SavedCredential = { order_id: string; attempt_id: string; encrypted_request: string; saved_at: number; retain_until: number; credential_expires_at: number | null }
 export const retainedCredential = (env: Env, id: string) => env.INTEREST_DB.prepare('SELECT * FROM recharge_saved_credentials WHERE order_id=?').bind(id).first<SavedCredential>()
 export const retainedMetadata = (env: Env, id: string) => env.INTEREST_DB.prepare('SELECT order_id,attempt_id,saved_at,retain_until,credential_expires_at FROM recharge_saved_credentials WHERE order_id=?').bind(id).first<Omit<SavedCredential, 'encrypted_request'>>()
-export const canRetainCredential = (env: Env) => vaultReady(env)
+export const credentialRetentionEnabled = (env: Env) => env.RECHARGE_SAVED_CREDENTIALS_ENABLED === 'true'
+export const canRetainCredential = async (env: Env) => credentialRetentionEnabled(env) && await vaultReady(env)
 const context = (order: string, attempt: string) => 'recharge-request:' + order + ':' + attempt
 
 export async function retainedRequest(env: Env, saved: SavedCredential, expectedHash: string) {
@@ -25,6 +26,6 @@ export async function retainedStatement(env: Env, order: string, attempt: string
     .bind(encrypted, savedAt, until, expires, attempt, order)
 }
 export async function purgeRetainedCredentials(env: Env) {
-  await env.INTEREST_DB.prepare(`DELETE FROM recharge_saved_credentials WHERE retain_until<=?
-    AND NOT EXISTS(SELECT 1 FROM recharge_orders t WHERE t.order_id=recharge_saved_credentials.order_id AND t.lease_until>?)`).bind(Date.now(), Date.now()).run()
+  await env.INTEREST_DB.prepare(`DELETE FROM recharge_saved_credentials WHERE (?=1 OR retain_until<=?)
+    AND NOT EXISTS(SELECT 1 FROM recharge_orders t WHERE t.order_id=recharge_saved_credentials.order_id AND t.lease_until>?)`).bind(Number(!credentialRetentionEnabled(env)), Date.now(), Date.now()).run()
 }

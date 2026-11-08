@@ -36,11 +36,11 @@ function MetricForm({ settings }: { settings: Settings }) {
     <label className="admin-marketing-metric-toggle"><input type="checkbox" checked={automatic} onChange={event => { const next = event.target.checked; if (saved.automatic) setDisplayCount(String(next ? saved.baseCount : saved.displayCount)); setAutomatic(next) }} disabled={busy} />自动累加新开通成功订单</label>
     <label htmlFor="marketing-metric-text">展示文案</label>
     <Input id="marketing-metric-text" value={displayText} onChange={event => setDisplayText(event.target.value)} maxLength={120} placeholder="例如：活动展示数：{count}" disabled={busy} />
-    <small>用 {'{count}'} 标出数字的位置，必须出现一次。</small>
+    <small>用 {'{count}'} 标出数字的位置，必须出现一次。下方为后台示意预览。</small>
     <label htmlFor="marketing-metric-count">{automatic ? '历史基础数值' : '展示数值'}</label>
     <Input id="marketing-metric-count" type="number" min="0" max="999999" step="1" value={displayCount} onChange={event => setDisplayCount(event.target.value)} disabled={busy} />
     {saved.automatic && <small>启用后新增且当前有效的完成订单：{saved.newCompletedCount} 笔。关闭自动累加时，会把当前总数带入基础数值。</small>}
-    <div className="admin-marketing-metric-preview">前台预览：{valid ? displayText.replace('{count}', String(count + (automatic && saved.automatic ? saved.newCompletedCount : 0))) : '请填写有效文案和数值'}</div>
+    <div className="admin-marketing-metric-preview">前台预览：{valid ? displayText.replace('{count}', String(count + (automatic && saved.automatic ? saved.newCompletedCount : 0))) : '请填写有效文案和数值'}<small>示意数字</small></div>
     <Button type="submit" disabled={busy || !valid || !changed}>{busy ? '保存中…' : '保存展示设置'}</Button>
     {error && <p className="admin-error" role="alert">{error}</p>}
     {message && <p className="admin-success" role="status">{message}</p>}
