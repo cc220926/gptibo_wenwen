@@ -48,8 +48,11 @@
 .live-session-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .live-session-heading label { display:flex; align-items:center; gap:7px; font-size:13px; font-weight:500; }
 .live-session-heading label svg { color:var(--muted-foreground); }
-.live-session-heading>a { display:inline-flex; align-items:center; gap:5px; flex-shrink:0; min-height:32px; color:var(--primary); font-size:12px; text-decoration:none; }
-.live-session-heading>a:hover { text-decoration:underline; text-underline-offset:3px; }
+.live-session-heading>button { display:inline-flex; align-items:center; gap:5px; flex-shrink:0; min-height:32px; color:var(--primary); font-size:12px; text-decoration:none; cursor:pointer; border-radius:5px; }
+.live-session-heading>button:hover { text-decoration:underline; text-underline-offset:3px; }
+.live-session-heading>button:focus-visible,.live-session-help a:focus-visible { outline:2px solid var(--ring);outline-offset:3px; }
+.live-session-help { margin:0 0 15px;padding:16px;background:var(--secondary);border:1px solid var(--border);border-radius:12px; }
+.live-session-help h4 { margin:0 0 12px;font-size:12px;font-weight:600; }.live-session-help ol { margin:0;padding-left:18px;display:grid;gap:15px;font-size:11px; }.live-session-help strong { font-size:12px;font-weight:550; }.live-session-help li p { margin:4px 0 6px;color:var(--muted-foreground);line-height:1.7; }.live-session-help a { display:inline-flex;align-items:center;gap:5px;color:var(--primary);min-height:34px;text-decoration:underline;text-underline-offset:3px; }.live-session-help-tip { border-top:1px solid var(--border);margin:13px 0 0;padding-top:11px;font-size:11px;color:var(--muted-foreground);line-height:1.8;overflow-wrap:anywhere; }.live-session-help-tip code { padding:1px 4px;background:var(--background);border-radius:4px; }
 .live-session-hint { font-size:11px; line-height:1.8; color:var(--muted-foreground); margin:3px 0 12px; }
 .live-session-form [data-slot=textarea] { min-height:140px; max-height:240px; background:var(--secondary); font-family:var(--font-mono,monospace); font-size:11px; line-height:1.8; }
 .live-session-validation { min-height:30px; padding-top:8px; }
@@ -83,7 +86,7 @@
 .live-request-error { padding:12px 14px; border:1px solid color-mix(in srgb,var(--warning) 20%,var(--border)); border-radius:10px; color:var(--warning); font-size:12px; line-height:1.8; }
 .live-request-error>p { margin:0; }
 .flow-stage:has(.live-checkout) .flow-footer { margin-top:20px; }
-@media(max-width:540px) { .live-session-form textarea { font-size:16px; min-height:132px; } .live-session-heading label { font-size:12px; } .live-session-heading>a { font-size:11px; } }
+@media(max-width:540px) { .live-session-form textarea { font-size:16px; min-height:132px; } .live-session-heading label { font-size:12px; } .live-session-heading>button { font-size:11px;min-height:44px; }.live-session-help a { min-height:44px; }.live-session-help { padding:14px; } }
 @media(prefers-reduced-motion:reduce) { .live-watch>span,.live-watch>i { animation:none; } .live-session-form textarea,.live-pay-timer,.live-qr-frame img { transition:none; } }
 
 .membership-direct-delivery { display: grid; gap: 12px; min-width: 0; padding: 18px; border: 1px solid var(--border); border-radius: 16px; background: var(--muted); }

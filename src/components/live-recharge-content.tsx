@@ -27,12 +27,18 @@ export function LiveSessionForm({ session, confirmed, touched, busy = '', preche
   const input = checkoutSession(session, retryMode)
   // Submission clears the sensitive draft immediately; keep only its display email.
   const [lastEmail, setLastEmail] = useState(input.email)
+  const [sessionHelpOpen, setSessionHelpOpen] = useState(false)
   if (busy !== 'submit' && !['eligible', 'deferred'].includes(precheck?.state ?? '') && input.email !== lastEmail) setLastEmail(input.email)
   const displayEmail = input.email || (busy === 'submit' || ['eligible', 'deferred'].includes(precheck?.state ?? '') ? lastEmail : null)
   return <form onSubmit={e => { e.preventDefault(); onSubmit() }} className="live-session-form">
-          <div className="live-session-heading"><Label htmlFor="live-session">ChatGPT Session <LockKeyhole size={14} /></Label><a href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener noreferrer">获取 Session <ExternalLink size={12} /></a></div>
-          <p className="live-session-hint" id="live-session-hint">在已登录的 ChatGPT 中打开获取入口，复制完整 JSON。</p>
-          <Textarea id="live-session" value={session} onChange={e => onSessionChange(e.target.value)} onBlur={onTouch} rows={4} maxLength={128 * 1024} autoComplete="off" autoCorrect="off" spellCheck={false} disabled={Boolean(busy)} aria-invalid={touched && Boolean(input.problem)} aria-describedby="live-session-hint live-session-validation" placeholder="在这里粘贴完整 Session JSON" />
+          <div className="live-session-heading"><Label htmlFor="live-session">ChatGPT Session <LockKeyhole size={14} /></Label><button type="button" aria-expanded={sessionHelpOpen} aria-controls="live-session-help" onClick={() => setSessionHelpOpen(value => !value)}>获取 Session <ExternalLink size={12} /></button></div>
+          <p className="live-session-hint" id="live-session-hint">先在同一浏览器登录要充值的 ChatGPT 账号，再获取并复制完整 JSON。</p>
+          {sessionHelpOpen && <section id="live-session-help" className="live-session-help" aria-label="获取 Session 步骤">
+            <h4>先登录，再获取 Session</h4>
+            <ol><li><div><strong>登录要充值的账号</strong><p>在浏览器中完成登录，再回到本页。</p></div><a href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer">打开 ChatGPT 登录 <ExternalLink size={12} /></a></li><li><div><strong>获取完整 Session</strong><p>已登录的用户可以直接进行这一步。</p></div><a href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener noreferrer">已登录，获取 Session <ExternalLink size={12} /></a></li></ol>
+            <p className="live-session-help-tip">如果只显示 <code>{'{}'}</code>，可能尚未登录或登录已失效。请先登录，再刷新获取页；两步请使用同一浏览器，不要混用普通与无痕窗口。</p>
+          </section>}
+          <Textarea id="live-session" value={session} onChange={e => onSessionChange(e.target.value)} onPaste={onTouch} onBlur={onTouch} rows={4} maxLength={128 * 1024} autoComplete="off" autoCorrect="off" spellCheck={false} disabled={Boolean(busy)} aria-invalid={touched && Boolean(input.problem)} aria-describedby="live-session-hint live-session-validation" placeholder="登录 ChatGPT 后，在这里粘贴完整 Session JSON" />
           <div className="live-session-validation" id="live-session-validation">{touched && input.problem ? <p role="alert"><TriangleAlert size={12} />{input.problem}</p> : <p><LockKeyhole size={12} />资料将加密留存，仅用于本订单充值及失败补发。</p>}</div>
           <SessionAccountCard email={displayEmail} phase={precheckRequired && busy === 'check' ? 'checking' : busy === 'submit' ? 'submitting' : 'idle'} result={precheckRequired ? precheck : null} />
           <Field orientation="horizontal" className="live-account-confirmation" data-disabled={Boolean(busy) || !input.credential}>
