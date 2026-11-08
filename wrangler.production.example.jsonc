@@ -10,6 +10,9 @@
   "main": "worker/index.ts",
   "vars": {
     "ORDER_TESTING_ENABLED": "false",
+    "TURNSTILE_ENABLED": "false",
+    "TURNSTILE_SITE_KEY": "",
+    "TURNSTILE_HOSTNAMES": "shop.example.invalid",
     "EMAIL_PRODUCTS_ENABLED": "false",
     "SERVICE_CHECKOUT_ENABLED": "false",
     "XGIFT_CHECKOUT_ENABLED": "false",

@@ -1,4 +1,5 @@
 import { platformBranding, platformAnnouncement, platformBrandingRoute, platformAnnouncementRoute } from './platform-store-settings.ts'
+import { verificationConfig, verifyOrderChallenge } from './turnstile.ts'
 import { inventoryAdmin } from './fulfillment/admin.ts'
 import { createServiceOrder, fulfillService, serviceCatalog, serviceCheckoutEnabled, serviceOrderSummary } from './fulfillment/service.ts'
 import { isServicePlan } from '../shared/fulfillment.ts'
@@ -71,9 +72,8 @@ function requiredNote(data: Record<string, unknown>) {
 export async function commerce(request: Request, env: Env): Promise<Response> {
   try {
     const url = new URL(request.url); const path = url.pathname; const method = request.method
-    // Workers uses OTP/TOTP and rate limits; no Turnstile provider is configured.
-    // This public capability must be readable before buyer initialization/login.
-    if (path === '/api/orders/verification' && method === 'GET') return json({ enabled: false, purpose: url.searchParams.get('purpose') === 'auth' ? 'auth' : 'order_create' })
+    // Public widget configuration is available before buyer initialization.
+    if (path === '/api/orders/verification' && method === 'GET') return verificationConfig(request, env)
     const auth = await authRoute(request, env, path)
     if (auth) return auth
     const partnerLogin = await partnerAuth(request, env, path)
@@ -166,6 +166,9 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
         if (isXGiftPlan(existing.plan) && (await xgiftSummary(env, existing))?.username !== xUsername(data.username)) throw new ApiError('请求编号已绑定其他接收账号。', 409)
         return json({ order: await customerOrder(env, existing) })
       }
+      // Returning an existing, owner-authorized order is safe without consuming a
+      // second one-use token. Every new order, including custom inventory, verifies first.
+      await verifyOrderChallenge(request, env, data.turnstileToken)
       if (isServicePlan(data.plan)) return json({ order: await customerOrder(env, await createServiceOrder(env, ownerHash, email, data)) }, 201)
       const emailDelivery = Boolean(emailProduct(data.plan))
       const live = isXGiftPlan(data.plan) ? xgiftCheckoutEnabled(env) : data.plan === 'gmail-account' ? gmailCheckoutEnabled(env) : isDeliverySupplierPlan(data.plan) ? delivery_supplierCheckoutEnabled(env) : emailDelivery ? emailCheckoutEnabled(env) : supplierCheckoutEnabled(env)

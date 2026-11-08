@@ -62,3 +62,9 @@ ACCOUNT_SUPPLIER_CHECKOUT_ENABLED="false"
 DELIVERY_SUPPLIER_API_KEY= # Configure locally; never commit a real value.
 DELIVERY_SUPPLIER_CHECKOUT_ENABLED=false
 DELIVERY_SUPPLIER_CNY_PER_USD= # Configure locally; never commit a real value.
+
+# Checkout human verification. Use Cloudflare test keys only for local testing.
+TURNSTILE_ENABLED=false
+TURNSTILE_SITE_KEY= # Public widget sitekey; configure locally.
+TURNSTILE_SECRET_KEY= # Private Siteverify secret; production must use Worker Secrets.
+TURNSTILE_HOSTNAMES=localhost,127.0.0.1

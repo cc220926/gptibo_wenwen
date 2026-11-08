@@ -12,6 +12,11 @@ export interface Database {
   batch(statements: Statement[]): Promise<unknown[]>
 }
 export interface Env {
+  TURNSTILE_ENABLED?: string
+  TURNSTILE_SITE_KEY?: string
+  TURNSTILE_SECRET_KEY?: string
+  /** Exact comma-separated hostnames; never derive the allowlist from request headers. */
+  TURNSTILE_HOSTNAMES?: string
   /** Independent base64-encoded 32-byte key; retain securely with database backups. */
   CDK_ENCRYPTION_KEY?: string
   SERVICE_CHECKOUT_ENABLED?: string
