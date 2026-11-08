@@ -25,25 +25,39 @@ const error = (message: string, status: number) => json({ error: message }, stat
 async function hash(value: string) {
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), byte => byte.toString(16).padStart(2, '0')).join('')
 }
+async function runScheduled(name: string, operation: () => Promise<unknown>) {
+  try { await operation() }
+  catch { console.error(name + ' temporarily unavailable') }
+}
 
 export default {
   async scheduled(event: { scheduledTime?: number }, env: Env) {
     // Telegram's durable queue is independent of supplier reconciliation failures.
-    await retryTelegramInvitations(env).catch(() => { console.error('Telegram invitation queue temporarily unavailable') })
+    await runScheduled('Telegram invitation queue', () => retryTelegramInvitations(env))
     // Durable transactional email must continue even when supplier polling fails.
-    await sendDueOrderNotifications(env).catch(() => { console.error('Order notification queue temporarily unavailable') })
-    await reconcileServices(env).catch(() => { console.error('Service delivery queue temporarily unavailable') })
+    await runScheduled('Order notification queue', () => sendDueOrderNotifications(env))
+    await runScheduled('Service delivery queue', () => reconcileServices(env))
     // Cosmetic activity statistics must not interrupt financial reconciliation.
-    await expireCheckoutPresence(env).catch(() => { console.error('Checkout activity cleanup temporarily unavailable') })
+    await runScheduled('Checkout activity cleanup', () => expireCheckoutPresence(env))
     // Reminders run every minute; preserve the existing five-minute reconciliation cadence.
     if (event.scheduledTime === undefined || Math.floor(event.scheduledTime / 60_000) % 5 === 0) {
       // Refund confirmation also needs the original order snapshot. Give both
       // refund paths its read budget before ordinary polling can consume it.
-      await reconcileRechargeRefunds(env)
-      await reconcileExternalRechargeRefunds(env)
-      await Promise.all([reconcilePayments(env), reconcileRecharge(env), retryPayoutNotifications(env), reconcileInvoicePayments(env)])
+      await runScheduled('Recharge refund queue', () => reconcileRechargeRefunds(env))
+      await runScheduled('External recharge refund queue', () => reconcileExternalRechargeRefunds(env))
+      await Promise.all([
+        runScheduled('Payment reconciliation queue', () => reconcilePayments(env)),
+        runScheduled('Recharge reconciliation queue', () => reconcileRecharge(env)),
+        runScheduled('Payout notification queue', () => retryPayoutNotifications(env)),
+        runScheduled('Invoice payment reconciliation queue', () => reconcileInvoicePayments(env)),
+      ])
     }
-    await Promise.all([sendDueRechargeReminders(env), reconcileGmail(env), reconcileDeliverySupplier(env), reconcileXGift(env)])
+    await Promise.all([
+      runScheduled('Recharge reminder queue', () => sendDueRechargeReminders(env)),
+      runScheduled('Gmail fulfillment queue', () => reconcileGmail(env)),
+      runScheduled('Delivery supplier queue', () => reconcileDeliverySupplier(env)),
+      runScheduled('X gift fulfillment queue', () => reconcileXGift(env)),
+    ])
   },
   async fetch(request: Request, env: Env): Promise<Response> {
     try {

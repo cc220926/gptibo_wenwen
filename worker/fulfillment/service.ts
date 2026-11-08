@@ -8,6 +8,9 @@ import { seal, unseal, vaultReady } from './vault.ts'
 export type Task = { order_id: string; kind: DeliveryKind; state: string; product_id: string; product_name: string; instructions: string; stock_id: string | null; encrypted_value: string | null; expires_at: number; delivered_at: number | null; mail_state: string; encrypted_mail: string | null; mail_first_attempt_at: number | null; mail_next_attempt_at: number; lease_token: string | null; lease_until: number }
 export const taskFor = (env: Env, id: string) => env.INTEREST_DB.prepare('SELECT * FROM fulfillment_tasks WHERE order_id=?').bind(id).first<Task>()
 const eligible = "mode='live' AND is_test=0 AND payment_status='paid' AND refund_hold=0 AND refunded_cents=0 AND redemption_blocked=0"
+// A completed, partly refunded delivery remains the buyer's property. New
+// dispatches still require zero refunds, but its pending notice may be sent.
+const deliveredEligible = "mode='live' AND is_test=0 AND payment_status='paid' AND refund_hold=0 AND refunded_cents<price_cents AND redemption_blocked=0"
 export async function serviceCheckoutEnabled(env: Env) {
   return env.SERVICE_CHECKOUT_ENABLED === 'true' && emailCheckoutEnabled({ ...env, EMAIL_PRODUCTS_ENABLED: 'true' }) && await vaultReady(env)
 }
@@ -86,7 +89,7 @@ export async function serviceOrderSummary(env: Env, order: Order, reveal = true)
   const task = await taskFor(env, order.id)
   if (!task) return {}
   const serviceDelivery: ServiceTask = { kind: task.kind, state: task.state, productId: task.product_id, productName: task.product_name, expiresAt: task.expires_at, mailState: task.mail_state }
-  const visible = reveal && task.state === 'delivered' && order.mode === 'live' && !order.is_test && order.payment_status === 'paid' && !order.refund_hold && !order.refunded_cents && !order.redemption_blocked
+  const visible = reveal && task.state === 'delivered' && order.mode === 'live' && !order.is_test && order.payment_status === 'paid' && !order.refund_hold && order.refunded_cents < order.price_cents && !order.redemption_blocked
   const value = visible && task.encrypted_value ? await unseal(env, task.encrypted_value, task.stock_id ? 'stock:' + task.stock_id : 'task:' + order.id) : undefined
   return { serviceDelivery, manualFulfillment: true, delivery: { kind: 'cdk' as const, automatic: task.kind === 'stock', status: task.mail_state === 'sent' ? 'sent' as const : task.mail_state === 'sending' ? 'sending' as const : 'waiting' as const, sentAt: null, ...(visible ? { value, instructions: task.instructions } : {}) } }
 }
@@ -97,7 +100,7 @@ export async function sendServiceMail(env: Env, id: string) {
   let task = await taskFor(env, id)
   if (!task || task.state !== 'delivered' || task.mail_state === 'sent' || task.mail_state === 'review' || task.lease_until > Date.now()) return
   const now = Date.now(), lease = crypto.randomUUID()
-  await env.INTEREST_DB.prepare(`UPDATE fulfillment_tasks SET mail_state='sending',lease_token=?,lease_until=? WHERE order_id=? AND state='delivered' AND mail_state IN ('pending','sending') AND lease_until<=? AND EXISTS(SELECT 1 FROM orders WHERE id=order_id AND ${eligible})`).bind(lease, now + 60000, id, now).run()
+  await env.INTEREST_DB.prepare(`UPDATE fulfillment_tasks SET mail_state='sending',lease_token=?,lease_until=? WHERE order_id=? AND state='delivered' AND mail_state IN ('pending','sending') AND lease_until<=? AND EXISTS(SELECT 1 FROM orders WHERE id=order_id AND ${deliveredEligible})`).bind(lease, now + 60000, id, now).run()
   task = (await taskFor(env, id))!
   if (task.lease_token !== lease) return
   try {
@@ -124,7 +127,9 @@ export async function sendServiceMail(env: Env, id: string) {
 }
 export async function reconcileServices(env: Env) {
   await expireReservations(env)
-  const rows = (await env.INTEREST_DB.prepare(`SELECT t.order_id FROM fulfillment_tasks t JOIN orders o ON o.id=t.order_id WHERE ${eligible}
-    AND (t.state IN ('reserved','expired') OR (t.state='delivered' AND t.mail_state IN ('pending','sending') AND t.mail_next_attempt_at<=? AND t.lease_until<=?)) ORDER BY t.updated_at LIMIT 20`).bind(Date.now(), Date.now()).all<{ order_id: string }>()).results
+  const rows = (await env.INTEREST_DB.prepare(`SELECT t.order_id FROM fulfillment_tasks t JOIN orders o ON o.id=t.order_id WHERE
+    ((${eligible}) AND t.state IN ('reserved','expired')) OR
+    ((${deliveredEligible}) AND t.state='delivered' AND t.mail_state IN ('pending','sending') AND t.mail_next_attempt_at<=? AND t.lease_until<=?)
+    ORDER BY t.updated_at LIMIT 20`).bind(Date.now(), Date.now()).all<{ order_id: string }>()).results
   for (const row of rows) { try { await fulfillService(env, row.order_id); await sendServiceMail(env, row.order_id) } catch { /* Retain the original reservation and task for reconciliation. */ } }
 }

@@ -350,14 +350,19 @@ export async function rechargeWebhook(message: Request, env: Env) {
     if (diff) throw new Error()
     const payload = JSON.parse(raw)
     if (!payload || typeof payload !== 'object' || Array.isArray(payload) || (payload.event_id !== undefined && payload.event_id !== event) || (payload.type !== undefined && payload.type !== type) || (payload.event !== undefined && payload.event !== type)) throw new Error()
+    const data = payload.data && typeof payload.data === 'object' && !Array.isArray(payload.data) ? payload.data : null
+    const remoteId = typeof data?.order_id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(data.order_id) ? data.order_id : null
+    const merchantOrderNo = typeof data?.merchant_order_no === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(data.merchant_order_no) ? data.merchant_order_no : null
+    if ((data?.order_id !== undefined && !remoteId) || (data?.merchant_order_no !== undefined && !merchantOrderNo)) throw new Error()
     const account = config(env).account; const digest = await hash(raw)
     const previous = await env.INTEREST_DB.prepare('SELECT body_hash FROM recharge_webhooks WHERE account=? AND event_id=?').bind(account, event).first<{ body_hash: string }>()
     if (previous && previous.body_hash !== digest) throw new Error()
-    // Notifications only schedule authoritative GET reconciliation. Their data
-    // can never directly mark payment, recharge, or refund as successful.
+    // Notifications only schedule an authoritative GET for the original order.
+    // Unknown or legacy events are retained, while periodic polling remains
+    // the fallback; they must not wake every historical order in this account.
     if (!previous) await env.INTEREST_DB.batch([
       env.INTEREST_DB.prepare('INSERT INTO recharge_webhooks(account,event_id,event_type,body_hash,received_at) VALUES (?,?,?,?,?) ON CONFLICT(account,event_id) DO NOTHING').bind(account, event, type, digest, Date.now()),
-      env.INTEREST_DB.prepare('UPDATE recharge_orders SET updated_at=0,notify_version=notify_version+1 WHERE account=?').bind(account),
+      env.INTEREST_DB.prepare('UPDATE recharge_orders SET updated_at=0,notify_version=notify_version+1 WHERE account=? AND (remote_id=? OR (remote_id IS NULL AND order_id=?))').bind(account, remoteId, merchantOrderNo),
     ])
     const stored = await env.INTEREST_DB.prepare('SELECT body_hash FROM recharge_webhooks WHERE account=? AND event_id=?').bind(account, event).first<{ body_hash: string }>()
     if (stored?.body_hash !== digest) throw new Error()

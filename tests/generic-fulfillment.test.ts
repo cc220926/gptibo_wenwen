@@ -132,6 +132,25 @@ test('mail failure retries identical encrypted payload and key, concurrent sends
   assert.equal(sent.length, 2); assert.equal((await s.read(order.id)).serviceDelivery.mailState, 'review')
 })
 
+test('partial refund retains a completed stock delivery and its pending email; full refund hides it', async t => {
+  const s = await setup(t, 'stock', ['PARTIAL-REFUND-CODE'])
+  const order = await s.order()
+  await s.pay(order.id)
+  s.db.prepare('UPDATE orders SET refunded_cents=100 WHERE id=?').run(order.id)
+  const partiallyRefunded = await s.read(order.id)
+  assert.equal(partiallyRefunded.status, 'success')
+  assert.equal(partiallyRefunded.delivery.value, 'PARTIAL-REFUND-CODE')
+  s.db.prepare('UPDATE orders SET refund_hold=1 WHERE id=?').run(order.id)
+  assert.equal((await s.read(order.id)).delivery.value, undefined)
+  s.db.prepare('UPDATE orders SET refund_hold=0 WHERE id=?').run(order.id)
+  let sent = 0
+  t.mock.method(globalThis, 'fetch', async () => { sent++; return Response.json({ id: 'partial_refund_mail' }) })
+  await reconcileServices(s.env)
+  assert.equal(sent, 1)
+  s.db.prepare('UPDATE orders SET refunded_cents=1000 WHERE id=?').run(order.id)
+  assert.equal((await s.read(order.id)).delivery.value, undefined)
+})
+
 test('manual delivery uses the same order/payment/task model and cannot complete unpaid, stale or refunded orders', async t => {
   const s = await setup(t, 'manual'), order = await s.order(), path = `/api/admin/inventory/orders/${order.id}`
   const complete = (version: number) => s.request(path, { action: 'complete', version, value: 'PRIVATE-RESULT', note: '已完成约定服务' }, s.admin)

@@ -99,7 +99,7 @@ function setup(t: Context) {
     return '__Host-ymx_partner=' + token
   }
   const notice = (id: string) => {
-    const stamp = String(Math.floor(Date.now()/1000)); const raw = JSON.stringify({ event_id: id, type: 'refund.succeeded' })
+    const stamp = String(Math.floor(Date.now()/1000)); const raw = JSON.stringify({ event_id: id, type: 'refund.succeeded', data: { order_id: 'ord_test' } })
     return worker.fetch(new Request('https://shop.example.invalid/api/recharge/webhook', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Quefa-Event': 'refund.succeeded', 'X-Quefa-Event-Id': id, 'X-Quefa-Delivery': 'dlv_'+id, 'X-Quefa-Timestamp': stamp, 'X-Quefa-Signature': `t=${stamp},v1=${mac(stamp+'.'+raw,webhookSecret)}` }, body: raw }), env)
   }
   return { db, env, call, buyer, create, query, submit, login, partner, notice, calls, products, remoteOrder, redemption, faceToFace: () => { faceToFace = true }, quote: (patch: Record<string, unknown>) => { quotePatch = patch }, setExpiry: (value: number) => { expiry = new Date(value).toISOString() }, setQr: (value: string | null) => { qr = value }, setPayment: (v: string) => { payment = v }, setTask: (v: string, retry = false) => { taskStatus = v; fallback = retry }, setRefund: (v: string) => { refundStatus = v }, override: (v: typeof override) => { override = v } }
@@ -883,6 +883,37 @@ test('webhooks verify raw HMAC, age, header/body identity and deduplicate; even 
   await reconcileRecharge(s.env)
   assert.equal((await getOrder(s.env, order.id)).payment_status, 'unpaid')
   s.setPayment('paid'); await reconcileRecharge(s.env); assert.equal((await getOrder(s.env, order.id)).payment_status, 'paid')
+})
+
+test('a signed webhook schedules only its original recharge order', async t => {
+  const s = setup(t)
+  const buyer = await s.buyer()
+  const order = await s.create(buyer)
+  await s.query(order.id, buyer)
+  const other = 'YMX-WEBHOOK-OTHER'
+  s.db.prepare("INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,mode,payment_status,status,created_at,updated_at,last_event_id) VALUES(?,'other-owner','other-key','plus','Plus',13900,'live','unpaid','pending',1,1,'other-event')").run(other)
+  s.db.prepare("INSERT INTO recharge_orders(order_id,account,product_code,collection_mode,create_body,remote_id,updated_at) SELECT ?,account,product_code,collection_mode,create_body,'ord_other',1234 FROM recharge_orders WHERE order_id=?").run(other, order.id)
+  const stamp = String(Math.floor(Date.now() / 1000))
+  const raw = JSON.stringify({ event_id: 'evt_targeted', event: 'order.paid', data: { order_id: 'ord_test' } })
+  const response = await worker.fetch(new Request('https://shop.example.invalid/api/recharge/webhook', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Quefa-Event': 'order.paid', 'X-Quefa-Event-Id': 'evt_targeted', 'X-Quefa-Delivery': 'dlv_targeted', 'X-Quefa-Timestamp': stamp, 'X-Quefa-Signature': 't=' + stamp + ',v1=' + mac(stamp + '.' + raw, webhookSecret) }, body: raw }), s.env)
+  assert.equal(response.status, 200)
+  assert.equal(s.db.prepare('SELECT notify_version FROM recharge_orders WHERE order_id=?').get(order.id)!.notify_version, 1)
+  const untouched = s.db.prepare('SELECT notify_version,updated_at FROM recharge_orders WHERE order_id=?').get(other)!
+  assert.equal(untouched.notify_version, 0)
+  assert.equal(untouched.updated_at, 1234)
+})
+
+test('a webhook can target a locally known order before its upstream ID is saved', async t => {
+  const s = setup(t)
+  const buyer = await s.buyer()
+  const order = await s.create(buyer)
+  s.db.prepare('UPDATE recharge_orders SET attempted_at=? WHERE order_id=?').run(Date.now(), order.id)
+  const stamp = String(Math.floor(Date.now() / 1000))
+  const raw = JSON.stringify({ event_id: 'evt_early', event: 'order.paid', data: { order_id: 'ord_early', merchant_order_no: order.id } })
+  const response = await worker.fetch(new Request('https://shop.example.invalid/api/recharge/webhook', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Quefa-Event': 'order.paid', 'X-Quefa-Event-Id': 'evt_early', 'X-Quefa-Delivery': 'dlv_early', 'X-Quefa-Timestamp': stamp, 'X-Quefa-Signature': 't=' + stamp + ',v1=' + mac(stamp + '.' + raw, webhookSecret) }, body: raw }), s.env)
+  assert.equal(response.status, 200)
+  assert.equal(s.db.prepare('SELECT notify_version FROM recharge_orders WHERE order_id=?').get(order.id)!.notify_version, 1)
+  assert.equal((await getOrder(s.env, order.id)).payment_status, 'unpaid')
 })
 
 test('price/order/tenant mismatches and redirects fail closed without leaking vendor replies or forwarding credentials', async t => {
