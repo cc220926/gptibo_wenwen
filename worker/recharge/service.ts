@@ -300,6 +300,7 @@ export async function rechargeAction(requestMessage: Request, env: Env, order: O
       await syncUnlocked(env, fresh, true)
     }
     const current = await getOrder(env, order.id); const ready = await findRechargeOrder(env, order.id)
+    if (!ready || ready.lease_token !== fresh.lease_token || ready.lease_until <= Date.now()) throw new ApiError('本次操作已超时，请刷新原订单核对后再试。', 409)
     if (current.redemption_blocked) throw new ApiError('本订单已禁止再次兑换，请联系支持。', 409)
     if (!ready?.remote_id || ready.financial_hold || ready.payment_status !== 'paid' || current.payment_status !== 'paid' || current.refund_hold || current.refunded_cents || current.status === 'success') throw new ApiError('当前订单不能提交充值，请先刷新付款和售后状态。', 409)
     let attempt = await latestAttempt(env, order.id)
@@ -351,6 +352,12 @@ export async function rechargeAction(requestMessage: Request, env: Env, order: O
       if (!attempt || attempt.id !== data.key) throw new ApiError('订单已更新，请刷新重试。', 409)
     }
     if (!attempt) throw new ApiError('未找到充值提交记录。', 409)
+    // Queries, decryption and database writes may have consumed the lease.
+    // Only its still-active owner may renew it before forwarding credentials.
+    const beforeSend = Date.now()
+    await env.INTEREST_DB.prepare('UPDATE recharge_orders SET lease_until=? WHERE order_id=? AND lease_token=? AND lease_until>?').bind(beforeSend + 45000, order.id, fresh.lease_token, beforeSend).run()
+    const active = await findRechargeOrder(env, order.id)
+    if (active?.lease_token !== fresh.lease_token || active.lease_until <= Date.now()) throw new ApiError('本次操作已超时，请刷新原订单核对后再试。', 409)
     try { await applyRedemption(env, ready, attempt, await request<Redemption>(env, '/redemptions', raw, 'recharge:' + attempt.id)) }
     catch (e) {
       // A definitive API rejection permits a new attempt. A transport error,

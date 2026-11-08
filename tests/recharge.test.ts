@@ -272,6 +272,18 @@ test('simultaneous saved retry clicks serialize before forwarding a new attempt'
   assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 2)
 })
 
+test('a saved retry that outlives its lease stops before preparing or forwarding another attempt', async t => {
+  const s = await retainedSetup(t); await s.failSubscription()
+  let now = Date.now(); t.mock.method(Date, 'now', () => now)
+  s.override(path => {
+    if (path === '/v1/orders/ord_test') now += 46000
+    if (path.startsWith('/v1/redemptions/')) return Response.json({ data: { ...s.redemption(), failure_code: 'account_has_subscription' } })
+  })
+  assert.equal((await s.reuse()).status, 409)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 1)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_redemptions').get()!.n, 1)
+})
+
 test('unknown ciphertext cannot be moved across orders; the encryption key must match the original vault', async t => {
   const s = await retainedSetup(t); await s.failSubscription()
   const before = s.calls.filter(c => c.path === '/v1/redemptions').length
