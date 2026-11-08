@@ -30,7 +30,9 @@ export async function verifyOrderChallenge(request: Request, env: Env, token: un
   try {
     const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-      redirect: 'error', signal: AbortSignal.timeout(8000),
+      // Workers supports manual/follow, but throws before sending for "error".
+      // Reject every non-200 below so no redirect can forward the private key.
+      redirect: 'manual', signal: AbortSignal.timeout(8000),
     })
     stage = 'http-' + response.status
     if (response.status !== 200) { await response.body?.cancel(); throw new Error() }

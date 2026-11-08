@@ -52,7 +52,7 @@ test('siteverify binds hostname/action/age, and transport errors never bypass va
   let response: Response
   t.mock.method(globalThis, 'fetch', async (url, init) => {
     assert.equal(String(url), endpoint)
-    assert.equal(init!.redirect, 'error')
+    assert.equal(init!.redirect, 'manual')
     const data = JSON.parse(String(init!.body))
     assert.equal(data.secret, 'fixture-private-key'); assert.equal(data.response, 'valid-challenge')
     return response
@@ -61,7 +61,7 @@ test('siteverify binds hostname/action/age, and transport errors never bypass va
     response = Response.json(result)
     assert.equal((await s.request('/api/orders', s.order(), s.buyer)).status, 400)
   }
-  for (const bad of [new Response('unavailable', { status: 503 }), new Response('not JSON'), new Response('null'), new Response('x'.repeat(16385))]) {
+  for (const bad of [new Response(null, { status: 307, headers: { Location: 'https://untrusted.example.invalid' } }), new Response('unavailable', { status: 503 }), new Response('not JSON'), new Response('null'), new Response('x'.repeat(16385))]) {
     response = bad
     assert.equal((await s.request('/api/orders', s.order(), s.buyer)).status, 503)
   }
