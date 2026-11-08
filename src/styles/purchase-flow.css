@@ -71,6 +71,54 @@
 }
 @media(prefers-reduced-motion:reduce) { .flow-viewport,.flow-steps li,.flow-steps li>span:first-child { transition:none; } }
 
+/* ChatGPT checkout keeps the order summary, terms and verification in one step. */
+.chatgpt-email-flow .flow-ticket { background:color-mix(in srgb,var(--secondary) 45%,var(--card)); }
+.chatgpt-email-flow .flow-ticket-label { font-size:12px; letter-spacing:.04em; }
+.chatgpt-email-flow .flow-ticket-draft { font-size:12px; }
+.chatgpt-email-flow .flow-header { padding-top:26px; }
+.chatgpt-email-flow .flow-product { margin-bottom:26px; gap:14px; }
+.chatgpt-email-flow .flow-product .product-mark { width:48px; height:48px; border-radius:13px; }
+.chatgpt-email-flow .flow-product-main>strong { font-size:19px; }
+.chatgpt-email-flow .flow-product p { font-size:12px; }
+.chatgpt-email-flow .flow-price { font-size:24px; }
+.chatgpt-email-flow .flow-product-qty { font-size:12px; }
+.chatgpt-email-flow .flow-steps { gap:4px; padding-bottom:24px; }
+.chatgpt-email-flow .flow-steps li { font-size:12px; gap:7px; }
+.chatgpt-email-flow .flow-steps li>span:first-child { width:25px; height:25px; font-size:12px; }
+.chatgpt-email-flow .flow-stage { padding-top:28px; }
+.chatgpt-email-flow .flow-title { font-size:23px; margin-bottom:24px; }
+.chatgpt-email-flow .purchase-email-form>label { font-size:14px; font-weight:550; }
+.chatgpt-email-flow .purchase-email-form>label>span { font-size:12px; font-weight:400; }
+.chatgpt-email-flow .purchase-email-input input { height:50px; font-size:16px; background:color-mix(in srgb,var(--secondary) 40%,var(--card)); }
+.chatgpt-email-flow .purchase-email-form .email-validation { margin-bottom:12px; }
+.chatgpt-email-flow .purchase-email-form .email-validation>p { font-size:12px; }
+.chatgpt-email-flow .primary-action { height:50px; margin-top:18px; font-size:15px; }
+.chatgpt-email-flow .order-verification { margin-top:22px; margin-bottom:4px; padding-top:18px; border-top:1px solid var(--border); }
+.chatgpt-email-flow .flow-footer[data-email-step=true] { justify-content:center; padding-top:8px; border:0; }
+.purchase-terms { display:grid; gap:16px; margin-top:22px; border-top:1px solid var(--border); padding-top:18px; }
+.purchase-terms-emphasis { display:flex; align-items:flex-start; gap:9px; margin:0; line-height:1.6; font-size:13px; }
+.purchase-terms-emphasis svg { flex-shrink:0; margin-top:2px; color:var(--primary); }
+.purchase-terms-emphasis strong { font-weight:550; }
+.purchase-terms-details summary { width:max-content; max-width:100%; color:var(--primary); cursor:pointer; font-size:13px; text-decoration:underline; text-underline-offset:3px; list-style:none; }
+.purchase-terms-details summary::-webkit-details-marker { display:none; }
+.purchase-terms-details summary:focus-visible { outline:2px solid var(--ring); outline-offset:3px; }
+.purchase-terms-details>div { display:grid; gap:8px; margin-top:10px; padding:12px 14px; border-radius:9px; background:var(--secondary); color:var(--muted-foreground); font-size:12px; line-height:1.7; }
+.purchase-terms-details p { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.purchase-terms-consent { display:flex; align-items:flex-start; gap:10px; min-height:32px; cursor:pointer; font-size:13px; line-height:1.5; }
+.purchase-terms-consent input { flex-shrink:0; width:18px; height:18px; margin:1px 0 0; accent-color:var(--primary); cursor:pointer; }
+@media(max-width:540px) {
+  .chatgpt-email-flow .flow-header { padding-top:20px; }
+  .chatgpt-email-flow .flow-product { gap:10px; margin-bottom:22px; }
+  .chatgpt-email-flow .flow-product .product-mark { width:43px; height:43px; }
+  .chatgpt-email-flow .flow-product-main>strong { font-size:17px; }
+  .chatgpt-email-flow .flow-price { font-size:20px; }
+  .chatgpt-email-flow .flow-product p,.chatgpt-email-flow .flow-product-qty { font-size:11px; }
+  .chatgpt-email-flow .flow-steps li { flex-direction:column; gap:6px; font-size:10px; }
+  .chatgpt-email-flow .flow-stage { padding-top:22px; }
+  .chatgpt-email-flow .flow-title { font-size:21px; margin-bottom:20px; }
+  .chatgpt-email-flow .primary-action { margin-top:14px; }
+}
+
 /* After-sales expands within the same focus scope and backdrop. */
 .purchase-flow.motion-dialog[data-slot=dialog-content] { --ticket-height:64px; display:flex; flex-direction:column; overflow:hidden; transition:width 360ms var(--modal-ease),transform var(--modal-open-dur) var(--modal-ease),opacity var(--modal-open-dur) var(--modal-ease); }
 .purchase-flow[data-sales-open=true] { width:920px; }

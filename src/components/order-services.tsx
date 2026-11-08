@@ -6,7 +6,7 @@ import { xUsername } from '../../shared/xgift-products'
 import { activityCopy } from '@/lib/activity-copy'
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { AsyncButton, RequestNotice } from './payment-feedback'
-import { ArrowLeft, ArrowRight, Check, LoaderCircle, Mail, RotateCcw, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, Info, LoaderCircle, Mail, RotateCcw, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { EmailAutocomplete } from './email-autocomplete'
@@ -23,7 +23,7 @@ import '@/styles/order-services.css'
 
 import { refundCaseLabel, refundLabel, type RefundCase, type RefundEvent } from '@/lib/refunds'
 
-export function PurchaseEmail({ couponAvailable = false, shopSlug, purchasePlan, plan, price, paymentMethods, initialEmail, busy, error, inputRef, onSubmit }: { couponAvailable?: boolean; shopSlug?: string; purchasePlan?: string; plan?: string; price: number; paymentMethods?: PaymentMethodOption[]; initialEmail?: string | null; busy: boolean; error: string; inputRef: RefObject<HTMLInputElement | null>; onSubmit: (email: string, username?: string, preflightToken?: string, paymentMethod?: string, expectedFeeBps?: number, turnstileToken?: string, couponCode?: string, couponPrice?: number) => Promise<void> }) {
+export function PurchaseEmail({ couponAvailable = false, shopSlug, purchasePlan, plan, price, paymentMethods, chatgptTerms, initialEmail, busy, error, inputRef, onSubmit }: { couponAvailable?: boolean; shopSlug?: string; purchasePlan?: string; plan?: string; price: number; paymentMethods?: PaymentMethodOption[]; chatgptTerms?: { planName: string; purchaseNote?: string; supportsWarranty?: boolean }; initialEmail?: string | null; busy: boolean; error: string; inputRef: RefObject<HTMLInputElement | null>; onSubmit: (email: string, username?: string, preflightToken?: string, paymentMethod?: string, expectedFeeBps?: number, turnstileToken?: string, couponCode?: string, couponPrice?: number) => Promise<void> }) {
   const [verification, setVerification] = useState({ ready: false, token: '' })
   const [verificationRevision, setVerificationRevision] = useState(0)
   const [email, setEmail] = useState(initialEmail ?? '')
@@ -41,6 +41,7 @@ export function PurchaseEmail({ couponAvailable = false, shopSlug, purchasePlan,
     catch (e) { setCouponError(errorMessage(e)) } finally { setCouponBusy(false) }
   }
   const [touched, setTouched] = useState(false)
+  const [termsAccepted, setTermsAccepted] = useState(false)
   const [selectedMethod, setSelectedMethod] = useState('')
   const method = paymentMethods?.some(item => item.method === selectedMethod) ? selectedMethod : paymentMethods?.[0]?.method
   const feeBps = paymentMethods?.find(item => item.method === method)?.feeBps ?? 0
@@ -64,6 +65,7 @@ export function PurchaseEmail({ couponAvailable = false, shopSlug, purchasePlan,
     if (busy || submitting.current) return
     if (methodMissing || couponBusy) return
     if (showCoupon && couponCode.trim() && !appliedCoupon) { setCouponError('请先应用优惠码，或清空后继续。'); return }
+    if (chatgptTerms && !termsAccepted) return
     setTouched(true); if (problem) { inputRef.current?.focus(); return }
     submitting.current = true; setCheckError('')
     try {
@@ -91,9 +93,15 @@ export function PurchaseEmail({ couponAvailable = false, shopSlug, purchasePlan,
     {showCoupon && <div className="purchase-coupon"><label htmlFor="purchase-coupon">优惠码 <span>选填</span></label><div className="purchase-coupon-controls"><Input id="purchase-coupon" value={couponCode} maxLength={32} disabled={busy || couponBusy} onChange={e => {setCouponCode(e.target.value);setCoupon(null);setCouponError('')}} placeholder="输入本店商品优惠码" /><Button type="button" variant="outline" disabled={busy || couponBusy || !couponCode.trim() || Boolean(problem)} onClick={() => void applyCoupon()}>{couponBusy ? '校验中…' : '应用'}</Button></div>{couponError && <p role="alert">{couponError}</p>}{appliedCoupon && <p role="status">已优惠 {money(appliedCoupon.discountCents)}，商品应付 {money(appliedCoupon.priceCents)}</p>}</div>}
     {paymentMethods !== undefined && <PaymentMethodSelector methods={paymentMethods} value={method} busy={busy || checking} onChange={setSelectedMethod} />}
     {paymentMethods !== undefined && method && <dl className="purchase-fee-summary" aria-live="polite"><div><dt>商品金额</dt><dd>¥{payablePrice.toFixed(2)}</dd></div><div><dt>平台手续费（{feeBps / 100}%）</dt><dd>¥{(feeCents / 100).toFixed(2)}</dd></div><div><dt>实付金额</dt><dd>¥{((Math.round(payablePrice * 100) + feeCents) / 100).toFixed(2)}</dd></div></dl>}
-    <OrderVerification key={verificationRevision} onChange={setVerification} />
+    {chatgptTerms && <div className="purchase-terms">
+      <p className="purchase-terms-emphasis"><Info size={17} aria-hidden="true" /><strong>付款后需连接账号并提交充值。</strong></p>
+      <details className="purchase-terms-details"><summary>下单须知</summary><div><p>请核对 {chatgptTerms.planName} 套餐及金额。付款后按订单指引连接 ChatGPT 账号，在原订单查看进度与结果。等待或超时时请勿重复下单。</p>{chatgptTerms.supportsWarranty === false && <p>该商品不支持售后质保，购买后无法提交售后申请。</p>}{chatgptTerms.purchaseNote?.trim() && <p>{chatgptTerms.purchaseNote}</p>}</div></details>
+      <label className="purchase-terms-consent"><input type="checkbox" checked={termsAccepted} onChange={event => setTermsAccepted(event.target.checked)} disabled={busy} /><span>我已确认套餐、金额及下单须知。</span></label>
+    </div>}
+    {!chatgptTerms && <OrderVerification key={verificationRevision} onChange={setVerification} />}
     {(checkError || error) && <p className="purchase-submit-error" role="alert">{checkError || error}</p>}
-    <AsyncButton className="primary-action" type="submit" loading={busy || checking} pendingLabel={checking ? "正在验证账号" : "正在创建订单"} disabled={Boolean(problem) || methodMissing || (!!plan && !normalized) || ((!plan || verified) && !verification.ready)}>{plan ? verified ? "确认账号，继续付款" : "验证账号" : "继续付款"} <ArrowRight size={16} /></AsyncButton>
+    <AsyncButton className="primary-action" type="submit" loading={busy || checking} pendingLabel={checking ? "正在验证账号" : "正在创建订单"} disabled={Boolean(problem) || methodMissing || (Boolean(chatgptTerms) && !termsAccepted) || (!!plan && !normalized) || ((!plan || verified) && !verification.ready)}>{plan ? verified ? "确认账号，继续付款" : "验证账号" : "继续付款"} <ArrowRight size={16} /></AsyncButton>
+    {chatgptTerms && <OrderVerification key={verificationRevision} onChange={setVerification} />}
     <div className="checkout-action-feedback">{busy && <RequestNotice label="正在保存订单，完成后自动进入付款。" slowLabel="订单仍在确认中，请勿重复下单。" />}</div>
   </form>
 }
