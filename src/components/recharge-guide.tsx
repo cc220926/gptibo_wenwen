@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
-import { Check, ChevronLeft, ChevronRight, ExternalLink, LockKeyhole, MousePointer2, Pause, Play, RotateCcw, Phone } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight, LockKeyhole, MousePointer2, Pause, Play, RotateCcw, Phone } from 'lucide-react'
 import { ProductLogo } from './brand'
 import { RechargeSceneCanvas } from './recharge-scene-canvas'
 import { guideSession } from './recharge-guide-session'
@@ -131,7 +131,7 @@ export function RechargeGuide({ offers }: { offers: CatalogPlan[] }) {
           <div className="rg-progress"><span style={{ width: `${elapsed / steps[step].duration * 100}%` } as CSSProperties} /></div>
         </div>
         <div className="rg-caption"><div key={step} className="rg-caption-copy" aria-live={playing && !reduced ? 'off' : 'polite'}><span>0{step + 1} / 0{steps.length}</span><h3>{steps[step].title}</h3><p>{steps[step].description}</p></div><div className="rg-navigation"><Button variant="ghost" size="icon" disabled={step === 0} onClick={() => select(step - 1)} aria-label="上一步"><ChevronLeft size={18} /></Button><Button variant="ghost" size="icon" disabled={step === steps.length - 1} onClick={() => select(step + 1)} aria-label="下一步"><ChevronRight size={18} /></Button></div></div>
-        {(step === 0 || step === 1) && <a className="rg-external" href={step === 0 ? 'https://chatgpt.com' : 'https://chatgpt.com/api/auth/session'} target="_blank" rel="noreferrer">{step === 0 ? '打开 ChatGPT 登录' : '在当前浏览器打开 Session 页面'}<ExternalLink size={13} /></a>}
+        {(step === 0 || step === 1) && <p className="rg-reference">请保留当前页面，在同一浏览器另开标签页访问：<code>{step === 0 ? 'https://chatgpt.com' : 'https://chatgpt.com/api/auth/session'}</code></p>}
       </div>
     </div>
     <p className="rg-scope">适用于 Plus、Pro 5×、Pro 10×、Pro 25× 自助充值。付款后提交完整 Session，开通进度以订单为准。</p>

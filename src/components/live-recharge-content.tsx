@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowRight, ExternalLink, LoaderCircle, LockKeyhole, TriangleAlert } from 'lucide-react'
+import { ArrowRight, CircleHelp, LoaderCircle, LockKeyhole, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Field, FieldLabel } from '@/components/ui/field'
@@ -31,11 +31,12 @@ export function LiveSessionForm({ session, confirmed, touched, busy = '', preche
   if (busy !== 'submit' && !['eligible', 'deferred'].includes(precheck?.state ?? '') && input.email !== lastEmail) setLastEmail(input.email)
   const displayEmail = input.email || (busy === 'submit' || ['eligible', 'deferred'].includes(precheck?.state ?? '') ? lastEmail : null)
   return <form onSubmit={e => { e.preventDefault(); onSubmit() }} className="live-session-form">
-          <div className="live-session-heading"><Label htmlFor="live-session">ChatGPT Session <LockKeyhole size={14} /></Label><button type="button" aria-expanded={sessionHelpOpen} aria-controls="live-session-help" onClick={() => setSessionHelpOpen(value => !value)}>获取 Session <ExternalLink size={12} /></button></div>
+          <div className="live-session-heading"><Label htmlFor="live-session">ChatGPT Session <LockKeyhole size={14} /></Label><button type="button" aria-expanded={sessionHelpOpen} aria-controls="live-session-help" onClick={() => setSessionHelpOpen(value => !value)}>获取 Session 说明 <CircleHelp size={12} /></button></div>
           <p className="live-session-hint" id="live-session-hint">先在同一浏览器登录要充值的 ChatGPT 账号，再获取并复制完整 JSON。</p>
           {sessionHelpOpen && <section id="live-session-help" className="live-session-help" aria-label="获取 Session 步骤">
             <h4>先登录，再获取 Session</h4>
-            <ol><li><div><strong>登录要充值的账号</strong><p>在浏览器中完成登录，再回到本页。</p></div><a href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer">打开 ChatGPT 登录 <ExternalLink size={12} /></a></li><li><div><strong>获取完整 Session</strong><p>已登录的用户可以直接进行这一步。</p></div><a href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener noreferrer">已登录，获取 Session <ExternalLink size={12} /></a></li></ol>
+            <p className="live-session-help-intro">请保留本支付页，在同一浏览器另开标签页访问以下地址。</p>
+            <ol><li><div><strong>登录要充值的账号</strong><p>先完成 ChatGPT 登录；已登录可直接进行下一步。</p><code className="live-session-address">https://chatgpt.com</code></div></li><li><div><strong>获取完整 Session</strong><p>登录后访问以下地址，复制页面里的完整 JSON，再回到本支付页粘贴。</p><code className="live-session-address">https://chatgpt.com/api/auth/session</code></div></li></ol>
             <p className="live-session-help-tip">如果只显示 <code>{'{}'}</code>，可能尚未登录或登录已失效。请先登录，再刷新获取页；两步请使用同一浏览器，不要混用普通与无痕窗口。</p>
           </section>}
           <Textarea id="live-session" value={session} onChange={e => onSessionChange(e.target.value)} onPaste={onTouch} onBlur={onTouch} rows={4} maxLength={128 * 1024} autoComplete="off" autoCorrect="off" spellCheck={false} disabled={Boolean(busy)} aria-invalid={touched && Boolean(input.problem)} aria-describedby="live-session-hint live-session-validation" placeholder="登录 ChatGPT 后，在这里粘贴完整 Session JSON" />

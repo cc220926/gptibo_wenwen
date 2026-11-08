@@ -47,7 +47,7 @@
 .rg-caption h3 { margin-top:7px; font-size:18px; line-height:1.4; font-weight:550; }
 .rg-caption p { margin-top:8px; font-size:12px; line-height:1.9; color:var(--muted-foreground); max-width:560px; overflow-wrap:anywhere; }
 .rg-navigation { display:flex; align-items:flex-start; gap:2px; padding-top:8px; }
-.rg-external { display:inline-flex; align-items:center; gap:8px; font-size:12px; color:var(--primary); min-height:36px; }
+.rg-reference { margin:12px 0 0;font-size:12px;color:var(--muted-foreground);line-height:1.8; }.rg-reference code { display:block;margin-top:4px;color:var(--foreground);overflow-wrap:anywhere;white-space:normal;user-select:all; }
 .rg-scope { margin-top:22px; padding-top:20px; border-top:1px solid var(--border); color:var(--muted-foreground); font-size:11px; line-height:1.9; }
 .rg-cursor { position:absolute; fill:var(--foreground); color:var(--card); stroke-width:1.5; filter:drop-shadow(0 2px 3px #0002); pointer-events:none; }
 .rg-session-scene { position:relative; height:100%; padding:25px 30px; }
@@ -86,7 +86,7 @@
   .rg-navigation { gap:0; }
   .rg-navigation button { width:30px; }
   .rg-scope { margin-top:18px; font-size:10px; }
-  .rg-external { font-size:11px; }
+  .rg-reference { font-size:11px; }
 }
 @media(prefers-reduced-motion:reduce) {
   .rg-scene,.rg-scene *,.rg-scene-viewport,.rg-caption-copy,.rg-address span { animation:none !important; transition:none !important; }
