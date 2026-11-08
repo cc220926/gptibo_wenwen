@@ -26,16 +26,22 @@ export async function verifyOrderChallenge(request: Request, env: Env, token: un
   const ip = request.headers.get('CF-Connecting-IP')
   if (ip) payload.remoteip = ip
   let result: { success?: unknown; hostname?: unknown; action?: unknown; challenge_ts?: unknown; 'error-codes'?: unknown }
+  let stage = 'network'
   try {
     const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       redirect: 'error', signal: AbortSignal.timeout(8000),
     })
+    stage = 'http-' + response.status
     if (response.status !== 200) { await response.body?.cancel(); throw new Error() }
-    result = JSON.parse(await boundedResponseText(response, 16384))
+    stage = 'response-body'
+    const raw = await boundedResponseText(response, 16384)
+    stage = 'response-json'
+    result = JSON.parse(raw)
     if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error()
-  } catch {
-    console.warn('Turnstile provider request failed')
+  } catch (error) {
+    const kind = error instanceof Error && ['TypeError', 'SyntaxError', 'TimeoutError', 'AbortError', 'RangeError'].includes(error.name) ? error.name : 'Error'
+    console.warn('Turnstile provider request failed', stage, kind)
     throw unavailable()
   }
   const providerError = Array.isArray(result['error-codes']) && result['error-codes'].find(code => ['missing-input-secret', 'invalid-input-secret', 'internal-error'].includes(code))
