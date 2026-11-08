@@ -4,6 +4,7 @@ import { generateKeyPairSync, sign } from 'node:crypto'
 import { customerFixture } from './customer-fixture.ts'
 import { applyPaymentResult, findPayment } from '../worker/payments/service.ts'
 import { expireReservations, fulfillService, reconcileServices, sendServiceMail } from '../worker/fulfillment/service.ts'
+import { signZpayParams } from '../worker/payments/zpay-protocol.ts'
 
 type Context = Parameters<Parameters<typeof test>[1]>[0]
 const keys = generateKeyPairSync('rsa', { modulusLength: 2048 })
@@ -229,6 +230,52 @@ test('signed payment flow checks original amount and delivers after query, not Q
   wrongAmount = false
   assert.equal((await s.request(path, { action: 'query' }, s.buyer)).status, 200)
   assert.equal((await s.read(order.id)).status, 'success')
+})
+
+test('ZPAY stock checkout verifies a paid callback before releasing the reserved code', async t => {
+  const s = await setup(t)
+  const pid = '202600000001', key = 'local-test-key-keep-private'
+  Object.assign(s.env, { SERVICE_PAYMENT_PROVIDER: 'zpay', ZPAY_PID: pid, ZPAY_KEY: key, ALIPAY_APP_ID: undefined, ALIPAY_SELLER_ID: undefined, ALIPAY_APP_PRIVATE_KEY: undefined, ALIPAY_PUBLIC_KEY: undefined })
+  const order = await s.order(), path = `/api/orders/${order.id}/payment`
+  const created = await s.request(path, { action: 'create' }, s.buyer)
+  assert.equal(created.status, 200, await created.clone().text())
+  const payment = (await created.json()).payment
+  assert.equal(payment.provider, 'zpay')
+  assert.equal(new URL(payment.qr).origin, 'https://zpayz.cn')
+  assert.equal((await s.read(order.id)).delivery.value, undefined)
+  let paid = false
+  t.mock.method(globalThis, 'fetch', async (input: string) => {
+    const url = new URL(input)
+    assert.equal(url.origin, 'https://zpayz.cn')
+    assert.equal(url.searchParams.get('key'), key)
+    return Response.json({ code: 1, pid, out_trade_no: order.id.slice(4), type: 'alipay', money: '10.00', status: paid ? 1 : 0, trade_no: '2026000000001' })
+  })
+  const params = new URLSearchParams({ pid, type: 'alipay', out_trade_no: order.id.slice(4), trade_no: '2026000000001', trade_status: 'TRADE_SUCCESS', money: '10.00', sign_type: 'MD5' })
+  params.set('sign', signZpayParams(params, key))
+  const notify = () => s.request(`/api/payments/notify/zpay?${params}`)
+  assert.equal((await notify()).status, 400)
+  assert.equal((await s.read(order.id)).delivery.value, undefined)
+  paid = true
+  assert.equal((await notify()).status, 200)
+  assert.equal((await notify()).status, 200)
+  assert.match((await s.read(order.id)).delivery.value, /^PRIVATE-CODE-[12]$/)
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM cdk_stock WHERE state='delivered'").get()!.n, 1)
+  const current = await s.read(order.id)
+  assert.equal((await s.request(`/api/orders/${order.id}/refunds`, { key: crypto.randomUUID(), reason: '商品不适用', version: current.version }, s.buyer)).status, 201)
+  const refund = s.db.prepare('SELECT id FROM refund_cases WHERE order_id=?').get(order.id) as { id: string }
+  const refundPath = `/api/admin/refunds/${refund.id}`
+  assert.equal((await s.request(refundPath, { action: 'approve', version: 0, amountCents: 1000, note: '同意退款' }, s.admin)).status, 200)
+  assert.equal((await s.request(refundPath, { action: 'execute-refund', version: 1, note: '后台已退款' }, s.admin)).status, 400)
+  assert.equal((await s.request(refundPath, { action: 'execute-refund', version: 1, reference: 'merchant-refund-reference', note: '后台已退款' }, s.admin)).status, 200)
+  assert.equal((await s.read(order.id)).delivery.value, undefined)
+})
+
+test('ZPAY selection keeps manually fulfilled service plans unavailable', async t => {
+  const s = await setup(t, 'manual')
+  Object.assign(s.env, { SERVICE_PAYMENT_PROVIDER: 'zpay', ZPAY_PID: '202600000001', ZPAY_KEY: 'local-test-key-keep-private' })
+  const catalog = await (await s.request('/api/catalog')).json()
+  assert.equal(catalog.plans.find((p: { id: string }) => p.id === s.plan).enabled, 0)
+  assert.equal((await s.create()).status, 409)
 })
 
 test('mail lease excludes racing refund and redemption writes, then refunded codes stay quarantined', async t => {

@@ -1,6 +1,7 @@
 import { ApiError, type Env, type Statement } from '../platform.ts'
 import { getOrder, type Order } from '../order-state.ts'
-import { emailCheckoutEnabled } from '../email-delivery.ts'
+import { deliveryMailReady } from '../email-delivery.ts'
+import { servicePaymentConfigured, servicePaymentProviderId } from '../payments/providers.ts'
 import { emailPayload, mailBrand, sendFrozenEmail } from '../email.ts'
 import { isServicePlan, type DeliveryKind, type ServiceTask } from '../../shared/fulfillment.ts'
 import { seal, unseal, vaultReady } from './vault.ts'
@@ -12,7 +13,7 @@ const eligible = "mode='live' AND is_test=0 AND payment_status='paid' AND refund
 // dispatches still require zero refunds, but its pending notice may be sent.
 const deliveredEligible = "mode='live' AND is_test=0 AND payment_status='paid' AND refund_hold=0 AND refunded_cents<price_cents AND redemption_blocked=0"
 export async function serviceCheckoutEnabled(env: Env) {
-  return env.SERVICE_CHECKOUT_ENABLED === 'true' && emailCheckoutEnabled({ ...env, EMAIL_PRODUCTS_ENABLED: 'true' }) && await vaultReady(env)
+  return env.SERVICE_CHECKOUT_ENABLED === 'true' && servicePaymentConfigured(env) && deliveryMailReady(env) && await vaultReady(env)
 }
 export async function serviceCatalog(env: Env) {
   return (await env.INTEREST_DB.prepare(`SELECT c.*,p.name product_name,p.category,p.description,
@@ -27,6 +28,7 @@ export async function createServiceOrder(env: Env, ownerHash: string, email: str
   await expireReservations(env)
   const plan = await env.INTEREST_DB.prepare(`SELECT c.*,p.name product_name FROM catalog_plans c JOIN service_products p ON p.id=c.product_id WHERE c.id=? AND c.enabled=1 AND c.delivery_type IN ('stock','manual')`).bind(String(data.plan)).first<{ id: string; product_id: string; product_name: string; name: string; price_cents: number; version: number; delivery_type: DeliveryKind; purchase_note: string; delivery_instructions: string }>()
   if (!plan) throw new ApiError('该商品已暂停销售。', 409)
+  if (servicePaymentProviderId(env) === 'zpay' && plan.delivery_type !== 'stock') throw new ApiError('该商品暂不支持此支付渠道。', 409)
   if (data.expectedPrice !== plan.price_cents) throw new ApiError('价格已更新，请刷新后重新确认。', 409)
   const now = Date.now(), id = 'YMX-' + crypto.randomUUID().replaceAll('-', '').toUpperCase(), event = crypto.randomUUID()
   const statements: Statement[] = [

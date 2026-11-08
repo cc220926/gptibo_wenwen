@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import { parseZpayNotification, queryZpayOrder, signZpayParams, zpayCheckoutUrl } from '../worker/payments/zpay-protocol.ts'
+import { zpay } from '../worker/payments/zpay.ts'
+import { servicePaymentProviderId, servicePaymentConfigured } from '../worker/payments/providers.ts'
+import type { Env } from '../worker/platform.ts'
 
 const credentials = { pid: '202611080001', key: 'local-test-key-keep-private' }
 const orderId = `YMX-${'A'.repeat(32)}`
@@ -65,4 +68,26 @@ test('gateway order query cross-checks merchant, order, method and amount', asyn
   await assert.rejects(queryZpayOrder(order, credentials, mocked({ pid: 'someone-else' })), /mismatch/)
   await assert.rejects(queryZpayOrder(order, credentials, mocked({ status: 1, trade_no: '' })), /missing/)
   await assert.rejects(queryZpayOrder(order, credentials, (async () => new Response('', { status: 302, headers: { location: 'https://evil.invalid/' } })) as typeof fetch), /unavailable/)
+})
+
+test('service payment selection only chooses ZPAY with its own credentials', () => {
+  const env = { SERVICE_PAYMENT_PROVIDER: 'zpay', ZPAY_PID: credentials.pid, ZPAY_KEY: credentials.key } as Env
+  assert.equal(servicePaymentProviderId(env), 'zpay')
+  assert.equal(servicePaymentConfigured(env), true)
+  assert.equal(servicePaymentConfigured({ ...env, ZPAY_KEY: undefined }), false)
+  assert.equal(servicePaymentProviderId({} as Env), 'alipay')
+})
+
+test('ZPAY callback requires a matching paid order query before acknowledgement', async t => {
+  const params = new URLSearchParams({ pid: credentials.pid, type: 'alipay', out_trade_no: 'A'.repeat(32), trade_no: '2026110800001', trade_status: 'TRADE_SUCCESS', money: '138.00', sign_type: 'MD5' })
+  params.set('sign', signZpayParams(params, credentials.key))
+  const request = new Request(`https://shop.example.invalid/api/payments/notify/zpay?${params}`)
+  let remoteStatus = 0
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ code: 1, pid: credentials.pid, out_trade_no: 'A'.repeat(32), type: 'alipay', money: '138.00', status: remoteStatus, trade_no: '2026110800001' }))
+  const provider = zpay(credentials)
+  await assert.rejects(provider.notification(request), /mismatch/)
+  assert.equal(await provider.acknowledge(false).text(), 'failure')
+  remoteStatus = 1
+  assert.deepEqual(await provider.notification(request), { orderId, amountCents: 13800, status: 'paid', tradeNo: '2026110800001' })
+  assert.equal(await provider.acknowledge(true).text(), 'success')
 })

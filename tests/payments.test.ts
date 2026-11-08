@@ -321,3 +321,26 @@ test('missing expired QR trades retire only after the safety window', async t =>
   s.db.prepare('UPDATE payments SET expires_at=?').run(Date.now() - 121000)
   await s.pay('query'); assert.equal((await findPayment(s.env, s.id))!.state, 'closed')
 })
+
+test('ZPAY locally closes an expired unpaid trade and later reconciles a late receipt', async t => {
+  const s = await setup(t); s.live()
+  const pid = '202600000001', key = 'local-test-key-keep-private'
+  s.env.ZPAY_PID = pid; s.env.ZPAY_KEY = key
+  const now = Date.now()
+  s.db.prepare("INSERT INTO payments(order_id,provider,account,amount_cents,state,expires_at,created_at,updated_at) VALUES(?,?,?,13900,'pending',?,?,?)").run(s.id, 'zpay', pid, now - 121000, now - 400000, now - 400000)
+  let paid = false
+  t.mock.method(globalThis, 'fetch', async (input: string) => {
+    const url = new URL(input)
+    assert.equal(url.origin, 'https://zpayz.cn')
+    assert.equal(url.searchParams.get('key'), key)
+    return Response.json({ code: 1, pid, out_trade_no: s.id.slice(4), type: 'alipay', money: '139.00', status: paid ? 1 : 0, trade_no: '2026000000001' })
+  })
+  await reconcilePayments(s.env)
+  assert.equal((await findPayment(s.env, s.id))!.state, 'closed')
+  assert.equal(s.db.prepare('SELECT payment_status FROM orders WHERE id=?').get(s.id)!.payment_status, 'unpaid')
+  paid = true
+  s.db.prepare('UPDATE payments SET updated_at=? WHERE order_id=?').run(Date.now() - 6 * 60000, s.id)
+  await reconcilePayments(s.env)
+  assert.equal((await findPayment(s.env, s.id))!.state, 'paid')
+  assert.equal(s.db.prepare('SELECT payment_status FROM orders WHERE id=?').get(s.id)!.payment_status, 'paid')
+})

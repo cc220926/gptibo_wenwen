@@ -9,7 +9,7 @@ import { emailCheckoutEnabled } from '../email-delivery.ts'
 import { fulfillGmail, gmailCheckoutEnabled } from '../account_supplier/service.ts'
 import { ApiError, body, json, type Env } from '../platform.ts'
 import { getOrder, type Order } from '../order-state.ts'
-import { paymentProvider } from './providers.ts'
+import { paymentProvider, servicePaymentProviderId } from './providers.ts'
 import type { PaymentOrder, PaymentResult, PaymentProvider } from './types.ts'
 
 export type Payment = { order_id: string; provider: string; account: string; amount_cents: number; state: 'pending' | 'paid' | 'closed'; trade_no: string | null; qr: string | null; expires_at: number; lease_token: string | null; lease_until: number; notified_at: number | null }
@@ -86,7 +86,7 @@ async function sync(env: Env, p: Payment, o: Order, close: boolean) {
       // Precreated QR codes may not appear in trade.query until the buyer scans.
       // Only retire a missing trade after the code's maximum validity plus a
       // two-minute allowance for minute rounding and gateway request latency.
-      if (result.status === 'not_found' && Date.now() > p.expires_at + 120000) await applyPaymentResult(env, p, { orderId: p.order_id, amountCents: p.amount_cents, status: 'closed' })
+      if ((result.status === 'not_found' || (p.provider === 'zpay' && result.status === 'pending')) && Date.now() > p.expires_at + 120000) await applyPaymentResult(env, p, { orderId: p.order_id, amountCents: p.amount_cents, status: 'closed' })
     }
   }
   await env.INTEREST_DB.prepare('UPDATE payments SET updated_at=? WHERE order_id=?').bind(Date.now(), p.order_id).run()
@@ -103,11 +103,13 @@ export async function paymentAction(request: Request, env: Env, order: Order, ad
   if (data.action === 'options') return json({ payment: payment ? { provider: payment.provider, status: payment.state, qr: null, expiresAt: payment.expires_at } : null, methods: canCreate ? [{ method: 'alipay', name: '支付宝', feeBps: 0 }] : [] })
   if (!payment && data.action === 'create') {
     if (!canCreate) throw new ApiError('真实收款尚未开放。', 503)
-    const provider = paymentProvider(env, isServicePlan(order.plan) || emailProduct(order.plan) || isXGiftPlan(order.plan) ? 'alipay' : env.PAYMENT_PROVIDER ?? '')
+    const provider = paymentProvider(env, isServicePlan(order.plan) ? servicePaymentProviderId(env) : emailProduct(order.plan) || isXGiftPlan(order.plan) ? 'alipay' : env.PAYMENT_PROVIDER ?? '')
+    if (provider.id === 'zpay' && !isServicePlan(order.plan)) throw new ApiError('该支付渠道仅用于自有库存商品。', 409)
     notifyUrl(env, provider.id)
     const now = Date.now()
     const task = isServicePlan(order.plan) ? await taskFor(env, order.id) : null
     if (isServicePlan(order.plan) && (!task || task.state !== 'reserved' || task.expires_at <= now)) throw new ApiError('库存预留已到期，请重新下单；如已付款请核对原订单。', 409)
+    if (provider.id === 'zpay' && task?.kind !== 'stock') throw new ApiError('该商品暂不支持此支付渠道。', 409)
     await env.INTEREST_DB.prepare("INSERT INTO payments(order_id,provider,account,amount_cents,expires_at,created_at,updated_at) SELECT id,?,?,price_cents,?,?,? FROM orders WHERE id=? AND mode='live' AND payment_status='unpaid' AND status='pending' AND redemption_blocked=0 AND refund_hold=0 AND refunded_cents=0 AND (NOT EXISTS(SELECT 1 FROM fulfillment_tasks t WHERE t.order_id=orders.id) OR EXISTS(SELECT 1 FROM fulfillment_tasks t WHERE t.order_id=orders.id AND t.state='reserved' AND t.expires_at>?)) ON CONFLICT(order_id) DO NOTHING")
       .bind(provider.id, provider.account, task?.expires_at ?? now + 15 * 60000, now, now, order.id, now).run()
     payment = await findPayment(env, order.id)
@@ -150,10 +152,15 @@ export async function paymentNotification(request: Request, env: Env, providerId
 // Can be run by an administrator or a scheduled Worker event. Each failure is
 // isolated, and uncertain orders remain pending for subsequent reconciliation.
 export async function reconcilePayments(env: Env) {
-  const rows = (await env.INTEREST_DB.prepare("SELECT * FROM payments WHERE state='pending' AND lease_until<=? ORDER BY updated_at LIMIT 10").bind(Date.now()).all<Payment>()).results
+  const now = Date.now()
+  // ZPAY does not expose a documented close API. A locally closed cashier URL
+  // can still be paid later; keep querying it so late receipts reach review.
+  const pending = (await env.INTEREST_DB.prepare("SELECT * FROM payments WHERE state='pending' AND lease_until<=? ORDER BY updated_at LIMIT 10").bind(now).all<Payment>()).results
+  const closed = (await env.INTEREST_DB.prepare("SELECT * FROM payments WHERE provider='zpay' AND state='closed' AND lease_until<=? AND created_at>? AND updated_at<? ORDER BY updated_at LIMIT 5").bind(now, now - 30 * 86400000, now - 5 * 60000).all<Payment>()).results
+  const rows = [...pending, ...closed]
   let confirmed = 0; let failed = 0
   for (const row of rows) {
-    try { await locked(env, row, async () => { const p = (await findPayment(env, row.order_id))!; if (p.state === 'pending') await sync(env, p, await getOrder(env, row.order_id), p.expires_at <= Date.now()) }); confirmed++ }
+    try { await locked(env, row, async () => { const p = (await findPayment(env, row.order_id))!; if (p.state === 'pending' || (p.provider === 'zpay' && p.state === 'closed')) await sync(env, p, await getOrder(env, row.order_id), p.state === 'pending' && p.expires_at <= Date.now()) }); confirmed++ }
     catch { failed++; await env.INTEREST_DB.prepare('UPDATE payments SET updated_at=? WHERE order_id=?').bind(Date.now(), row.order_id).run() }
   }
   return { checked: rows.length, confirmed, failed }
@@ -164,6 +171,7 @@ export async function refundThroughProvider(env: Env, order: Order, caseId: stri
   const p = await findPayment(env, order.id)
   if (!p) return null // Legacy/manual orders keep their existing recorded-transfer workflow.
   if (p.state !== 'paid' || order.payment_status !== 'paid' || !order.refund_hold) throw new ApiError('订单付款或售后状态不正确。', 409)
+  if (p.provider === 'zpay') return null // No documented idempotency or refund-result query; require a real merchant-side refund reference.
   const provider = providerFor(env, p); const d = details(p, order); const refund = { id: caseId, amountCents: amount }
   return locked(env, p, async () => {
     let result = await provider.queryRefund(d, refund)

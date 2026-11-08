@@ -15,8 +15,8 @@
    ```
 
    密钥应与数据库备份分开保存。已导入库存后，直接更换密钥会停止解密、导入与新购买，须恢复原密钥；当前不提供在线密钥轮换。不要把密钥或真实库存提交到 Git。
-3. 配置当前已有的支付宝收款、支付回调和 Resend 邮件参数，设置可信的 `MAIL_PUBLIC_ORIGIN`，保留每分钟的定时任务。
-4. 在目标 Worker 设置 `SERVICE_CHECKOUT_ENABLED=true`，同时保持 `ORDER_TESTING_ENABLED=false`。本开关独立于 `EMAIL_PRODUCTS_ENABLED`。配置不全时暂停新购买，已确认的订单及库存不会被删除。
+3. 配置支付渠道、支付回调和 Resend 邮件参数，设置可信的 `MAIL_PUBLIC_ORIGIN`，保留每分钟的定时任务。如使用 ZPAY，请先按 [ZPAY 接入说明](zpay-integration.md)重置密钥、设置 Secret 并完成实付验收。
+4. 在目标 Worker 设置 `SERVICE_CHECKOUT_ENABLED=true`，同时保持 `ORDER_TESTING_ENABLED=false`。默认使用现有直连支付宝；设置 `SERVICE_PAYMENT_PROVIDER=zpay` 后，仅自有库存自动交付规格可用 ZPAY。本开关独立于 `EMAIL_PRODUCTS_ENABLED`。配置不全时暂停新购买，已确认的订单及库存不会被删除。
 5. 构建并部署后，在管理后台「自有商品与库存」新建商品和规格。先保持规格暂停，导入库存并检查说明、售价和成本，再开放新购买。
 
 ## 后台操作
