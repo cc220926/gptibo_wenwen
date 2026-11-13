@@ -36,7 +36,7 @@ export async function supplierProducts(env: Env) {
 function eligible(product: Product | undefined, price: number): product is Product {
   // Dynamic quotes require the separate account-preflight checkout workflow.
   // max_sale_price is a historical compatibility field, not a retail ceiling.
-  return !!product && product.available === true && product.quote_required !== true && product.currency === 'CNY' && product.max_quantity >= 1 && Array.isArray(product.delivery_modes) && product.delivery_modes.includes('auto_recharge') && price >= amountCents(product.supply_price)
+  return !!product && product.available === true && product.quote_required !== true && product.currency === 'CNY' && product.max_quantity >= 1 && Array.isArray(product.delivery_modes) && product.delivery_modes.includes('auto_recharge') && amountCents(product.supply_price) > 0 && price >= amountCents(product.supply_price)
 }
 export async function supplierCatalog<T extends { id: string; price_cents: number; enabled: number }>(env: Env, plans: T[], partnerId?: string) {
   const products = await supplierProducts(env); const map = productMap(env)
@@ -175,7 +175,7 @@ async function applyRedemption(env: Env, row: SupplierOrder, attempt: Attempt, r
   const masked = typeof remote.account_email_masked === 'string' && /^[^@\s]*\*[^@\s]*@[^@\s]+$/.test(remote.account_email_masked) && remote.account_email_masked.length <= 320 ? remote.account_email_masked : null
   await env.INTEREST_DB.batch([
     env.INTEREST_DB.prepare("UPDATE recharge_redemptions SET remote_id=?,remote_attempt_no=COALESCE(?,remote_attempt_no),status=?,fallback=?,failure_code=?,subscription_expires_hint=?,error_category=?,result_code=?,account_email_masked=?,finished_at=?,progress_stage=?,progress_version=?,progress_updated_at=? WHERE id=? AND progress_version<=? AND (status IN ('unknown','queued','running') OR status=? OR (status IN ('failed','cancelled') AND ?='succeeded' AND progress_version<?))")
-      .bind(remote.redemption_id, remoteNumber, remote.status, Number(remote.fallback_recharge_available && remote.retry_allowed === true && remote.next_action === 'resubmit' && remote.recovery_action !== 'refund' && ['failed', 'cancelled'].includes(remote.status)), failure, expiryHint, category, resultCode, masked, finished, publicStage, version, publicTime, attempt.id, version, remote.status, remote.status, version),
+      .bind(remote.redemption_id, remoteNumber, remote.status, Number(remote.retry_allowed === true && remote.next_action === 'resubmit' && remote.recovery_action !== 'refund' && ['failed', 'cancelled'].includes(remote.status)), failure, expiryHint, category, resultCode, masked, finished, publicStage, version, publicTime, attempt.id, version, remote.status, remote.status, version),
     env.INTEREST_DB.prepare("UPDATE orders SET status=?,started_at=COALESCE(started_at,?),updated_at=?,version=version+1,last_event_id=? WHERE id=? AND mode='live' AND payment_status='paid' AND redemption_blocked=0 AND refund_hold=0 AND refunded_cents<price_cents AND status<>? AND status<>'success' AND EXISTS(SELECT 1 FROM recharge_orders t WHERE t.order_id=orders.id AND t.payment_status='paid' AND t.financial_hold=0 AND t.refunded_cents=0) AND EXISTS(SELECT 1 FROM recharge_redemptions a WHERE a.id=? AND a.status=? AND a.attempt_no=(SELECT MAX(attempt_no) FROM recharge_redemptions WHERE order_id=orders.id))")
       .bind(status, now, now, event, row.order_id, status, attempt.id, remote.status),
     env.INTEREST_DB.prepare("INSERT INTO order_events(id,order_id,actor,action,from_status,to_status,note,order_version,created_at) SELECT ?,id,'system','recharge-status',?,status,?,version,? FROM orders WHERE id=? AND last_event_id=?")
@@ -364,10 +364,11 @@ export async function rechargeAction(requestMessage: Request, env: Env, order: O
     catch (e) {
       // A definitive API rejection permits a new attempt. A transport error,
       // conflict, or malformed reply remains unknown and retains the original key.
-      if (e instanceof RechargeError && !e.retryable && ['invalid_request', 'session_invalid', 'invalid_credential'].includes(e.code)) {
-        await env.INTEREST_DB.prepare("UPDATE recharge_redemptions SET status='rejected',failure_code='request_rejected' WHERE id=? AND status='unknown'").bind(attempt.id).run()
+      if (e instanceof RechargeError && !e.retryable && (['invalid_request', 'session_invalid', 'invalid_credential'].includes(e.code) || (e.code === 'full_session_required' && e.upstreamStatus === 422))) {
+        const failure = e.code === 'full_session_required' ? e.code : 'request_rejected'
+        await env.INTEREST_DB.prepare("UPDATE recharge_redemptions SET status='rejected',failure_code=? WHERE id=? AND status='unknown'").bind(failure, attempt.id).run()
         const rejectedOrder = await getOrder(env, order.id)
-        if (!rejectedOrder.refund_hold && !rejectedOrder.refunded_cents && rejectedOrder.status === 'processing') await change(env, rejectedOrder, { status: 'failed' }, 'system', 'recharge-rejected', failureMessages.request_rejected)
+        if (!rejectedOrder.refund_hold && !rejectedOrder.refunded_cents && rejectedOrder.status === 'processing') await change(env, rejectedOrder, { status: 'failed' }, 'system', 'recharge-rejected', failureMessages[failure])
       }
       throw e
     }

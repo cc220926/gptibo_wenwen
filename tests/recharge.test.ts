@@ -125,6 +125,81 @@ async function retainedSetup(t: Context, rawSession = session) {
   return { ...s, buyer, order, key, submitSaved: submit, read, failSubscription, reuse }
 }
 
+test('channel two fixed-price direct orders forward long complete Session JSON without issuing or storing a CDK', async t => {
+  const s = setup(t); Object.assign(s.products[0], { fulfillment_mode: 'direct' })
+  const buyer = await s.buyer(), order = await s.create(buyer)
+  s.override(path => path === '/v1/orders/ord_test' ? Response.json({ data: { ...s.remoteOrder(), fulfillment_mode: 'direct', voucher_code: null } }) : undefined)
+  await s.query(order.id,buyer); s.setPayment('paid'); await s.query(order.id,buyer)
+  const raw = JSON.stringify({ user:{email:'target@example.test'},account:{id:'account-two'},accessToken:'PRIVATE-FULL-TOKEN',extra:'x'.repeat(150000) })
+  const result = await s.submit(order.id,buyer,crypto.randomUUID(),raw)
+  assert.equal(result.status,200,await result.clone().text())
+  assert.equal(JSON.parse(s.calls.find(c=>c.path==='/v1/redemptions')!.body).credential.session,raw)
+  s.setTask('succeeded'); const done=(await (await s.query(order.id,buyer)).json()).order
+  assert.equal(done.status,'success'); assert.equal(done.fulfillment.canSubmit,false)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_saved_credentials').get()!.n,0)
+  assert.doesNotMatch(JSON.stringify(s.db.prepare('SELECT * FROM order_events').all()),/PRIVATE-FULL-TOKEN|account-two/)
+})
+
+test('channel two full_session_required is a definitive non-submission and permits complete JSON on the same paid order', async t => {
+  const s=setup(t),buyer=await s.buyer(),order=await s.create(buyer)
+  await s.query(order.id,buyer);s.setPayment('paid');await s.query(order.id,buyer)
+  s.override(path=>path==='/v1/redemptions'?Response.json({error:{code:'full_session_required',retryable:false,message:'PRIVATE-FULL-TOKEN'}},{status:422}):undefined)
+  const denied=await s.submit(order.id,buyer)
+  assert.match(await denied.text(),/完整.*Session/)
+  const current=(await(await s.call('/api/orders/'+order.id,undefined,buyer)).json()).order
+  assert.equal(current.status,'failed');assert.equal(current.fulfillment.canSubmit,true)
+  assert.equal(current.fulfillment.failureCode,'full_session_required')
+  assert.equal(s.db.prepare('SELECT status FROM recharge_redemptions').get()!.status,'rejected')
+  s.override(undefined)
+  const raw=JSON.stringify({user:{email:'target@example.test'},account_id:'account-two',accessToken:'PRIVATE-FULL-TOKEN'})
+  assert.equal((await s.submit(order.id,buyer,crypto.randomUUID(),raw)).status,200)
+  assert.equal(s.calls.filter(c=>c.path==='/v1/orders').length,1)
+  assert.doesNotMatch(JSON.stringify(s.db.prepare('SELECT * FROM recharge_redemptions').all()),/PRIVATE-FULL-TOKEN/)
+})
+
+test('channel two terminal retry uses explicit permission rather than the CDK fallback bit; queued and running remain blocked', async t => {
+  for(const status of ['queued','running','failed','cancelled']) {
+    const s=setup(t),buyer=await s.buyer(),order=await s.create(buyer)
+    await s.query(order.id,buyer);s.setPayment('paid');await s.query(order.id,buyer);await s.submit(order.id,buyer)
+    s.override(path=>path.startsWith('/v1/redemptions/')?Response.json({data:{...s.redemption(),status,failure_code:status==='failed'?'session_invalid':null,fallback_recharge_available:false,retry_allowed:true,next_action:'resubmit',finished_at:['failed','cancelled'].includes(status)?new Date().toISOString():null}}):undefined)
+    const current=(await(await s.query(order.id,buyer)).json()).order
+    const permitted=['failed','cancelled'].includes(status)
+    assert.equal(current.fulfillment.canSubmit,permitted)
+    s.override(undefined);s.setTask('queued')
+    assert.equal((await s.submit(order.id,buyer)).status,permitted?200:409)
+    assert.equal(s.calls.filter(c=>c.path==='/v1/orders').length,1)
+    t.mock.restoreAll()
+  }
+})
+
+test('full-session errors with ambiguous HTTP status or retryability keep the original attempt unknown', async t => {
+  for (const [http,retryable] of [[503,false],[422,true],[202,false]] as const) {
+    const s=setup(t),buyer=await s.buyer(),order=await s.create(buyer)
+    await s.query(order.id,buyer);s.setPayment('paid');await s.query(order.id,buyer)
+    s.override(path=>path==='/v1/redemptions'?Response.json({error:{code:'full_session_required',retryable}},{status:http}):undefined)
+    await s.submit(order.id,buyer)
+    assert.equal(s.db.prepare('SELECT status FROM recharge_redemptions').get()!.status,'unknown')
+    assert.equal((await s.submit(order.id,buyer,crypto.randomUUID(),session)).status,409)
+    assert.equal(s.calls.filter(c=>c.path==='/v1/redemptions').length,1)
+    t.mock.restoreAll()
+  }
+})
+
+test('unpriced channel two product drafts cannot be sold even if erroneously marked available', async t => {
+  const s=setup(t);s.products[0].supply_price='0.00'
+  const buyer=await s.buyer()
+  const r=await s.call('/api/orders',{plan:'plus',expectedPrice:13900,email:'buyer@example.test',key:crypto.randomUUID()},buyer)
+  assert.equal(r.status,409)
+  assert.equal(s.calls.filter(c=>c.path==='/v1/orders').length,0)
+})
+
+test('202 preflight_pending never becomes a successful result and carries a safe wait interval', async t => {
+  const s=setup(t)
+  s.override(path=>path.endsWith('/preflight')?Response.json({error:{code:'preflight_pending',retryable:true}},{status:202}):undefined)
+  await assert.rejects(supplierRequest(s.env,'/products/demo_plus/preflight',JSON.stringify({credential:{mode:'session',session}}),'preflight:'+crypto.randomUUID()),e=>e instanceof RechargeError&&e.code==='preflight_pending'&&e.retryable&&e.retryAfter!>=5)
+  assert.equal(s.calls.filter(c=>c.path==='/v1/redemptions'||c.path==='/v1/orders').length,0)
+})
+
 test('disabled Session retention ignores old client opt-ins while allowing ordinary paid submission', async t => {
   for (const flag of [undefined, 'false']) {
     const s = setup(t); s.env.CDK_ENCRYPTION_KEY = Buffer.alloc(32, 51).toString('base64')
@@ -543,7 +618,7 @@ test('confirmed recharge progress is versioned per attempt, survives stale or fa
   assert.doesNotMatch(JSON.stringify(current), /PRIVATE-TOKEN/)
 })
 
-test('recovery requires all platform retry flags, can be revoked at the same progress version and resets progress for a new attempt', async t => {
+test('recovery requires explicit platform retry permission, can be revoked at the same progress version and resets progress for a new attempt', async t => {
   const s = setup(t); const buyer = await s.buyer(); const order = await s.create(buyer)
   await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer); await s.submit(order.id, buyer)
   s.setTask('failed', true)

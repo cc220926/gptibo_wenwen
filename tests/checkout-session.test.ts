@@ -35,3 +35,14 @@ test('an existing uncertain access-token submission can recover from Session wit
   assert.deepEqual(checkoutSession(raw, 'access_token').credential, { mode: 'access_token', access_token: ' private-token ' })
   assert.deepEqual(checkoutSession(raw).credential, { mode: 'session', session: raw })
 })
+
+
+test('new complete Session inputs retain account identity and enforce the encoded request limit without truncation', () => {
+  const raw=JSON.stringify({user:{email:'buyer@example.test'},account:{id:'account-two'},accessToken:'private-token',extra:'x'.repeat(150000)})
+  assert.deepEqual(checkoutSession(raw).credential,{mode:'session',session:raw})
+  assert.equal(checkoutSession(JSON.stringify({user:{email:'buyer@example.test'},accessToken:'x'.repeat(128*1024+1)})).credential,null)
+  const oversized=JSON.stringify({user:{email:'buyer@example.test'},accessToken:'token',extra:'中'.repeat(100000)})
+  assert.equal(checkoutSession(oversized).credential,null)
+  assert.match(checkoutSession(oversized).problem,/过长/)
+  assert.match(checkoutSession('x'.repeat(256*1024+1)).problem,/过长/)
+})

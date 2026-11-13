@@ -105,6 +105,11 @@ export async function request<T>(env: Env, path: string, rawBody?: string, idemp
     if (trackedRead && retryAfter > waitSeconds) await env.INTEREST_DB.prepare('INSERT INTO recharge_api_reads(account,resource,next_allowed_at) VALUES (?,?,?) ON CONFLICT(account,resource) DO UPDATE SET next_allowed_at=MAX(next_allowed_at,excluded.next_allowed_at)').bind(c.account, path, Math.min(Number.MAX_SAFE_INTEGER, Date.now() + retryAfter * 1000)).run()
   }
   if (!response.ok) throw new RechargeError(publicCode(result?.error?.code, requestMessages) ?? 'request_rejected', result?.error?.retryable === true || [429, 502, 503, 504].includes(response.status), { ...details, requestId: details.requestId ?? requestId(result?.error?.request_id) })
+  // Product/CDK preflight uses an error envelope with HTTP 202 while its
+  // asynchronous account check is pending. Never interpret it as a check_id.
+  if (response.status === 202 && result?.error?.code === 'preflight_pending' && /^\/(?:products\/[A-Za-z0-9_-]+|cdk)\/preflight$/.test(path)) {
+    throw new RechargeError('preflight_pending', true, { ...details, retryAfter: Math.max(5, details.retryAfter ?? 0, pollAfter ?? 0), requestId: details.requestId ?? requestId(result.error.request_id) })
+  }
   if (!result || result.error || result.data == null) throw new RechargeError('invalid_response', true, details)
   // A successful business write permits a fresh read of this order/task.
   // This clears timing metadata only; it never retries a financial write.

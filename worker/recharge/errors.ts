@@ -1,6 +1,7 @@
 // Only documented public codes cross our API/storage boundary. Supplier prose
 // can contain credentials on older deployments and is deliberately not copied.
 export const failureMessages: Record<string, string> = {
+  full_session_required: '该订单需要完整 Session JSON，请重新复制包含账号信息的完整内容，通过原订单提交，无需再次付款。',
   session_invalid: '登录凭据已失效，请重新登录后提交。',
   mailbox_login_failed: '邮箱登录失败，请核对登录资料，或在允许重新提交后改用 Session。',
   account_has_subscription: '该账号已有有效订阅，本次未充值。请核对当前套餐及到期时间，通过原订单继续处理，无需再次付款。',
@@ -29,6 +30,9 @@ export const categoryMessages: Record<string, string> = {
   unknown: '充值结果需要进一步核对，请联系客服。',
 }
 export const requestMessages: Record<string, string> = {
+  full_session_required: failureMessages.full_session_required,
+  preflight_pending: '账号检测仍在进行，至少等待 5 秒后继续核对，尚不能下单或付款。',
+  supplier_route_changed: '供货渠道已更新，请重新检测账号后再下单；尚未创建新订单。',
   invalid_request: '提交内容未通过校验，请核对资料。',
   invalid_credential: failureMessages.session_invalid,
   session_invalid: failureMessages.session_invalid,

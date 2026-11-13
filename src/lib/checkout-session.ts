@@ -1,6 +1,7 @@
 import { credentialExpiryProblem } from '../../shared/credential-expiry.ts'
 
 export function checkoutSession(value: string, retryMode?: 'session' | 'access_token' | null) {
+  if (value.length > 256 * 1024) return { email: '', problem: 'Session 内容过长，请仅复制官方 Session 页面返回的完整 JSON。', credential: null }
   if (!value.trim()) return { email: '', problem: '', credential: null }
   let session: { user?: { email?: unknown }; accessToken?: unknown; expires?: unknown }
   try { session = JSON.parse(value) }
@@ -17,5 +18,10 @@ export function checkoutSession(value: string, retryMode?: 'session' | 'access_t
   if (problem) return { email: '', problem, credential: null }
   // Recover an existing uncertain token submission without changing its request body.
   const credential = retryMode === 'access_token' ? { mode: 'access_token' as const, access_token: session.accessToken } : { mode: 'session' as const, session: value }
+  // Retain complete identity JSON for channel two; validate without trimming or
+  // extracting it into a different wire payload. Account for JSON escaping too.
+  if (session.accessToken.trim().length > 128 * 1024 || new TextEncoder().encode(JSON.stringify({ mode: 'auto_recharge', order_id: 'x'.repeat(100), credential, customer_confirmed_email: true })).byteLength > 256 * 1024) {
+    return { email: '', problem: 'Session 内容过长，请仅复制官方 Session 页面返回的完整 JSON。', credential: null }
+  }
   return { email: session.user.email, problem: '', credential }
 }
