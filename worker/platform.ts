@@ -28,6 +28,9 @@ export interface Env {
   MUSE_ACCOUNT_PAYMENT_APPROVED?: string
   ZPAY_PID?: string
   ZPAY_KEY?: string
+  MUSE_PAYMENT_PROVIDER?: string
+  MAPAY_PID?: string
+  MAPAY_KEY?: string
   ASSETS: { fetch(request: Request): Promise<Response> }
   INTEREST_DB: Database
   INTEREST_LIMITER: { limit(options: { key: string }): Promise<{ success: boolean }> }

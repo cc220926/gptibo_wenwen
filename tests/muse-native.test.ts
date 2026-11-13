@@ -4,25 +4,34 @@ import { createHash, createHmac } from 'node:crypto'
 import { customerFixture } from './customer-fixture.ts'
 import { applyPaymentResult, findPayment } from '../worker/payments/service.ts'
 import { fulfillMuse, reconcileMuse } from '../worker/muse/service.ts'
-import { fulfillService, sendServiceMail, expireReservations } from '../worker/fulfillment/service.ts'
+import { fulfillService, reconcileServices, sendServiceMail, expireReservations } from '../worker/fulfillment/service.ts'
 import { museProducts } from '../worker/muse/client.ts'
+import { signZpayParams } from '../worker/payments/zpay-protocol.ts'
+import worker from '../worker/index.ts'
+import { refundThroughProvider } from '../worker/payments/service.ts'
 import { museWebhook } from '../worker/muse/webhook.ts'
 
 type Context = Parameters<Parameters<typeof test>[1]>[0]
 const content = 'private-muse@example.test----PRIVATE-PASSWORD----https://code.example.test/secret'
-async function setup(t: Context) {
+async function setup(t: Context, paymentProvider = 'zpay') {
   const s = await customerFixture(); t.after(() => s.db.close())
-  Object.assign(s.env, { ORDER_TESTING_ENABLED: 'false', SERVICE_CHECKOUT_ENABLED: 'true', SERVICE_PAYMENT_PROVIDER: 'zpay',
-    ZPAY_PID: '2026110800000000', ZPAY_KEY: 'fixture-payment-secret', CDK_ENCRYPTION_KEY: Buffer.alloc(32, 37).toString('base64'),
+  Object.assign(s.env, { ORDER_TESTING_ENABLED: 'false', SERVICE_CHECKOUT_ENABLED: 'true', SERVICE_PAYMENT_PROVIDER: paymentProvider,
+    MAPAY_PID: '10101', MAPAY_KEY: 'private-mapay-test-secret', ZPAY_PID: '2026110800000000', ZPAY_KEY: 'fixture-payment-secret', CDK_ENCRYPTION_KEY: Buffer.alloc(32, 37).toString('base64'),
     MAIL_PUBLIC_ORIGIN: 'https://shop.example.test', RESEND_API_KEY: 'mail-test-key', RESEND_FROM: 'Store <delivery@example.test>', PAYMENT_NOTIFY_ORIGIN: 'https://shop.example.invalid',
     MUSE_KEY_ID: 'fixture-key', MUSE_API_SECRET: 'fixture-muse-secret', MUSE_CHECKOUT_ENABLED: 'true', MUSE_ACCOUNT_PAYMENT_APPROVED: 'true' })
-  const products = [{ code: 'muse_1b_pro', name: 'Muse成品号-精品手搓', supply_minor: 800, enabled: true, available: true, fulfillment_type: 'account_delivery' }]
+  const sale = paymentProvider === 'mapay' ? 6900 : 3500, cost = paymentProvider === 'mapay' ? 4900 : 800
+  const productCode = paymentProvider === 'mapay' ? 'muse-account-31b' : 'muse_1b_pro'
+  const products = [{ code: productCode, name: 'Muse 供应商品', supply_minor: cost, enabled: true, available: true, fulfillment_type: 'account_delivery' }]
   const calls: { path: string; raw: string; headers: Headers }[] = []
   let remote: Record<string, unknown> | null = null
   let remoteStatus = 'succeeded', loseCreate = false, deliveryFails = false, mismatch = false, reject = ''
-  let posted = 0, assigned = 0
+  let posted = 0, assigned = 0, mapayStatus = 0
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const url = new URL(String(input)), path = url.pathname.replace(/^\/v1/, ''), headers = new Headers(init?.headers), raw = String(init?.body ?? '')
+    if (url.hostname === 'mzf.mapay.cn') {
+      assert.equal(url.pathname,'/xpay/epay/api.php'); assert.equal(init?.redirect,'manual')
+      return Response.json({code:1,pid:Number(s.env.MAPAY_PID),type:'alipay',out_trade_no:url.searchParams.get('out_trade_no'),money:(sale / 100).toFixed(2),status:mapayStatus,trade_no:'mapay-fixture-trade'})
+    }
     if (url.hostname === 'api.resend.com') return Response.json({ id: 'muse-mail' })
     assert.equal(url.origin, 'https://api.gptibo.com'); assert.equal(init?.redirect, 'manual')
     const canonical = [init?.method, url.pathname, '', headers.get('X-Timestamp'), headers.get('X-Nonce'), headers.get('X-Key-Id'), headers.get('Idempotency-Key') ?? '', createHash('sha256').update(raw).digest('hex')].join('\n')
@@ -54,24 +63,24 @@ async function setup(t: Context) {
   })
   const p = await s.request('/api/admin/inventory/products', { name: 'Muse', category: '账密交付', description: '交付账号资料' }, s.admin)
   const productId = (await p.json()).id
-  const spec = { productId, name: 'Muse 精品手搓（API）', priceCents: 3500, kind: 'muse', enabled: true, purchaseNote: '按商品说明交付。', instructions: '请妥善保存账号。', supplierCode: 'muse_1b_pro', maxCostCents: 800 }
+  const spec = { productId, name: 'Muse 精品手搓（API）', priceCents: sale, kind: 'muse', enabled: true, purchaseNote: '按商品说明交付。', instructions: '请妥善保存账号。', supplierCode: productCode, maxCostCents: cost }
   const r = await s.request('/api/admin/inventory/plans', spec, s.admin)
   assert.equal(r.status, 200, await r.clone().text())
   const plan = (await r.json()).id
   const buyer = (await s.request('/api/orders/client', {})).headers.get('set-cookie')!.split(';')[0]
-  const create = async (key = crypto.randomUUID()) => s.request('/api/orders', { plan, key, expectedPrice: 3500, email: 'buyer@example.test' }, buyer)
+  const create = async (key = crypto.randomUUID()) => s.request('/api/orders', { plan, key, expectedPrice: sale, email: 'buyer@example.test' }, buyer)
   const order = async () => { const r = await create(); assert.equal(r.status, 201, await r.clone().text()); return (await r.json()).order }
   const pay = async (id: string) => {
     const now = Date.now()
-    s.db.prepare("INSERT INTO payments(order_id,provider,account,amount_cents,state,expires_at,created_at,updated_at) VALUES(?,'zpay',?,3500,'pending',?,?,?)").run(id, s.env.ZPAY_PID, now + 900000, now, now)
-    await applyPaymentResult(s.env, (await findPayment(s.env, id))!, { orderId: id, amountCents: 3500, status: 'paid', tradeNo: 'trade_' + id })
+    s.db.prepare("INSERT INTO payments(order_id,provider,account,amount_cents,state,expires_at,created_at,updated_at) VALUES(?,?,?,?,'pending',?,?,?)").run(id, paymentProvider, paymentProvider === 'mapay' ? s.env.MAPAY_PID : s.env.ZPAY_PID, sale, now + 900000, now, now)
+    await applyPaymentResult(s.env, (await findPayment(s.env, id))!, { orderId: id, amountCents: sale, status: 'paid', tradeNo: 'trade_' + id })
   }
   const read = async (id: string) => (await (await s.request('/api/orders/' + id, undefined, buyer)).json()).order
   const due = (id: string) => s.db.prepare('UPDATE muse_orders SET next_attempt_at=0 WHERE order_id=?').run(id)
   const state = (id: string) => s.db.prepare('SELECT * FROM muse_orders WHERE order_id=?').get(id)!
   return { ...s, products, plan, spec, productId, calls, buyer, create, order, pay, read, due, state,
     get posted() { return posted }, get assigned() { return assigned },
-    controls: { lose: (v: boolean) => { loseCreate = v }, deliveryFail: (v: boolean) => { deliveryFails = v }, mismatch: (v: boolean) => { mismatch = v }, status: (v: string) => { remoteStatus = v }, reject: (v: string) => { reject = v }, forget: () => { remote = null } } }
+    controls: { paymentStatus: (v: number) => { mapayStatus = v }, lose: (v: boolean) => { loseCreate = v }, deliveryFail: (v: boolean) => { deliveryFails = v }, mismatch: (v: boolean) => { mismatch = v }, status: (v: string) => { remoteStatus = v }, reject: (v: string) => { reject = v }, forget: () => { remote = null } } }
 }
 
 test('Muse native discovery accepts actual underscore codes; checkout preflight does not purchase or send customer email', async t => {
@@ -255,4 +264,49 @@ test('supplier redirects are refused without forwarding signed headers to anothe
   })
   await assert.rejects(() => museProducts(s.env), { code: 'redirect_refused', status: 302 })
   assert.equal(calls, 1)
+})
+
+
+test('rotated Muse keys cannot starve current-key paid recovery behind old-key tasks', async t => {
+  const s=await setup(t)
+  for(let i=0;i<10;i++) {
+    s.env.MUSE_CHECKOUT_ENABLED='true';const o=await s.order()
+    s.env.MUSE_CHECKOUT_ENABLED='false';await s.pay(o.id);s.due(o.id)
+    s.db.prepare('UPDATE muse_orders SET updated_at=1 WHERE order_id=?').run(o.id)
+  }
+  s.env.MUSE_CHECKOUT_ENABLED='true';s.env.MUSE_KEY_ID='rotated-fixture-key'
+  s.controls.status('queued');const o=await s.order();await s.pay(o.id);s.due(o.id)
+  s.db.prepare('UPDATE muse_orders SET updated_at=2 WHERE order_id=?').run(o.id)
+  s.controls.status('succeeded')
+  for(let i=0;i<3;i++) {await reconcileMuse(s.env);await reconcileServices(s.env)}
+  const current=s.db.prepare('SELECT status FROM orders WHERE id=?').get(o.id)!
+  assert.equal(current.status,'success')
+  assert.equal(s.posted,1)
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM muse_orders WHERE key_id='fixture-key' AND attempted=0").get()!.n,10)
+})
+
+
+test('Mapay verified callbacks purchase and deliver Muse once; unpaid and forged notices do not fulfill', async t => {
+  const s=await setup(t,'mapay'),o=await s.order()
+  const payment=await s.request(`/api/orders/${o.id}/payment`,{action:'create'},s.buyer)
+  assert.equal(payment.status,200,await payment.clone().text())
+  const p=(await payment.json()).payment;assert.equal(p.provider,'mapay');assert.match(p.qr,/^https:\/\/mzf\.mapay\.cn\/xpay\/epay\/submit\.php/)
+  assert.equal(s.posted,0)
+  const url='https://shop.example.invalid/api/payments/notify/mapay'
+  const params=new URLSearchParams({pid:s.env.MAPAY_PID!,type:'alipay',out_trade_no:o.id.slice(4),trade_no:'mapay-fixture-trade',money:'69.00',trade_status:'TRADE_SUCCESS',sign_type:'MD5'})
+  params.set('sign',signZpayParams(params,s.env.MAPAY_KEY!))
+  const notify=()=>worker.fetch(new Request(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:params.toString()}),s.env)
+  assert.equal((await notify()).status,400);assert.equal(s.posted,0)
+  params.set('money','1.00');assert.equal((await notify()).status,400);params.set('money','69.00');assert.equal(s.posted,0)
+  s.controls.paymentStatus(1)
+  const replies=await Promise.all([notify(),notify()]);assert.deepEqual(replies.map(r=>r.status),[200,200])
+  assert.equal(s.posted,1);assert.equal(s.assigned,1)
+  assert.equal(s.db.prepare('SELECT actual_cost_cents FROM muse_orders WHERE order_id=?').get(o.id)!.actual_cost_cents,4900)
+  const delivered=await s.read(o.id);assert.equal(delivered.status,'success');assert.equal(delivered.delivery.value,content)
+  await sendServiceMail(s.env,o.id);assert.equal((await s.read(o.id)).serviceDelivery.mailState,'sent')
+  s.env.SERVICE_PAYMENT_PROVIDER='zpay'
+  assert.equal((await notify()).status,200);assert.equal(s.posted,1)
+  const current=s.db.prepare('SELECT * FROM orders WHERE id=?').get(o.id) as any
+  current.refund_hold=1
+  assert.equal(await refundThroughProvider(s.env,current,'fixture-refund',6900),null)
 })

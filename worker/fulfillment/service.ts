@@ -2,7 +2,7 @@ import { fulfillMuse, museCheckoutEnabled, museMapping, musePurchase, museSnapsh
 import { ApiError, type Env, type Statement } from '../platform.ts'
 import { getOrder, type Order } from '../order-state.ts'
 import { deliveryMailReady } from '../email-delivery.ts'
-import { servicePaymentConfigured, servicePaymentProviderId } from '../payments/providers.ts'
+import { isEpayProvider, servicePaymentConfigured, servicePaymentProviderId } from '../payments/providers.ts'
 import { emailPayload, mailBrand, sendFrozenEmail } from '../email.ts'
 import { isServicePlan, type DeliveryKind, type ServiceTask } from '../../shared/fulfillment.ts'
 import { seal, unseal, vaultReady } from './vault.ts'
@@ -13,8 +13,8 @@ const eligible = "mode='live' AND is_test=0 AND payment_status='paid' AND refund
 // A completed, partly refunded delivery remains the buyer's property. New
 // dispatches still require zero refunds, but its pending notice may be sent.
 const deliveredEligible = "mode='live' AND is_test=0 AND payment_status='paid' AND refund_hold=0 AND refunded_cents<price_cents AND redemption_blocked=0"
-export async function serviceCheckoutEnabled(env: Env) {
-  return env.SERVICE_CHECKOUT_ENABLED === 'true' && servicePaymentConfigured(env) && deliveryMailReady(env) && await vaultReady(env)
+export async function serviceCheckoutEnabled(env: Env, muse = false) {
+  return env.SERVICE_CHECKOUT_ENABLED === 'true' && servicePaymentConfigured(env, muse) && deliveryMailReady(env) && await vaultReady(env)
 }
 export async function serviceCatalog(env: Env) {
   return (await env.INTEREST_DB.prepare(`SELECT c.*,p.name product_name,p.category,p.description,p.hidden,m.product_code muse_product_code,m.max_cost_cents muse_max_cost_cents,CASE WHEN m.plan IS NOT NULL THEN 'muse' ELSE NULL END delivery_provider,
@@ -25,12 +25,13 @@ export async function serviceCatalog(env: Env) {
 /** Order + immutable delivery snapshot + reservation commit in one transaction. */
 export async function createServiceOrder(env: Env, ownerHash: string, email: string, data: Record<string, unknown>) {
   if (data.partner) throw new ApiError('该商品暂仅支持平台直营购买。', 409)
-  if (!await serviceCheckoutEnabled(env)) throw new ApiError('自有商品暂未开放购买。', 409)
+  if (env.SERVICE_CHECKOUT_ENABLED !== 'true') throw new ApiError('自有商品暂未开放购买。', 409)
   await expireReservations(env)
   const plan = await env.INTEREST_DB.prepare(`SELECT c.*,p.name product_name FROM catalog_plans c JOIN service_products p ON p.id=c.product_id WHERE c.id=? AND c.enabled=1 AND p.hidden=0 AND c.delivery_type IN ('stock','manual')`).bind(String(data.plan)).first<{ id: string; product_id: string; product_name: string; name: string; price_cents: number; version: number; delivery_type: DeliveryKind; purchase_note: string; delivery_instructions: string }>()
   if (!plan) throw new ApiError('该商品已暂停销售。', 409)
   const mapping = await museMapping(env, plan.id)
-  if (servicePaymentProviderId(env) === 'zpay' && plan.delivery_type !== 'stock' && !(mapping && museCheckoutEnabled(env))) throw new ApiError('该商品暂不支持此支付渠道。', 409)
+  if (!await serviceCheckoutEnabled(env, Boolean(mapping))) throw new ApiError('该商品的支付服务暂未配置，请联系商家。', 409)
+  if (isEpayProvider(servicePaymentProviderId(env, Boolean(mapping))) && plan.delivery_type !== 'stock' && !(mapping && museCheckoutEnabled(env))) throw new ApiError('该商品暂不支持此支付渠道。', 409)
   if (data.expectedPrice !== plan.price_cents) throw new ApiError('价格已更新，请刷新后重新确认。', 409)
   const cost = mapping ? await prepareMuse(env, mapping, plan.price_cents) : 0
   const now = Date.now(), id = 'YMX-' + crypto.randomUUID().replaceAll('-', '').toUpperCase(), event = crypto.randomUUID()

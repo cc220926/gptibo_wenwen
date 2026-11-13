@@ -70,3 +70,8 @@ TURNSTILE_ENABLED=false
 TURNSTILE_SITE_KEY= # Public widget sitekey; configure locally.
 TURNSTILE_SECRET_KEY= # Private Siteverify secret; production must use Worker Secrets.
 TURNSTILE_HOSTNAMES=localhost,127.0.0.1
+
+# Muse may use a separate cashier; leave checkout flags off until verified.
+MUSE_PAYMENT_PROVIDER="mapay"
+MAPAY_PID=""
+MAPAY_KEY=""

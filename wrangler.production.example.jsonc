@@ -16,6 +16,7 @@
     "EMAIL_PRODUCTS_ENABLED": "false",
     "SERVICE_CHECKOUT_ENABLED": "false",
     "SERVICE_PAYMENT_PROVIDER": "alipay",
+    "MUSE_PAYMENT_PROVIDER": "mapay",
     "XGIFT_CHECKOUT_ENABLED": "false",
     "PAYMENT_CHECKOUT_ENABLED": "false",
     "PAYMENT_TEST_ENABLED": "false",

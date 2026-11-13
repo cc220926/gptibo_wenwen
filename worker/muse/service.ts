@@ -116,6 +116,9 @@ export async function fulfillMuse(env: Env, id: string) {
   }
 }
 export async function reconcileMuse(env: Env) {
-  const rows = (await env.INTEREST_DB.prepare("SELECT m.order_id FROM muse_orders m JOIN orders o ON o.id=m.order_id WHERE m.state NOT IN ('succeeded','failed') AND m.lease_until<=? AND m.next_attempt_at<=? AND o.mode='live' AND o.is_test=0 AND o.payment_status='paid' AND o.refund_hold=0 AND o.refunded_cents=0 AND o.redemption_blocked=0 ORDER BY m.updated_at LIMIT 10").bind(Date.now(), Date.now()).all<{ order_id: string }>()).results
+  if (!museConfigured(env)) return
+  // Old-key intents need their original key. Keep them durable without allowing
+  // ten blocked rows to occupy every recovery batch for current-key purchases.
+  const rows = (await env.INTEREST_DB.prepare("SELECT m.order_id FROM muse_orders m JOIN orders o ON o.id=m.order_id WHERE m.key_id=? AND m.state NOT IN ('succeeded','failed') AND m.lease_until<=? AND m.next_attempt_at<=? AND o.mode='live' AND o.is_test=0 AND o.payment_status='paid' AND o.refund_hold=0 AND o.refunded_cents=0 AND o.redemption_blocked=0 ORDER BY m.updated_at LIMIT 10").bind(env.MUSE_KEY_ID!, Date.now(), Date.now()).all<{ order_id: string }>()).results
   for (const row of rows) { try { await fulfillMuse(env, row.order_id) } catch { /* Keep the original intent; isolate other orders. */ } }
 }
