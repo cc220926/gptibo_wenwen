@@ -1,6 +1,6 @@
-# ZPAY 自有库存兑换码收款
+# ZPAY 自有商品收款
 
-ZPAY 已接入本站自有库存商品的支付宝付款链路，默认未启用。ChatGPT 上游代收、邮件商品和 X Gift 继续使用各自原支付渠道。用户报告支付宝渠道已审核通过，且 ZPAY 已同意其销售自有库存兑换码；这两项尚未由本工程独立核实。
+ZPAY 已接入本站自有商品的支付宝付款链路，支持库存自动交付与人工交付，默认未启用。ChatGPT 上游代收、邮件商品和 X Gift 继续使用各自原支付渠道。用户报告支付宝渠道已审核通过，且 ZPAY 已同意其销售自有库存兑换码；这两项尚未由本工程独立核实。
 
 ## 接口与本地行为
 
@@ -12,7 +12,7 @@ ZPAY 已接入本站自有库存商品的支付宝付款链路，默认未启用
 ## 启用步骤
 
 1. **先在 ZPAY「API安全」重置曾发到聊天里的商户 KEY。** 不要将新密钥放入聊天、源码、`wrangler.production.jsonc` 或 Git。通过本地终端运行 `npx wrangler secret put ZPAY_KEY -c wrangler.production.jsonc`，在提示符中输入新 KEY。商户号可用 `npx wrangler secret put ZPAY_PID -c wrangler.production.jsonc` 设置；不要在命令行参数中写 KEY。
-2. 确认 `PAYMENT_NOTIFY_ORIGIN`、Resend 发信、`MAIL_PUBLIC_ORIGIN`、`CDK_ENCRYPTION_KEY` 和定时任务可用。在目标 Worker 的 vars 设置 `SERVICE_PAYMENT_PROVIDER=zpay` 和 `SERVICE_CHECKOUT_ENABLED=true`。仅 `delivery_type=stock` 的自有库存规格会开放。其它自有商品规格需维持暂停。
-3. 部署后用真实、低金额的自有库存商品做一次付款验收：核对支付前金额与商户、回调反查、重复回调、原库存只交付一次、邮件通知与跨设备订单找回。另用真实售后单验证商户后台退款和本站人工流水登记。生成另一笔付款链接但不要打开，检查订单查询返回和库存到期行为；再验证打开后未支付的到期订单，以及迟到付款进入人工核对。
+2. 确认 `PAYMENT_NOTIFY_ORIGIN`、Resend 发信、`MAIL_PUBLIC_ORIGIN`、`CDK_ENCRYPTION_KEY` 和定时任务可用。在目标 Worker 的 vars 设置 `SERVICE_PAYMENT_PROVIDER=zpay` 和 `SERVICE_CHECKOUT_ENABLED=true`。自有库存与人工交付规格均可开放；Muse 规格另受其自身开关控制。人工订单收款后进入「人工交付」工作台，由工作人员填写交付结果。
+3. 部署后用真实、低金额的自有库存商品做一次付款验收：核对支付前金额与商户、回调反查、重复回调、原库存只交付一次、邮件通知与跨设备订单找回。人工交付商品另核对收款后只排队、开始处理和确认交付，重复回调不覆盖人工结果。另用真实售后单验证商户后台退款和本站人工流水登记。生成另一笔付款链接但不要打开，检查订单查询返回和库存到期行为；再验证打开后未支付的到期订单，以及迟到付款进入人工核对。
 
 由于目前没有沙箱，单元测试只能验证协议与本地状态逻辑，不能替代真实渠道验收。密钥重置和上述实付验收完成前不要把它视为已可正式运营。

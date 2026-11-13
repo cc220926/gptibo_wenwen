@@ -1,8 +1,8 @@
-import { fulfillMuse, museCheckoutEnabled, museMapping, musePurchase, museSnapshot, prepareMuse } from '../muse/service.ts'
+import { fulfillMuse, museMapping, musePurchase, museSnapshot, prepareMuse } from '../muse/service.ts'
 import { ApiError, type Env, type Statement } from '../platform.ts'
 import { getOrder, type Order } from '../order-state.ts'
 import { deliveryMailReady } from '../email-delivery.ts'
-import { servicePaymentConfigured, servicePaymentProviderId } from '../payments/providers.ts'
+import { servicePaymentConfigured } from '../payments/providers.ts'
 import { emailPayload, mailBrand, sendFrozenEmail } from '../email.ts'
 import { isServicePlan, type DeliveryKind, type ServiceTask } from '../../shared/fulfillment.ts'
 import { seal, unseal, vaultReady } from './vault.ts'
@@ -30,7 +30,6 @@ export async function createServiceOrder(env: Env, ownerHash: string, email: str
   const plan = await env.INTEREST_DB.prepare(`SELECT c.*,p.name product_name FROM catalog_plans c JOIN service_products p ON p.id=c.product_id WHERE c.id=? AND c.enabled=1 AND p.hidden=0 AND c.delivery_type IN ('stock','manual')`).bind(String(data.plan)).first<{ id: string; product_id: string; product_name: string; name: string; price_cents: number; version: number; delivery_type: DeliveryKind; purchase_note: string; delivery_instructions: string }>()
   if (!plan) throw new ApiError('该商品已暂停销售。', 409)
   const mapping = await museMapping(env, plan.id)
-  if (servicePaymentProviderId(env) === 'zpay' && plan.delivery_type !== 'stock' && !(mapping && museCheckoutEnabled(env))) throw new ApiError('该商品暂不支持此支付渠道。', 409)
   if (data.expectedPrice !== plan.price_cents) throw new ApiError('价格已更新，请刷新后重新确认。', 409)
   const cost = mapping ? await prepareMuse(env, mapping, plan.price_cents) : 0
   const now = Date.now(), id = 'YMX-' + crypto.randomUUID().replaceAll('-', '').toUpperCase(), event = crypto.randomUUID()

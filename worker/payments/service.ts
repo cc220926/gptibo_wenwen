@@ -106,12 +106,11 @@ export async function paymentAction(request: Request, env: Env, order: Order, ad
   if (!payment && data.action === 'create') {
     if (!canCreate) throw new ApiError('真实收款尚未开放。', 503)
     const provider = paymentProvider(env, isServicePlan(order.plan) ? servicePaymentProviderId(env) : emailProduct(order.plan) || isXGiftPlan(order.plan) ? 'alipay' : env.PAYMENT_PROVIDER ?? '')
-    if (provider.id === 'zpay' && !isServicePlan(order.plan)) throw new ApiError('该支付渠道仅用于自有库存商品。', 409)
+    if (provider.id === 'zpay' && !isServicePlan(order.plan)) throw new ApiError('该支付渠道仅用于自有商品。', 409)
     notifyUrl(env, provider.id)
     const now = Date.now()
     const task = isServicePlan(order.plan) ? await taskFor(env, order.id) : null
     if (isServicePlan(order.plan) && (!task || task.state !== 'reserved' || task.expires_at <= now)) throw new ApiError('库存预留已到期，请重新下单；如已付款请核对原订单。', 409)
-    if (provider.id === 'zpay' && task?.kind !== 'stock' && !(await musePurchase(env, order.id) && museCheckoutEnabled(env))) throw new ApiError('该商品暂不支持此支付渠道。', 409)
     await env.INTEREST_DB.prepare("INSERT INTO payments(order_id,provider,account,amount_cents,expires_at,created_at,updated_at) SELECT id,?,?,price_cents,?,?,? FROM orders WHERE id=? AND mode='live' AND payment_status='unpaid' AND status='pending' AND redemption_blocked=0 AND refund_hold=0 AND refunded_cents=0 AND (NOT EXISTS(SELECT 1 FROM fulfillment_tasks t WHERE t.order_id=orders.id) OR EXISTS(SELECT 1 FROM fulfillment_tasks t WHERE t.order_id=orders.id AND t.state='reserved' AND t.expires_at>?)) ON CONFLICT(order_id) DO NOTHING")
       .bind(provider.id, provider.account, task?.expires_at ?? now + 15 * 60000, now, now, order.id, now).run()
     payment = await findPayment(env, order.id)
