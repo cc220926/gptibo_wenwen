@@ -77,7 +77,7 @@
 .admin-audit-list span { overflow-wrap:anywhere; color:var(--muted-foreground); }
 .admin-audit-list time { color:var(--muted-foreground); }
 .admin-audit-list>p { padding:25px 0; color:var(--muted-foreground); }
-.admin-detail { --detail-scroll-thumb:color-mix(in srgb,var(--muted-foreground) 75%,transparent); width:calc(100% - 32px); max-width:660px; height:min(720px,calc(100dvh - 32px)); max-height:calc(100dvh - 32px); overflow-y:auto; scrollbar-gutter:stable; padding:28px; gap:20px; align-content:start; }
+.admin-detail { --detail-scroll-thumb:color-mix(in srgb,var(--muted-foreground) 75%,transparent); width:calc(100% - 32px); max-width:660px; height:min(720px,calc(100dvh - 32px)); max-height:calc(100dvh - 32px); overflow-y:auto; scrollbar-gutter:stable; padding:28px; gap:20px; align-content:start; grid-auto-rows:max-content; }
 .admin-detail::-webkit-scrollbar { width:8px; height:8px; }
 .admin-detail::-webkit-scrollbar-track { background:transparent; margin-block:14px; }
 .admin-detail::-webkit-scrollbar-thumb { background:var(--detail-scroll-thumb); background-clip:padding-box; border:1px solid transparent; border-radius:999px; }
@@ -300,3 +300,6 @@
   .payment-details summary>svg,.payment-select-wrap select,.integration-console-link { transition:none; }
   .integration-spinning { animation:none; }
 }
+
+/* Keep delivery content visible inside the fixed-height, scrolling order dialog. */
+.admin-service-delivery { min-height:min-content; padding:20px; display:grid; gap:12px; margin-bottom:0; }

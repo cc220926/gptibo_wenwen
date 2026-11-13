@@ -4,6 +4,17 @@ import { makeOrder, orderLabel, ORDER_PLANS, PLANS, transitionOrder, PROCESS_MS,
 
 const order: DemoOrder = { id: 'YMX-A1B2C3D4', plan: 'plus', price: 168, createdAt: 100, status: 'pending' }
 
+test('manual delivery labels distinguish waiting from processing and retain refund priority', () => {
+  const manual = { ...order, status: 'processing' as const, serviceDelivery: { kind: 'manual', state: 'queued' } }
+  assert.equal(orderLabel(manual), '待人工交付')
+  assert.equal(orderLabel({ ...manual, serviceDelivery: { kind: 'manual', state: 'running' } }), '人工处理中')
+  assert.equal(orderLabel({ ...manual, serviceDelivery: { kind: 'manual', state: 'queued', provider: 'muse' } }), '处理中')
+  assert.equal(orderLabel({ ...manual, serviceDelivery: { kind: 'manual' } }), '处理中')
+  assert.equal(orderLabel({ ...manual, status: 'success' }), '已交付')
+  assert.equal(orderLabel({ ...manual, refundHold: true }), '售后处理中')
+  assert.equal(orderLabel({ ...manual, redemptionBlocked: true }), '已禁止兑换')
+})
+
 test('unconfirmed submissions never claim recharging, including old processing rows', () => {
   const fulfillment = { rechargeStatus: 'unknown' }
   assert.equal(orderLabel({ ...order, status: 'session', fulfillment }), '提交待确认')
