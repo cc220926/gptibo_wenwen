@@ -30,6 +30,7 @@
 .store-pending-price { font-size:12px; color:var(--muted-foreground); }
 .store-action { display:inline-flex; justify-content:center; align-items:center; min-height:34px; padding:0 15px; border-radius:22px; background:var(--primary); color:var(--primary-foreground); font-size:12px; transition:filter .2s; white-space:nowrap; }
 .store-action:hover { filter:brightness(.92); }
+.store-detail-link { display:inline-flex; align-items:center; gap:5px; min-height:36px; font-size:12px; white-space:nowrap; }
 .store-more { border-radius:22px; font-size:12px; padding-inline:15px; height:34px; }
 .store-deck { height:185px; margin:6px -9px 0; position:relative; isolation:isolate; }
 .store-tier { display:block; align-content:start; text-align:left; }

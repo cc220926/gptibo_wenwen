@@ -1,0 +1,49 @@
+.gpt-account-scene { --account-x:0; --account-y:0; position:relative; display:grid; place-items:center; height:222px; margin:8px 0; perspective:900px; isolation:isolate; }
+.gpt-account-halo { position:absolute; width:220px; height:160px; border-radius:50%; background:#b3ead442; filter:blur(26px); transform:translateY(22px); transition:transform .5s ease; }
+.gpt-account-back { position:absolute; width:244px; height:150px; padding:18px; border-radius:16px; background:linear-gradient(130deg,#163d35,#102d28); color:#e4f5ed; box-shadow:0 12px 24px #102d2814; transform:translate(12px,-5px) rotate(9deg); display:flex; justify-content:space-between; font-size:11px; transition:transform .6s cubic-bezier(.22,1,.36,1); }
+.gpt-account-back>span:last-child { display:flex; gap:6px; font-size:9px; letter-spacing:1.5px; }
+.gpt-account-float { width:244px; height:150px; position:relative; animation:gpt-account-float 6s ease-in-out infinite; }
+.gpt-account-card { width:100%; height:100%; display:flex; flex-direction:column; padding:19px; border:1px solid #ecf8f2; border-radius:16px; background:linear-gradient(115deg,#edf8f2,#d5efdf 75%,#c9e8d9); color:#173d30; box-shadow:0 17px 35px #183e3024,inset 0 1px 0 #ffffffbd; transform:translate(-9px,8px) rotateX(calc(var(--account-y) * -6deg)) rotateY(calc(var(--account-x) * 9deg)) rotateZ(-5deg); transition:transform .35s cubic-bezier(.22,1,.36,1); overflow:hidden; }
+.gpt-account-card-top { display:flex; align-items:center; justify-content:space-between; position:relative; z-index:1; }
+.gpt-account-card-top img { width:25px; height:25px; }
+.gpt-account-card-top>span { font-size:8px; letter-spacing:1.5px; font-weight:600; padding:4px 7px; border:1px solid #173d3026; border-radius:5px; }
+.gpt-account-card-title { display:grid; gap:4px; margin-top:15px; position:relative; z-index:1; }
+.gpt-account-card-title strong { font-size:19px; letter-spacing:-.6px; line-height:1.1; font-weight:650; }
+.gpt-account-card-title>span { font-size:9px; color:#496b5b; }
+.gpt-account-card-bottom { display:flex; justify-content:space-between; align-items:center; margin-top:auto; position:relative; z-index:1; }
+.gpt-account-card-bottom>span:first-child { display:flex; align-items:center; gap:5px; font-size:8px; color:#496b5b; }
+.gpt-account-check { display:grid; place-items:center; width:19px; height:19px; border-radius:50%; background:#173d30; color:#e8f7ee; }
+.gpt-account-sheen { position:absolute; inset:-70%; background:linear-gradient(120deg,transparent 38%,#ffffff85 48%,transparent 58%); transform:translateX(-65%); pointer-events:none; animation:gpt-account-shine 8s ease-in-out infinite; }
+.gpt-account-chip { position:absolute; right:16px; bottom:24px; display:flex; align-items:center; gap:6px; padding:8px 11px; border:1px solid var(--border); border-radius:8px; background:var(--card); color:var(--foreground); box-shadow:0 4px 12px #163c3310; font-size:9px; transform:rotate(3deg); transition:transform .5s cubic-bezier(.22,1,.36,1); }
+.gpt-account-chip>span { width:5px; height:5px; border-radius:50%; background:#539f79; }
+.store-product:focus-within .gpt-account-back { transform:translate(22px,-12px) rotate(13deg); }
+.gpt-account-scene.large { height:290px; margin:0; }
+.gpt-account-scene.large .gpt-account-float,.gpt-account-scene.large .gpt-account-back { width:280px; height:174px; }
+.gpt-account-scene.large .gpt-account-card { padding:23px; }
+.gpt-account-scene.large .gpt-account-card-title strong { font-size:23px; }
+.gpt-account-scene.large .gpt-account-card-title>span { font-size:11px; }
+.gpt-account-scene.large .gpt-account-card-bottom>span:first-child { font-size:9px; }
+.gpt-account-scene.large .gpt-account-chip { bottom:32px; right:20px; }
+.service-product-generic.gpt-account-product .service-product-intro { padding:0; }
+.gpt-account-product .service-product-intro>h1 { font-size:36px; margin:22px 0 15px; }
+.gpt-account-product .service-product-intro>.gpt-account-eyebrow { font-size:10px; letter-spacing:2px; margin:0 0 12px; color:var(--muted-foreground); }
+.dark .gpt-account-halo { background:#72c69c1f; }
+.dark .gpt-account-back { background:linear-gradient(130deg,#315d50,#18382f); border:1px solid #497b605c; }
+@media(hover:hover) and (pointer:fine) {
+  .store-product:hover .gpt-account-back,.gpt-account-scene:hover .gpt-account-back { transform:translate(22px,-12px) rotate(13deg); }
+  .store-product:hover .gpt-account-chip,.gpt-account-scene:hover .gpt-account-chip { transform:translate(3px,3px) rotate(0); }
+}
+@keyframes gpt-account-float { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-6px); } }
+@keyframes gpt-account-shine { 0%,65% { transform:translateX(-65%); } 90%,100% { transform:translateX(65%); } }
+@media(max-width:420px) {
+  .gpt-account-scene { height:210px; }.gpt-account-chip { right:2px; bottom:16px; }
+  .gpt-account-scene.large .gpt-account-float,.gpt-account-scene.large .gpt-account-back { width:250px; height:164px; }
+  .gpt-account-scene.large .gpt-account-chip { right:4px; }
+}
+@media(prefers-reduced-motion:reduce) {
+  .gpt-account-float,.gpt-account-sheen { animation:none; }.gpt-account-sheen { display:none; }
+  .gpt-account-card { transform:translate(-9px,8px) rotate(-5deg); }
+  .gpt-account-scene * { transition:none!important; }
+  .store-product:hover .gpt-account-back,.store-product:focus-within .gpt-account-back,.gpt-account-scene:hover .gpt-account-back { transform:translate(12px,-5px) rotate(9deg); }
+  .store-product:hover .gpt-account-chip,.gpt-account-scene:hover .gpt-account-chip { transform:rotate(3deg); }
+}

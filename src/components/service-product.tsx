@@ -1,3 +1,4 @@
+import { GptAccountScene } from './gpt-account-scene'
 import { useState } from 'react'
 import { ArrowRight, Check, ChevronRight, FileText, LifeBuoy, LockKeyhole, Mail, Package, ShieldCheck, UserRound } from 'lucide-react'
 import type { CatalogPlan } from '@/lib/api'
@@ -5,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { storefrontHref } from '@/lib/storefront-routing'
-import { isMuseOffer, museQuota } from '../../shared/service-presentation'
+import { isGptAccountOffer, isMuseOffer, museQuota } from '../../shared/service-presentation'
 import '@/styles/service-product.css'
 
 const price = (cents: number) => (cents / 100).toFixed(2)
@@ -24,13 +25,13 @@ export function ServiceProductPage({ productId, offers, ready, busy, checkoutEna
   const plans = offers.filter(p => p.product_id === productId && p.delivery_type && p.delivery_type !== 'legacy')
   const plan = plans.find(p => p.id === selected) ?? plans.find(p => p.enabled) ?? plans[0]
   if (!plan) return <section className="empty-orders page-width"><h1>{ready ? '该商品已下架或暂不可用' : '正在读取商品'}</h1><p>已有订单仍可在「我的订单」查看。</p><Button onClick={() => onNavigate('store')}>返回商店</Button></section>
-  const muse = isMuseOffer(plan), stock = (plan.delivery_type === 'stock' || plan.delivery_provider === 'muse')
+  const account = isGptAccountOffer(plan), muse = isMuseOffer(plan), stock = (plan.delivery_type === 'stock' || plan.delivery_provider === 'muse')
   const available = Boolean(ready && checkoutEnabled && plan.enabled)
   const status = available ? '可购买' : stock && !plan.stock_available ? '暂时缺货' : '暂停售卖'
   const noticeKey = JSON.stringify([plan.id, plan.version, plan.price_cents, plan.purchase_note, plan.delivery_instructions])
   const accepted = acceptedNotice === noticeKey
   const purchase = () => { if (available && !busy && accepted) onBuy(plan, true) }
-  if (!muse) return <section className="page-width service-product-detail service-product-generic"><nav className="product-breadcrumb" aria-label="当前位置"><a href={storefrontHref('store')} onClick={event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onNavigate('store') }}>全部商品</a><ChevronRight size={13} /><span>{plan.category}</span></nav><div className="service-product-layout"><div className="service-product-intro"><Package size={48} strokeWidth={1.2} /><h1>{plan.product_name}</h1><p>{plan.description}</p><span><ShieldCheck size={16} />订单内查看交付与售后记录</span></div><div className="service-product-options"><h2>选择规格</h2><div role="group" aria-label="商品规格" className="service-specs">{plans.map(offer => <button key={offer.id} aria-pressed={offer.id === plan.id} onClick={() => setSelected(offer.id)}><span><strong>{offer.name}</strong><small>{offer.delivery_provider === 'muse' ? '付款确认后自动采购交付' : offer.delivery_type === 'stock' ? offer.stock_available ? '付款确认后自动发货' : '暂时缺货' : '人工服务交付'}{!offer.enabled && ' · 暂不可购买'}</small></span><strong>¥{price(offer.price_cents)}</strong></button>)}</div><div className="service-product-note"><h3>购买前请确认</h3><p>{plan.purchase_note}</p><p>{stock ? '每单一份，付款确认后在订单页领取，同一份内容也会发送至下单邮箱。交付不代表已经激活或兑换。' : '每单一份，付款后由工作人员处理，交付结果将在原订单展示，并通过邮件通知。'}</p></div><Button className="primary-action" disabled={!available || busy} onClick={() => onBuy(plan, false)}>{available ? '确认规格，立即购买' : status}<ArrowRight size={16} /></Button></div></div></section>
+  if (!muse) return <section className={"page-width service-product-detail service-product-generic" + (account ? " gpt-account-product" : "")}><nav className="product-breadcrumb" aria-label="当前位置"><a href={storefrontHref('store')} onClick={event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onNavigate('store') }}>全部商品</a><ChevronRight size={13} /><span>{plan.category}</span></nav><div className="service-product-layout"><div className="service-product-intro">{account ? <><span className="gpt-account-eyebrow">CHATGPT / PLUS ACCOUNT</span><GptAccountScene large /></> : <Package size={48} strokeWidth={1.2} />}<h1>{plan.product_name}</h1><p>{plan.description}</p><span><ShieldCheck size={16} />订单内查看交付与售后记录</span></div><div className="service-product-options"><h2>选择规格</h2><div role="group" aria-label="商品规格" className="service-specs">{plans.map(offer => <button key={offer.id} aria-pressed={offer.id === plan.id} onClick={() => setSelected(offer.id)}><span><strong>{offer.name}</strong><small>{offer.delivery_provider === 'muse' ? '付款确认后自动采购交付' : offer.delivery_type === 'stock' ? offer.stock_available ? '付款确认后自动发货' : '暂时缺货' : '人工服务交付'}{!offer.enabled && ' · 暂不可购买'}</small></span><strong>¥{price(offer.price_cents)}</strong></button>)}</div><div className="service-product-note"><h3>购买前请确认</h3><p>{plan.purchase_note}</p><p>{stock ? '每单一份，付款确认后在订单页领取，同一份内容也会发送至下单邮箱。交付不代表已经激活或兑换。' : '每单一份，付款后由工作人员处理，交付结果将在原订单展示，并通过邮件通知。'}</p></div><Button className="primary-action" disabled={!available || busy} onClick={() => onBuy(plan, false)}>{available ? '确认规格，立即购买' : status}<ArrowRight size={16} /></Button></div></div></section>
   const steps = [
     { icon: Mail, title: '确认规格与收件邮箱', copy: '先阅读购买说明，核对所选规格和金额，再填写能正常收件的邮箱。' },
     { icon: Package, title: stock ? '付款后领取交付内容' : '付款后等待服务处理', copy: stock ? plan.delivery_provider === 'muse' ? '付款确认后，系统采购所选规格；成功后可在原订单领取，邮件另行通知。' : '付款确认后，系统将本单库存交付至原订单；邮件通知会单独发送。' : '工作人员按照订单要求处理，进度与结果都保存在原订单。' },

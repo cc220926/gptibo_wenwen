@@ -1,5 +1,5 @@
 import { ServiceProductPage } from '@/components/service-product'
-import { isMuseOffer } from '../shared/service-presentation'
+import { isGptAccountOffer, isMuseOffer } from '../shared/service-presentation'
 import type { CatalogPlan } from '@/lib/api'
 import { useStorefrontI18n } from '@/lib/storefront-i18n'
 import { useEffect, useState } from 'react'
@@ -94,7 +94,7 @@ function App() {
   const plans = productPlans(product.id).map(p => { const offer = store.catalog.find(item => item.id === p.id); return { ...p, price: offer ? offer.price_cents / 100 : p.price, enabled: Boolean(offer?.enabled) } })
   const plan = plans.find(p => p.id === selected) ?? plans.find(p => p.id === product.defaultPlan)!
   const [purchaseDraft, setPurchaseDraft] = useState<{ plan: PlanId; price: number; purchaseNote?: string; supportsWarranty?: boolean; productId?: string; productName?: string; planName?: string; deliveryType?: 'stock' | 'manual' | 'muse' }>(() => ({ plan: plan.id, price: plan.price }))
-  const serviceProductId = page === 'product/muse' ? store.catalog.find(isMuseOffer)?.product_id ?? 'muse' : page.startsWith('product/custom-') ? page.slice('product/'.length) : null
+  const serviceProductId = page === 'product/gpt-plus' ? store.catalog.find(isGptAccountOffer)?.product_id ?? 'gpt-plus' : page === 'product/muse' ? store.catalog.find(isMuseOffer)?.product_id ?? 'muse' : page.startsWith('product/custom-') ? page.slice('product/'.length) : null
   const beginServicePurchase = (offer: CatalogPlan, noticeRead: boolean) => { setPurchaseDraft({ plan: offer.id as PlanId, price: offer.price_cents / 100, purchaseNote: offer.purchase_note, supportsWarranty: true, productId: offer.product_id, productName: offer.product_name, planName: offer.name, deliveryType: offer.delivery_provider === 'muse' ? 'muse' : offer.delivery_type as 'stock' | 'manual' }); setAcceptedPlan(noticeRead ? offer.id as PlanId : null); setEmailOpen(true); setPurchaseNoticeOpen(!noticeRead); setCheckoutOpen(true) }
   const isGmail = product.id === 'gmail'
   const isEmailProduct = product.id === 'gemini' || product.id === 'duolingo' || isGmail
