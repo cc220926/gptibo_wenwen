@@ -36,3 +36,10 @@ export async function manualDeliveryQueue(env: Env, url: URL) {
     .all<Omit<ManualDeliveryRow, 'refundHold' | 'redemptionBlocked'> & { refundHold: number; redemptionBlocked: number }>()).results
   return json({ rows: rows.map(row => ({ ...row, refundHold: Boolean(row.refundHold), redemptionBlocked: Boolean(row.redemptionBlocked) })), total, page, counts } satisfies ManualDeliveryQueue)
 }
+
+// Alert-bar summary: version grows with every paid manual order that enters the
+// queue; pending counts orders a person still has to act on.
+export async function manualDeliveryNotifications(env: Env) {
+  const row = await env.INTEREST_DB.prepare(`SELECT COUNT(*) version,COUNT(CASE WHEN (${state}) IN ('queued','running','review') THEN 1 END) pending ${source}`).first<{ version: number; pending: number }>()
+  return json({ version: row?.version ?? 0, pending: row?.pending ?? 0 })
+}

@@ -75,6 +75,11 @@ async function fulfillmentNotice(env: Env, id: string) {
 }
 export async function adminRefunds(request: Request, env: Env, url: URL) {
   const db = env.INTEREST_DB; const path = url.pathname
+  // Same contract as the Go backend: version grows with each customer request.
+  if (path === '/api/admin/refunds/notifications' && request.method === 'GET') {
+    const row = await db.prepare("SELECT COUNT(CASE WHEN request_key NOT LIKE 'external-refund:%' THEN 1 END) version,COUNT(CASE WHEN status IN ('pending','approved') THEN 1 END) pending FROM refund_cases").first<{ version: number; pending: number }>()
+    return json({ version: row?.version ?? 0, pending: row?.pending ?? 0 })
+  }
   if (path === '/api/admin/refunds/reconcile-external' && request.method === 'POST') { await body(request); return json(await reconcileExternalRechargeRefunds(env, 'admin')) }
   if (path === '/api/admin/refunds' && request.method === 'GET') {
     const page = Number(url.searchParams.get('page') ?? 1); const status = url.searchParams.get('status') ?? ''

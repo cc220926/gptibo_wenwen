@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 PUBLIC_HOSTS = {
     'api.cloudflare.com', 'challenges.cloudflare.com', 'developers.cloudflare.com',
     'api.resend.com', 'api.telegram.org', 'open.feishu.cn', 't.me',
+    'qyapi.weixin.qq.com', 'sctapi.ftqq.com', 'push.ft07.com', 'open.larksuite.com',
     'openapi.alipay.com', 'openapi-sandbox.dl.alipaydev.com', 'qr.alipay.com',
     'api.z-pay.cn', 'zpayz.cn', 'mzf.mapay.cn', 'api.gptibo.com',
     'chatgpt.com', 'api.openai.com', 'cdn.auth0.com',

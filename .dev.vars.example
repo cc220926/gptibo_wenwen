@@ -12,6 +12,15 @@ ORDER_EMAIL_NOTIFICATIONS_ENABLED=false
 ORDER_EMAIL_NOTIFICATIONS_SINCE= # UTC activation timestamp; never send historical events by default.
 PARTNER_AUTH_SECRET= # Configure locally; never commit a real value.
 
+# Operator push alerts for paid orders and refund requests (docs/ops-notifications.md).
+OPS_NOTIFICATIONS_SINCE= # UTC activation timestamp; events before it are never pushed.
+OPS_NOTIFY_EMAIL="false"
+FEISHU_WEBHOOK_URL= # Configure locally; never commit a real value.
+FEISHU_WEBHOOK_SECRET= # Configure locally; never commit a real value.
+FEISHU_ORDER_RECIPIENT= # ou_... or oc_... for the shared Feishu app bot.
+WECOM_WEBHOOK_URL= # Configure locally; never commit a real value.
+SERVERCHAN_SENDKEY= # Configure locally; never commit a real value.
+
 FEISHU_APP_ID= # Configure locally; never commit a real value.
 FEISHU_APP_SECRET= # Configure locally; never commit a real value.
 # Receiving user (ou_...) or chat (oc_...) for payout notifications.

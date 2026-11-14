@@ -55,17 +55,22 @@ export function payoutMessage(row: Notification, env?: MailBrandEnv) {
   return lines.join('\n')
 }
 
-async function send(env: Env, row: Notification) {
+/** Send text through the shared Feishu app bot to a user (ou_) or chat (oc_). */
+export async function sendFeishuAppText(env: Env, recipient: string, text: string, uuid: string) {
+  if (!/^(?:ou|oc)_[a-z0-9]+$/.test(recipient) || !env.FEISHU_APP_ID || !env.FEISHU_APP_SECRET) throw new Error('Feishu app unavailable')
   const auth = await feishu('/auth/v3/tenant_access_token/internal', { app_id: env.FEISHU_APP_ID, app_secret: env.FEISHU_APP_SECRET })
   if (typeof auth?.tenant_access_token !== 'string' || !auth.tenant_access_token) throw new Error('Feishu token unavailable')
-  const recipient = payoutRecipient(env)
   await feishu('/im/v1/messages?receive_id_type=' + (recipient.startsWith('oc_') ? 'chat_id' : 'open_id'), {
     receive_id: recipient,
     msg_type: 'text',
-    content: JSON.stringify({ text: payoutMessage(row, env) }),
+    content: JSON.stringify({ text }),
     // Feishu drops duplicate sends that reuse a uuid, so retries stay idempotent.
-    uuid: 'ymx-payout-' + row.payout_id,
+    uuid,
   }, auth.tenant_access_token)
+}
+
+async function send(env: Env, row: Notification) {
+  await sendFeishuAppText(env, payoutRecipient(env), payoutMessage(row, env), 'ymx-payout-' + row.payout_id)
 }
 
 async function claim(env: Env, now: number) {

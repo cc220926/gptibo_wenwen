@@ -4,7 +4,7 @@ import { ApiError, body, json, type Env } from '../platform.ts'
 import { getOrder } from '../order-state.ts'
 import { isServicePlan } from '../../shared/fulfillment.ts'
 import { serviceCatalog, serviceCheckoutEnabled, sendServiceMail, serviceOrderSummary, taskFor } from './service.ts'
-import { manualDeliveryQueue } from './manual-queue.ts'
+import { manualDeliveryNotifications, manualDeliveryQueue } from './manual-queue.ts'
 import { openVault, seal, vaultReady } from './vault.ts'
 
 const text = (value: unknown, name: string, limit = 100, optional = false) => {
@@ -25,6 +25,7 @@ export async function inventoryAdmin(request: Request, env: Env, url: URL) {
     return json({ products, plans: await serviceCatalog(env), encryptionReady: await vaultReady(env), checkoutReady: await serviceCheckoutEnabled(env) })
   }
   if (path === '/api/admin/inventory/manual' && request.method === 'GET') return manualDeliveryQueue(env, url)
+  if (path === '/api/admin/inventory/manual/notifications' && request.method === 'GET') return manualDeliveryNotifications(env)
   if (path === '/api/admin/inventory/muse' && request.method === 'GET') {
     if (!museConfigured(env)) return json({ configured: false, checkoutReady: false, products: [] })
     try { return json({ configured: true, checkoutReady: museCheckoutEnabled(env), products: await museProducts(env), balance: await museBalance(env) }) }

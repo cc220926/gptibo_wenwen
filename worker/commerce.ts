@@ -33,6 +33,7 @@ import { customerRoutes } from './customers.ts'
 import { invoiceRoutes } from './invoices.ts'
 import { publicAnnouncement } from './announcements.ts'
 import { rechargeReminderPreview } from './recharge-reminders.ts'
+import { opsNotificationsAdmin } from './ops-notifications.ts'
 import { adminGmailOrder, confirmGmailNotPurchased, fulfillGmail, gmailCheckoutEnabled, gmailProductsRoute, gmailSnapshot, gmailSnapshotStatement } from './account_supplier/service.ts'
 import { platformProductHidden, platformProductVisibility, platformProductVisibilityRoute } from './platform-product-visibility.ts'
 import { platformMarketingMetric, platformMarketingMetricRoute } from './platform-marketing-metric.ts'
@@ -83,6 +84,9 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
     if (path.startsWith('/api/partner/')) return await partnerRoutes(request, env, url)
     if (path.startsWith('/api/admin/')) {
       await requireAdmin(request, env)
+      // Agent tickets are provided by the Go backend only; tell the alert bar.
+      if (path === '/api/admin/tickets/notifications' && method === 'GET') return json({ version: 0, pending: 0, available: false })
+      if (path === '/api/admin/ops-notifications') return await opsNotificationsAdmin(request, env)
       if (path === '/api/admin/branding' || path === '/api/admin/branding/logo') return await platformBrandingRoute(request, env, path.endsWith('/logo'))
       if (path === '/api/admin/announcement') return await platformAnnouncementRoute(request, env)
       if (path === '/api/admin/inventory' || path.startsWith('/api/admin/inventory/')) return await inventoryAdmin(request, env, url)

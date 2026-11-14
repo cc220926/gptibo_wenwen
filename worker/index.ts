@@ -17,6 +17,7 @@ import { retryPayoutNotifications } from './payout-notifications.ts'
 import { invoiceNotification, reconcileInvoicePayments } from './invoices.ts'
 import { sendDueRechargeReminders } from './recharge-reminders.ts'
 import { sendDueOrderNotifications } from './order-notifications.ts'
+import { sendDueOpsNotifications } from './ops-notifications.ts'
 import { reconcileGmail } from './account_supplier/service.ts'
 import { requireSecureTransport, secureResponse } from './security.ts'
 import { checkoutPresence, expireCheckoutPresence } from './checkout-presence.ts'
@@ -65,6 +66,9 @@ export default {
       runScheduled('Delivery supplier queue', () => reconcileDeliverySupplier(env)),
       runScheduled('X gift fulfillment queue', () => reconcileXGift(env)),
     ])
+    // Operator alerts run last and are time-boxed, so a slow chat service can
+    // never delay payment, procurement or delivery work in this invocation.
+    await runScheduled('Operator alert queue', () => sendDueOpsNotifications(env))
   },
   async fetch(request: Request, env: Env): Promise<Response> {
     try {

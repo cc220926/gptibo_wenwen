@@ -402,17 +402,22 @@ test('manual work queue paginates oldest orders first with stable totals', async
   assert.deepEqual(second.rows.map((row: { id: string }) => row.id), ids.slice(20))
 })
 
-test('late manual payments require review and cannot be delivered from the normal queue', async t => {
+test('late manual payments join the normal queue because no unit was held, and can be delivered once', async t => {
   const s = await setup(t, 'manual'), order = await s.order()
   s.db.prepare('UPDATE fulfillment_tasks SET expires_at=0 WHERE order_id=?').run(order.id)
   await expireReservations(s.env)
+  assert.equal((await s.read(order.id)).status, 'cancelled')
   await s.pay(order.id)
   const current = await s.read(order.id)
-  assert.equal(current.serviceDelivery.state, 'review')
-  const queue = await (await s.request('/api/admin/inventory/manual?state=review', undefined, s.admin)).json()
+  assert.equal(current.serviceDelivery.state, 'queued')
+  assert.equal(current.status, 'processing')
+  const queue = await (await s.request('/api/admin/inventory/manual?state=queued', undefined, s.admin)).json()
   assert.equal(queue.total, 1)
   assert.equal(queue.rows[0].id, order.id)
-  assert.equal((await s.request(`/api/admin/inventory/orders/${order.id}`, { action: 'complete', version: current.version, value: 'INVALID', note: '迟到付款需核对' }, s.admin)).status, 409)
+  assert.equal((await s.request(`/api/admin/inventory/orders/${order.id}`, { action: 'complete', version: current.version, value: 'LATE-BUT-PAID', note: '付款已核验，人工交付' }, s.admin)).status, 200)
+  const done = await s.read(order.id)
+  assert.equal(done.status, 'success')
+  assert.equal(done.delivery.value, 'LATE-BUT-PAID')
 })
 
 test('mail lease excludes racing refund and redemption writes, then refunded codes stay quarantined', async t => {

@@ -75,7 +75,9 @@ export async function fulfillService(env: Env, id: string) {
   if (!task || task.state === 'delivered') return
   const now = Date.now(), event = crypto.randomUUID()
   await env.INTEREST_DB.batch([
-    env.INTEREST_DB.prepare(`UPDATE fulfillment_tasks SET state='review',updated_at=? WHERE order_id=? AND state='expired' AND EXISTS(SELECT 1 FROM orders WHERE id=order_id AND ${eligible})`).bind(now, id),
+    // A late receipt for stock (or Muse) goes to review: its unit may be resold.
+    // Plain manual delivery holds no unit, so it simply joins the human queue.
+    env.INTEREST_DB.prepare(`UPDATE fulfillment_tasks SET state=CASE WHEN kind='manual' AND NOT EXISTS(SELECT 1 FROM muse_orders m WHERE m.order_id=fulfillment_tasks.order_id) THEN 'queued' ELSE 'review' END,updated_at=? WHERE order_id=? AND state='expired' AND EXISTS(SELECT 1 FROM orders WHERE id=order_id AND ${eligible})`).bind(now, id),
     env.INTEREST_DB.prepare(`UPDATE cdk_stock SET state='delivered',delivered_at=? WHERE order_id=? AND state='reserved'
       AND EXISTS(SELECT 1 FROM fulfillment_tasks t JOIN orders o ON o.id=t.order_id WHERE t.order_id=cdk_stock.order_id AND t.stock_id=cdk_stock.id AND t.state='reserved' AND ${eligible})`).bind(now, id),
     env.INTEREST_DB.prepare(`UPDATE fulfillment_tasks SET state=CASE WHEN kind='stock' THEN 'delivered' ELSE 'queued' END,

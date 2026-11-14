@@ -50,6 +50,14 @@ export interface Env {
   MAIL_BRAND_NAME?: string
   ORDER_EMAIL_NOTIFICATIONS_ENABLED?: string
   ORDER_EMAIL_NOTIFICATIONS_SINCE?: string
+  /** Operator push alerts for paid orders and refund requests (worker/ops-notifications.ts). */
+  OPS_NOTIFICATIONS_SINCE?: string
+  OPS_NOTIFY_EMAIL?: string
+  FEISHU_WEBHOOK_URL?: string
+  FEISHU_WEBHOOK_SECRET?: string
+  FEISHU_ORDER_RECIPIENT?: string
+  WECOM_WEBHOOK_URL?: string
+  SERVERCHAN_SENDKEY?: string
   /** Shared Feishu alert bot, the same app used for SMS restock alerts. */
   FEISHU_APP_ID?: string
   FEISHU_APP_SECRET?: string
