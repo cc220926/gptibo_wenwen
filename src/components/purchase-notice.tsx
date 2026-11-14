@@ -38,7 +38,7 @@ function fulfillmentNotice(plan: PlanId) {
 // Render inside PurchaseFlow's existing popup so continuing never swaps focus traps.
 export function PurchaseNotice({ service, plan, purchaseNote, supportsWarranty = true, titleRef, onCancel, onContinue }: { service?: { name: string; planName: string; kind: 'stock' | 'manual' | 'muse' }; plan: PlanId; purchaseNote?: string; supportsWarranty?: boolean; titleRef: RefObject<HTMLHeadingElement | null>; onCancel: () => void; onContinue: () => void }) {
   const product = productForPlan(plan)
-  const notice = service ? { emphasis: service.kind === 'muse' ? '付款确认后自动采购一份账号资料，供货成功后可在原订单领取。' : service.kind === 'stock' ? '付款确认后交付一份商品，需按说明自行使用或兑换。' : '本商品由工作人员人工交付，请确认商品规格与交付方式。', steps: ['核对规格、价格和购买说明，填写可收件的下单邮箱。', service.kind !== 'manual' ? '付款确认后在原订单领取，同一份内容也会发送到邮箱。' : '付款后在原订单查看处理进度与交付结果。'] } : fulfillmentNotice(plan)
+  const notice = service ? { emphasis: service.kind === 'muse' ? '付款确认后自动采购一份账号资料，供货成功后可在原订单领取。' : service.kind === 'stock' ? '付款确认后交付一份商品，需按说明自行使用或兑换。' : '本商品需在下单付款后联系客服人工交付，暂不支持自动发货。', steps: ['核对规格、价格和购买说明，填写可收件的下单邮箱。', service.kind !== 'manual' ? '付款确认后在原订单领取，同一份内容也会发送到邮箱。' : '付款后点击订单中的「联系客服」，提供订单号，由客服人工交付。'] } : fulfillmentNotice(plan)
   return <>
       <DialogHeader>
         <DialogTitle ref={titleRef} tabIndex={-1}>下单须知</DialogTitle>
