@@ -12,6 +12,7 @@ import { ApiError, body, json, type Env } from '../platform.ts'
 import { getOrder, type Order } from '../order-state.ts'
 import { isEpayProvider, paymentProvider, servicePaymentProviderId } from './providers.ts'
 import type { PaymentOrder, PaymentResult, PaymentProvider } from './types.ts'
+import { logPaymentNotification, type NotificationStage } from './notification-diagnostics.ts'
 
 export type Payment = { order_id: string; provider: string; account: string; amount_cents: number; state: 'pending' | 'paid' | 'closed'; trade_no: string | null; qr: string | null; expires_at: number; lease_token: string | null; lease_until: number; notified_at: number | null }
 export const findPayment = (env: Env, id: string) => env.INTEREST_DB.prepare('SELECT * FROM payments WHERE order_id=?').bind(id).first<Payment>()
@@ -141,16 +142,24 @@ export async function paymentAction(request: Request, env: Env, order: Order, ad
 }
 export async function paymentNotification(request: Request, env: Env, providerId: string) {
   let provider: PaymentProvider | undefined
+  let stage: NotificationStage = 'provider'
+  logPaymentNotification(providerId, 'received', stage)
   try {
     provider = paymentProvider(env, providerId)
+    stage = 'verification'
     const result = await provider.notification(request)
+    stage = 'lookup'
     const payment = await findPayment(env, result.orderId)
     if (!payment || payment.provider !== providerId || payment.account !== provider.account) throw new Error('Unknown payment')
+    stage = 'apply'
     await applyPaymentResult(env, payment, result)
+    stage = 'receipt'
     if (result.status === 'paid') await env.INTEREST_DB.prepare('UPDATE payments SET notified_at=COALESCE(notified_at,?) WHERE order_id=? AND state=\'paid\'').bind(Date.now(), payment.order_id).run()
+    logPaymentNotification(providerId, 'applied', stage)
     return provider.acknowledge(true)
-  } catch {
+  } catch (error) {
     // Non-success requests a gateway retry; no form data, signatures or PII in logs.
+    logPaymentNotification(providerId, 'rejected', stage, error)
     return provider?.acknowledge(false) ?? new Response('failure', { status: 400, headers: { 'Cache-Control': 'no-store' } })
   }
 }
