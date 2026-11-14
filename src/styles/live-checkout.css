@@ -13,6 +13,7 @@
 .live-pay-timer.warning { background:var(--warning-bg); color:var(--warning); }
 .live-pay-timer.danger { background:color-mix(in srgb,var(--destructive) 10%,var(--card)); color:var(--destructive); }
 .live-pay-body { display:grid; grid-template-columns:156px 1fr; gap:22px; align-items:center; padding:20px 22px; }
+.mapay-pay-without-qr { grid-template-columns:1fr; }
 .live-qr-frame { position:relative; display:grid; place-items:center; width:156px; height:156px; border-radius:12px; background:#fff; color:#171719; flex-shrink:0; overflow:hidden; }
 .live-qr-frame img { display:block; width:156px; height:156px; border-radius:12px; transition:filter 200ms ease, opacity 200ms ease; }
 .live-qr-error { display:flex; flex-direction:column; align-items:center; gap:6px; color:var(--warning); font-size:11px; text-align:center; }

@@ -6,7 +6,7 @@ export type RefundResult = { refunded: boolean; tradeNo?: string }
 export interface PaymentProvider {
   id: string
   account: string
-  create(order: PaymentOrder, notifyUrl: string): Promise<{ qr: string }>
+  create(order: PaymentOrder, notifyUrl: string): Promise<{ qr: string; expiresAt?: number }>
   query(order: PaymentOrder): Promise<PaymentResult>
   close(order: PaymentOrder): Promise<boolean>
   refund(order: PaymentOrder, refund: RefundRequest): Promise<RefundResult>

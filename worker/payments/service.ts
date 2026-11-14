@@ -129,7 +129,9 @@ export async function paymentAction(request: Request, env: Env, order: Order, ad
         if (currentOrder.payment_status !== 'unpaid' || currentOrder.status !== 'pending' || currentOrder.refund_hold) throw new ApiError('当前订单不能继续付款。', 409)
         await musePaymentReady(env, currentOrder.id)
         const qr = await providerFor(env, fresh).create(details(fresh, currentOrder), notifyUrl(env, fresh.provider))
-        await env.INTEREST_DB.prepare("UPDATE payments SET qr=?,updated_at=? WHERE order_id=? AND state='pending'").bind(qr.qr, Date.now(), fresh.order_id).run()
+        const deadline = qr.expiresAt ?? fresh.expires_at
+        if (!Number.isSafeInteger(deadline) || deadline <= Date.now()) throw new ApiError('付款有效期已结束，请先核对原订单。', 409)
+        await env.INTEREST_DB.prepare("UPDATE payments SET qr=?,expires_at=MIN(expires_at,?),updated_at=? WHERE order_id=? AND state='pending'").bind(qr.qr, deadline, Date.now(), fresh.order_id).run()
       }
     } else await sync(env, fresh, order, data.action === 'close' || fresh.expires_at <= Date.now())
   })

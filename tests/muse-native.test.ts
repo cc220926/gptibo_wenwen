@@ -29,7 +29,9 @@ async function setup(t: Context, paymentProvider = 'zpay') {
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const url = new URL(String(input)), path = url.pathname.replace(/^\/v1/, ''), headers = new Headers(init?.headers), raw = String(init?.body ?? '')
     if (url.hostname === 'mzf.mapay.cn') {
-      assert.equal(url.pathname,'/xpay/epay/api.php'); assert.equal(init?.redirect,'manual')
+      assert.equal(init?.redirect,'manual')
+      if(url.pathname==='/xpay/epay/mapi.php') return Response.json({code:1,trade_no:'mapay-fixture-trade',money:(sale / 100).toFixed(2),qrcode:'https://qr.alipay.com/mapayfixturepayment'})
+      assert.equal(url.pathname,'/xpay/epay/api.php')
       return Response.json({code:1,pid:Number(s.env.MAPAY_PID),type:'alipay',out_trade_no:url.searchParams.get('out_trade_no'),money:(sale / 100).toFixed(2),status:mapayStatus,trade_no:'mapay-fixture-trade'})
     }
     if (url.hostname === 'api.resend.com') return Response.json({ id: 'muse-mail' })
@@ -290,7 +292,7 @@ test('Mapay verified callbacks purchase and deliver Muse once; unpaid and forged
   const s=await setup(t,'mapay'),o=await s.order()
   const payment=await s.request(`/api/orders/${o.id}/payment`,{action:'create'},s.buyer)
   assert.equal(payment.status,200,await payment.clone().text())
-  const p=(await payment.json()).payment;assert.equal(p.provider,'mapay');assert.match(p.qr,/^https:\/\/mzf\.mapay\.cn\/xpay\/epay\/submit\.php/)
+  const p=(await payment.json()).payment;assert.equal(p.provider,'mapay');assert.equal(p.qr,'https://qr.alipay.com/mapayfixturepayment');assert.ok(p.expiresAt<=Date.now()+300000)
   assert.equal(s.posted,0)
   const url='https://shop.example.invalid/api/payments/notify/mapay'
   const params=new URLSearchParams({pid:s.env.MAPAY_PID!,type:'alipay',out_trade_no:o.id.slice(4),trade_no:'mapay-fixture-trade',money:'69.00',trade_status:'TRADE_SUCCESS',sign_type:'MD5'})

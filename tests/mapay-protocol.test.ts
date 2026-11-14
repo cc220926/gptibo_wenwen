@@ -23,17 +23,51 @@ function notice(method='GET',patch:Record<string,string>={}) {
 }
 const record=(patch:Record<string,unknown>={})=>({code:1,pid:Number(credentials.pid),type:'alipay',out_trade_no:'A'.repeat(32),money:'69.00',status:1,trade_no:'trade_mapay_1',...patch})
 
-test('Mapay cashier uses the documented path, signed raw values, original merchant ID and no secret in the browser URL',async()=>{
-  const result=await provider().create(order,'https://shop.example.invalid/api/payments/notify/mapay'),url=new URL(result.qr)
-  assert.equal(url.origin,'https://mzf.mapay.cn');assert.equal(url.pathname,'/xpay/epay/submit.php')
-  assert.equal(url.searchParams.get('pid'),credentials.pid);assert.equal(url.searchParams.get('money'),'69.00')
-  assert.equal(url.searchParams.get('sign'),signZpayParams(url.searchParams,credentials.key))
-  assert.equal(url.searchParams.get('out_trade_no'),'A'.repeat(32));assert.equal(url.searchParams.get('return_url'),'https://shop.example.invalid/orders')
-  assert.equal(url.href.includes(credentials.key),false)
+test('Mapay API prepares a direct payment QR with signed original-order fields and a bounded deadline',async t=>{
+  const sent: URLSearchParams[]=[]
+  t.mock.method(globalThis,'fetch',async(input,init)=>{
+    const url=new URL(String(input));assert.equal(url.origin,'https://mzf.mapay.cn');assert.equal(init?.redirect,'manual')
+    if(url.pathname==='/xpay/epay/api.php')return Response.json(record({status:0}))
+    assert.equal(url.pathname,'/xpay/epay/mapi.php');assert.equal(init?.method,'POST')
+    const params=new URLSearchParams(String(init.body));sent.push(params)
+    assert.equal(params.get('pid'),credentials.pid);assert.equal(params.get('money'),'69.00');assert.equal(params.get('device'),'pc')
+    assert.equal(params.get('sign'),signZpayParams(params,credentials.key));assert.equal(params.get('out_trade_no'),'A'.repeat(32))
+    assert.equal(params.get('return_url'),'https://shop.example.invalid/orders');assert.equal(params.has('key'),false)
+    return Response.json({code:1,trade_no:'trade_mapay_1',money:'69.00',qrcode:'https://qr.alipay.com/mapayfixturepayment',urlscheme:'alipays://platformapi/startapp?untrusted=ignored'})
+  })
+  const before=Date.now(),result=await provider().create(order,'https://shop.example.invalid/api/payments/notify/mapay')
+  assert.equal(result.qr,'https://qr.alipay.com/mapayfixturepayment');assert.ok(result.expiresAt!<=Date.now()+300000);assert.ok(result.expiresAt!>=before)
   await assert.rejects(provider().create(order,'https://shop.example.invalid/api/payments/notify/zpay'))
   await assert.rejects(provider().create(order,'http://shop.example.invalid/api/payments/notify/mapay'))
-  const long=new URL((await provider().create({...order,subject:'汉字'.repeat(100)},'https://shop.example.invalid/api/payments/notify/mapay')).qr)
-  assert.ok(new TextEncoder().encode(long.searchParams.get('name')!).byteLength<=127)
+  await provider().create({...order,subject:'汉字'.repeat(100)},'https://shop.example.invalid/api/payments/notify/mapay')
+  assert.ok(new TextEncoder().encode(sent.at(-1)!.get('name')!).byteLength<=127)
+  const shorter=Date.now()+60000
+  assert.equal((await provider().create({...order,expiresAt:shorter},'https://shop.example.invalid/api/payments/notify/mapay')).expiresAt,shorter)
+})
+
+test('Mapay API accepts a same-origin cashier only as navigation and rejects ambiguous or unsafe destinations',async t=>{
+  let patch:Record<string,unknown>={payurl:'https://mzf.mapay.cn/pay/trade_mapay_1'}
+  t.mock.method(globalThis,'fetch',async input=>new URL(String(input)).pathname.endsWith('/api.php')?Response.json(record({status:0})):Response.json({code:1,trade_no:'trade_mapay_1',money:'69.00',...patch}))
+  assert.equal((await provider().create(order,'https://shop.example.invalid/api/payments/notify/mapay')).qr,patch.payurl)
+  for(const value of [
+    {qrcode:'https://qr.alipay.com.evil.test/mapayfixturepayment'},
+    {qrcode:'https://qr.alipay.com/mapayfixturepayment?redirect=private'},
+    {payurl:'http://mzf.mapay.cn/pay/trade_mapay_1'},
+    {payurl:'https://mzf.mapay.cn.evil.test/pay/trade_mapay_1'},
+    {payurl:'https://evil.test/pay/trade_mapay_1'},
+    {qrcode:'https://qr.alipay.com/mapayfixturepayment',payurl:'https://mzf.mapay.cn/pay/trade_mapay_1'},
+    {urlscheme:'alipays://unsafe'}, {code:0,payurl:'https://mzf.mapay.cn/pay/trade_mapay_1'},
+    {money:'1.00',payurl:'https://mzf.mapay.cn/pay/trade_mapay_1'},
+    {trade_no:'other_trade',payurl:'https://mzf.mapay.cn/pay/other_trade'},
+  ]) {patch=value;await assert.rejects(provider().create(order,'https://shop.example.invalid/api/payments/notify/mapay'))}
+})
+
+test('Mapay creation rejects redirects and oversized payloads without exposing gateway contents',async t=>{
+  t.mock.method(globalThis,'fetch',async()=>new Response('PRIVATE-BODY',{status:302,headers:{location:'https://evil.test'}}))
+  await assert.rejects(provider().create(order,'https://shop.example.invalid/api/payments/notify/mapay'),e=>e instanceof Error&&!e.message.includes('PRIVATE'))
+  t.mock.restoreAll();let canceled=false
+  t.mock.method(globalThis,'fetch',async()=>new Response(new ReadableStream({start(c){c.enqueue(new Uint8Array(17000))},cancel(){canceled=true}})))
+  await assert.rejects(provider().create(order,'https://shop.example.invalid/api/payments/notify/mapay'),/malformed/);assert.equal(canceled,true)
 })
 
 test('GET and form POST callbacks require an independently matching paid gateway query',async t=>{

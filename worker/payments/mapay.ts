@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { boundedResponseText } from '../bounded-response.ts'
 import { amountCents, amountText, type PaymentOrder, type PaymentProvider, type PaymentResult } from './types.ts'
 import { signZpayParams, zpayMerchantOrderNo } from './zpay-protocol.ts'
+import { mapayPaymentEntry } from '../../shared/mapay-payment-entry.ts'
 
 type Credentials = { pid: string; key: string }
 const origin = 'https://mzf.mapay.cn'
@@ -21,14 +22,38 @@ function subject(value: string) {
   }
   return result
 }
-function cashier(order: PaymentOrder, notify: string, credentials: Credentials) {
+function checkoutParams(order: PaymentOrder, notify: string, credentials: Credentials) {
   checkCredentials(credentials)
   const url = new URL(notify)
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/api/payments/notify/mapay') throw new Error('Invalid Mapay callback URL')
-  const params = new URLSearchParams({ pid: credentials.pid, type: 'alipay', out_trade_no: zpayMerchantOrderNo(order.id),
+  const params = new URLSearchParams({ pid: credentials.pid, type: 'alipay', device: 'pc', out_trade_no: zpayMerchantOrderNo(order.id),
     name: subject(order.subject), money: amountText(order.amountCents), notify_url: url.href, return_url: url.origin + '/orders' })
   params.set('sign', signZpayParams(params, credentials.key)); params.set('sign_type', 'MD5')
-  return origin + prefix + '/submit.php?' + params.toString()
+  return params
+}
+async function create(order: PaymentOrder, notify: string, credentials: Credentials) {
+  const params = checkoutParams(order, notify, credentials)
+  // The configured channel currently offers a five-minute cashier. Use a
+  // conservative local deadline from request start; never extend a reservation.
+  const expiresAt = Math.min(order.expiresAt, Date.now() + 5 * 60000)
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) throw new Error('Mapay payment expired')
+  let response: Response
+  try { response = await fetch(origin + prefix + '/mapi.php', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString(), redirect: 'manual', signal: AbortSignal.timeout(10000) }) }
+  catch { throw new Error('Mapay payment creation unavailable') }
+  if (!response.ok || Number(response.headers.get('content-length')) > responseLimit) { await response.body?.cancel(); throw new Error('Mapay payment creation unavailable') }
+  let data: Record<string, unknown>
+  try { data = JSON.parse(await boundedResponseText(response, responseLimit)) }
+  catch { throw new Error('Mapay payment creation malformed') }
+  if (!data || data.code !== 1 || typeof data.trade_no !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(data.trade_no)
+    || data.money !== undefined && amountCents(data.money) !== order.amountCents
+    || [data.qrcode, data.payurl].filter(Boolean).length !== 1) throw new Error('Mapay payment creation mismatch')
+  const entry = mapayPaymentEntry(data.qrcode || data.payurl)
+  if (!entry) throw new Error('Mapay payment entry unsupported')
+  // The creation response does not echo merchant/order identity. Independently
+  // query this original order before exposing any payment destination.
+  const verified = await query(order, credentials)
+  if (verified.tradeNo !== data.trade_no) throw new Error('Mapay payment creation mismatch')
+  return { qr: entry.url, expiresAt }
 }
 async function candidate(request: Request, credentials: Credentials) {
   checkCredentials(credentials)
@@ -66,14 +91,14 @@ async function query(order: PaymentOrder, credentials: Credentials): Promise<Pay
   if (!record || record.code !== 1 || String(record.pid) !== credentials.pid || record.out_trade_no !== zpayMerchantOrderNo(order.id)
     || record.type !== 'alipay' || amountCents(record.money) !== order.amountCents || ![0, 1].includes(record.status as number)) throw new Error('Mapay order query mismatch')
   if (record.status === 1 && (typeof record.trade_no !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(record.trade_no))) throw new Error('Mapay paid trade missing')
-  return { orderId: order.id, amountCents: order.amountCents, status: record.status === 1 ? 'paid' : 'pending', tradeNo: record.status === 1 ? record.trade_no as string : undefined }
+  return { orderId: order.id, amountCents: order.amountCents, status: record.status === 1 ? 'paid' : 'pending', tradeNo: typeof record.trade_no === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(record.trade_no) ? record.trade_no : undefined }
 }
 
 export function mapay(credentials: Credentials): PaymentProvider {
   checkCredentials(credentials)
   return {
     id: 'mapay', account: credentials.pid,
-    async create(order, notify) { return { qr: cashier(order, notify, credentials) } },
+    create(order, notify) { return create(order, notify, credentials) },
     query(order) { return query(order, credentials) },
     async close() { return false },
     async refund() { throw new Error('Mapay refund requires manual confirmation') },
