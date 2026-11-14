@@ -7,7 +7,7 @@ import { reconcileXGift } from './xgift/service.ts'
 import { reconcileDeliverySupplier } from './delivery_supplier/service.ts'
 import type { Env } from './platform.ts'
 import { commerce } from './commerce.ts'
-import { paymentNotification, reconcilePayments } from './payments/service.ts'
+import { paymentNotification, reconcileOverdueReservations, reconcilePayments } from './payments/service.ts'
 import { reconcileRecharge, rechargeWebhook } from './recharge/service.ts'
 import { reconcileExternalRechargeRefunds, reconcileRechargeRefunds } from './refunds.ts'
 import { limitApi } from './rate-limit.ts'
@@ -41,6 +41,8 @@ export default {
     // Durable transactional email must continue even when supplier polling fails.
     await runScheduled('Order notification queue', () => sendDueOrderNotifications(env))
     await runScheduled('Muse procurement queue', () => reconcileMuse(env))
+    // Close overdue cashier trades first so this minute's expiry can free their stock.
+    await runScheduled('Overdue reservation payments', () => reconcileOverdueReservations(env))
     await runScheduled('Service delivery queue', () => reconcileServices(env))
     // Cosmetic activity statistics must not interrupt financial reconciliation.
     await runScheduled('Checkout activity cleanup', () => expireCheckoutPresence(env))

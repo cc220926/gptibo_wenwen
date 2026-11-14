@@ -140,11 +140,13 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
     }
     if (path === '/api/orders' && method === 'GET') {
       const rows = (await env.INTEREST_DB.prepare('SELECT * FROM orders WHERE is_test=0 AND (owner_hash = ? OR customer_email = ?) ORDER BY created_at DESC LIMIT 100').bind(ownerHash, recoveredEmail).all<Order>()).results
-      let synced = 0
+      let synced = 0, dispatched = 0
       const syncErrors = new Set<string>()
       const settled = await Promise.all(rows.map(async row => {
         let current = await settle(env, row)
-        if (isServicePlan(row.plan)) { await fulfillService(env, row.id); current = await getOrder(env, row.id) }
+        // Only paid, unfinished service orders can advance; unpaid or finished
+        // rows would issue a write transaction per order on every list poll.
+        if (isServicePlan(row.plan) && row.mode === 'live' && row.payment_status === 'paid' && !['success', 'failed'].includes(row.status) && dispatched++ < 10) { await fulfillService(env, row.id); current = await getOrder(env, row.id) }
         if (isXGiftPlan(row.plan) && synced++ < 5) { await fulfillXGift(env, row.id); current = await getOrder(env, row.id) }
         if (row.mode === 'live' && ['pending','processing'].includes(row.status) && synced++ < 5) {
           try { current = await syncRechargeOrder(env, current) } catch { syncErrors.add(row.id) /* Keep last confirmed state on a provider outage. */ }

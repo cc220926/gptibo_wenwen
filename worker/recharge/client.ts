@@ -34,7 +34,10 @@ export function productMap(env: Env): Record<string, string> {
     if (!map || typeof map !== 'object' || Array.isArray(map) || Object.entries(map).some(([k, v]) => !['plus', 'pro-5x', 'pro-20x', 'pro-25x', 'codex-credits-250', 'codex-credits-500'].includes(k) || typeof v !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(v))) throw new Error()
     const credits = JSON.parse(env.RECHARGE_CODEX_PRODUCT_MAP ?? '{}')
     const creditCodes: Record<string, string> = Object.fromEntries(Object.entries(CODEX_CREDITS).map(([id, pack]) => [id, pack.productCode]))
-    if (!credits || typeof credits !== 'object' || Array.isArray(credits) || Object.entries(credits).some(([key, value]) => creditCodes[key] !== value || (map[key] !== undefined && map[key] !== value))) throw new Error()
+    if (!credits || typeof credits !== 'object' || Array.isArray(credits) || Object.entries(credits).some(([key, value]) => !Object.hasOwn(creditCodes, key) || creditCodes[key] !== value)) throw new Error()
+    // Every Codex tier, in either map, must keep its fixed SKU: a swapped tier
+    // would charge for 500 points and deliver 250.
+    if (Object.entries(map).some(([key, value]) => Object.hasOwn(creditCodes, key) && creditCodes[key] !== value)) throw new Error()
     return { ...map, ...credits }
   } catch { throw new ApiError('充值商品映射配置无效。', 503) }
 }

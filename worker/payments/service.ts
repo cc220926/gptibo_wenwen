@@ -170,7 +170,12 @@ export async function reconcilePayments(env: Env) {
   // These V1 gateways do not expose a documented close API. A locally closed cashier URL
   // can still be paid later; keep querying it so late receipts reach review.
   const pending = (await env.INTEREST_DB.prepare("SELECT * FROM payments WHERE state='pending' AND lease_until<=? ORDER BY updated_at LIMIT 10").bind(now).all<Payment>()).results
-  const closed = (await env.INTEREST_DB.prepare("SELECT * FROM payments WHERE provider IN ('zpay','mapay') AND state='closed' AND lease_until<=? AND created_at>? AND updated_at<? ORDER BY updated_at LIMIT 5").bind(now, now - 30 * 86400000, now - 5 * 60000).all<Payment>()).results
+  // Late receipts are most likely soon after closing: recheck day-old trades
+  // every five minutes ahead of the backlog, and older ones every six hours,
+  // so a large abandoned-order backlog cannot starve recent trades.
+  const recent = now - 86400000
+  const closed = (await env.INTEREST_DB.prepare("SELECT * FROM payments WHERE provider IN ('zpay','mapay') AND state='closed' AND lease_until<=? AND created_at>? AND updated_at<CASE WHEN created_at>? THEN ? ELSE ? END ORDER BY created_at>? DESC,updated_at LIMIT 10")
+    .bind(now, now - 30 * 86400000, recent, now - 5 * 60000, now - 6 * 3600000, recent).all<Payment>()).results
   const rows = [...pending, ...closed]
   let confirmed = 0; let failed = 0
   for (const row of rows) {
@@ -178,6 +183,26 @@ export async function reconcilePayments(env: Env) {
     catch { failed++; await env.INTEREST_DB.prepare('UPDATE payments SET updated_at=? WHERE order_id=?').bind(Date.now(), row.order_id).run() }
   }
   return { checked: rows.length, confirmed, failed }
+}
+// Unpaid stock reservations stay held until their cashier trade is closed. Retire
+// overdue trades every minute so abandoned checkouts do not wait behind the
+// general five-minute batch and the stock returns to sale promptly. Rotate by
+// last check, so a trade that keeps failing cannot hold every slot. The same
+// query-before-close rules apply: a late payment is still booked.
+export async function reconcileOverdueReservations(env: Env) {
+  const now = Date.now()
+  const rows = (await env.INTEREST_DB.prepare("SELECT p.* FROM payments p JOIN fulfillment_tasks t ON t.order_id=p.order_id WHERE p.state='pending' AND p.lease_until<=? AND p.expires_at<=? AND t.state='reserved' ORDER BY p.updated_at LIMIT 10").bind(now, now).all<Payment>()).results
+  let closed = 0
+  for (const row of rows) {
+    try {
+      await locked(env, row, async () => {
+        const p = (await findPayment(env, row.order_id))!
+        if (p.state === 'pending' && p.expires_at <= Date.now()) await sync(env, p, await getOrder(env, row.order_id), true)
+      })
+      if ((await findPayment(env, row.order_id))?.state !== 'pending') closed++
+    } catch { await env.INTEREST_DB.prepare('UPDATE payments SET updated_at=? WHERE order_id=?').bind(Date.now(), row.order_id).run() }
+  }
+  return { checked: rows.length, closed }
 }
 // Called only after admin review. Reuse the case ID even after a network timeout
 // or a failed local transaction so retries cannot issue a second refund.

@@ -14,11 +14,12 @@ async function setup(t: Context, plan: keyof typeof mappings = 'gemini-pro-18m',
   const s = await customerFixture(); t.after(() => s.db.close())
   Object.assign(s.env, { ORDER_TESTING_ENABLED: 'false', EMAIL_PRODUCTS_ENABLED: 'true', MAIL_PUBLIC_ORIGIN:'https://mail-store.example.test', RESEND_API_KEY: 'mock-mail-key', RESEND_FROM: 'GPTibo <delivery@example.test>', PAYMENT_NOTIFY_ORIGIN: 'https://shop.example.invalid', ALIPAY_APP_ID: '2026000000000000', ALIPAY_SELLER_ID: '2088000000000000', ALIPAY_APP_PRIVATE_KEY: keys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), ALIPAY_PUBLIC_KEY: keys.publicKey.export({ type: 'spki', format: 'pem' }).toString(), DELIVERY_SUPPLIER_API_KEY: 'mock-delivery_supplier-key', DELIVERY_SUPPLIER_CHECKOUT_ENABLED: 'true', DELIVERY_SUPPLIER_CNY_PER_USD: '6.7' })
   const value = plan === 'gemini-pro-18m' ? 'https://claim.example.test/PRIVATE-CLAIM' : 'PRIVATE-CDK'
-  const state = { posts: [] as { key: string | null; body: string }[], mails: [] as { key: string | null; body: string }[], losePost: false, loseMail: false, pending: false, refund: false, stock: 10, price: mappings[plan].maxUsdCents / 100, balance: 1.9, mismatch: false, actual: mappings[plan].maxUsdCents / 100, netDelta: 0, refundDelta: 0, badValue: false, duringPost: undefined as (() => Promise<void>) | undefined, ...amounts }
+  const state = { posts: [] as { key: string | null; body: string }[], mails: [] as { key: string | null; body: string }[], losePost: false, loseMail: false, pending: false, refund: false, stock: 10, price: mappings[plan].maxUsdCents / 100, balance: 1.9, mismatch: false, actual: mappings[plan].maxUsdCents / 100, netDelta: 0, refundDelta: 0, badValue: false, duringPost: undefined as (() => Promise<void>) | undefined, duringMail: undefined as (() => Promise<void>) | undefined, ...amounts }
   t.mock.method(globalThis, 'fetch', async (url: string | URL | Request, options: RequestInit) => {
     const headers = new Headers(options.headers)
     if (String(url) === 'https://api.resend.com/emails') {
       state.mails.push({ key: headers.get('Idempotency-Key'), body: String(options.body) })
+      await state.duringMail?.()
       if (state.loseMail) throw new Error('lost mail')
       return Response.json({ id: 'mail_delivery_supplier' })
     }
@@ -186,6 +187,65 @@ test('supplier credentials cannot rotate during recovery; automatic delivery can
   s.env.DELIVERY_SUPPLIER_API_KEY = 'different-key'; await assert.rejects(fulfillDeliverySupplier(s.env, s.order.id)); assert.equal(s.state.posts.length, 1)
   const order = await s.view()
   assert.equal((await s.request(`/api/admin/orders/${order.id}/delivery`, { action: 'save', orderVersion: order.version, version: -1, value: 'https://example.test/substitute', instructions: 'new' }, s.admin)).status, 409)
+})
+
+test('purchases bound to rotated credentials cannot starve recovery of current orders', async t => {
+  const s = await setup(t); s.state.pending = true
+  const others = [] as string[]
+  for (let i = 0; i < 10; i++) {
+    const response = await s.create(); assert.equal(response.status, 201)
+    const id = (await response.json()).order.id; others.push(id)
+    s.db.prepare("INSERT INTO payments(order_id,provider,account,amount_cents,expires_at,created_at,updated_at) SELECT id,'alipay',?,price_cents,?,?,? FROM orders WHERE id=?").run(s.env.ALIPAY_APP_ID!, Date.now() + 60000, Date.now(), Date.now(), id)
+    await applyPaymentResult(s.env, (await findPayment(s.env, id))!, { orderId: id, amountCents: 1990, status: 'paid', tradeNo: 'trade_other_' + i })
+    // The mock supplier reuses one order number; keep each recorded purchase distinct.
+    s.db.prepare('UPDATE delivery_supplier_orders SET supplier_order=? WHERE order_id=?').run('API_OLD_' + i, id)
+  }
+  await s.pay()
+  // Ten in-flight purchases belong to an earlier key and are older than ours.
+  for (const id of others) s.db.prepare("UPDATE delivery_supplier_orders SET credential_hash='earlier-key',updated_at=1,next_check_at=0 WHERE order_id=?").run(id)
+  s.ready(); s.state.pending = false
+  await reconcileDeliverySupplier(s.env); s.ready()
+  for (const id of others) s.db.prepare('UPDATE delivery_supplier_orders SET updated_at=1,next_check_at=0 WHERE order_id=?').run(id)
+  await reconcileDeliverySupplier(s.env)
+  assert.equal((await s.view()).status, 'success')
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM delivery_supplier_orders WHERE credential_hash='earlier-key' AND state='pending'").get()!.n, 10)
+})
+
+test('an after-sales hold raised while the email is sending keeps the order open until it clears, without resending', async t => {
+  const s = await setup(t)
+  s.state.duringMail = async () => { s.db.prepare('UPDATE orders SET refund_hold=1 WHERE id=?').run(s.order.id) }
+  await s.pay()
+  assert.equal(s.state.mails.length, 1)
+  assert.equal(s.db.prepare('SELECT status FROM email_deliveries WHERE order_id=?').get(s.order.id)!.status, 'sent')
+  assert.equal(s.db.prepare('SELECT status FROM orders WHERE id=?').get(s.order.id)!.status, 'processing')
+  s.state.duringMail = undefined
+  await reconcileDeliverySupplier(s.env)
+  assert.equal(s.db.prepare('SELECT status FROM orders WHERE id=?').get(s.order.id)!.status, 'processing')
+  // The hold is released (for example, the request was rejected): complete once.
+  s.db.prepare('UPDATE orders SET refund_hold=0 WHERE id=?').run(s.order.id)
+  await reconcileDeliverySupplier(s.env); await reconcileDeliverySupplier(s.env)
+  assert.equal(s.db.prepare('SELECT status FROM orders WHERE id=?').get(s.order.id)!.status, 'success')
+  assert.equal(s.state.mails.length, 1)
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM order_events WHERE order_id=? AND action='email-delivery-completed'").get(s.order.id)!.n, 1)
+})
+
+test('a refund request accepted after the send lease expired completes the order once the request is rejected', async t => {
+  const s = await setup(t)
+  s.state.duringMail = async () => {
+    // The 60-second send lease has lapsed; the buyer files an after-sales request.
+    s.db.prepare('UPDATE email_deliveries SET lease_until=0 WHERE order_id=?').run(s.order.id)
+    s.db.prepare('UPDATE delivery_supplier_orders SET lease_until=0 WHERE order_id=?').run(s.order.id)
+    const version = (await s.view()).version
+    assert.equal((await s.request(`/api/orders/${s.order.id}/refunds`, { key: crypto.randomUUID(), version, reason: '尚未收到' }, s.buyer)).status, 201)
+  }
+  await s.pay(); s.state.duringMail = undefined
+  assert.equal(s.db.prepare('SELECT status,refund_hold FROM orders WHERE id=?').get(s.order.id)!.status, 'processing')
+  const refund = s.db.prepare('SELECT id,version FROM refund_cases WHERE order_id=?').get(s.order.id) as { id: string; version: number }
+  const detail = await (await s.request('/api/admin/refunds/' + refund.id, undefined, s.admin)).json()
+  assert.match(detail.fulfillmentNotice, /已交付/)
+  assert.equal((await s.request('/api/admin/refunds/' + refund.id, { action: 'reject', version: refund.version, note: '邮件已送达，请查收' }, s.admin)).status, 200)
+  assert.deepEqual({ ...s.db.prepare('SELECT status,refund_hold FROM orders WHERE id=?').get(s.order.id) }, { status: 'success', refund_hold: 0 })
+  assert.equal(s.state.mails.length, 1)
 })
 
 test('redirects, HTML challenges and upstream errors never leak credentials or private response text', async t => {

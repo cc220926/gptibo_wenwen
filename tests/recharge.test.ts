@@ -118,6 +118,12 @@ test('separate Codex mapping preserves subscription SKUs and rejects point-tier 
   s.env.RECHARGE_CODEX_PRODUCT_MAP = '{"codex-credits-250":"chatgpt_codex_250_cdk"}'
   s.env.RECHARGE_PRODUCT_MAP = '{"codex-credits-250":"another_sku"}'
   assert.throws(() => productMap(s.env), /映射配置无效/)
+  // A tier configured only in the general map is still bound to its fixed SKU.
+  delete s.env.RECHARGE_CODEX_PRODUCT_MAP
+  s.env.RECHARGE_PRODUCT_MAP = '{"plus":"demo_plus","codex-credits-500":"chatgpt_codex_250_cdk"}'
+  assert.throws(() => productMap(s.env), /映射配置无效/)
+  s.env.RECHARGE_PRODUCT_MAP = '{"plus":"demo_plus","codex-credits-500":"chatgpt_codex_500_cdk"}'
+  assert.deepEqual(productMap(s.env), { plus: 'demo_plus', 'codex-credits-500': 'chatgpt_codex_500_cdk' })
 })
 
 for (const [plan, points, price, supply] of [['codex-credits-250', 250, 9900, '78.82'], ['codex-credits-500', 500, 19900, '156.33']] as const) {

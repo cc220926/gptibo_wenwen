@@ -63,10 +63,21 @@ async function finish(env: Env, row: Delivery, lease: string, providerId: string
   const now = Date.now(), event = crypto.randomUUID()
   await env.INTEREST_DB.batch([
     env.INTEREST_DB.prepare("UPDATE email_deliveries SET status='sent',provider_id=COALESCE(?,provider_id),sent_at=?,updated_at=?,version=version+1,lease_until=0 WHERE order_id=? AND lease_token=? AND status='sending'").bind(providerId, now, now, row.order_id, lease),
-    env.INTEREST_DB.prepare("UPDATE orders SET status='success',updated_at=?,version=version+1,last_event_id=? WHERE id=? AND EXISTS(SELECT 1 FROM email_deliveries WHERE order_id=orders.id AND lease_token=? AND status='sent') AND status<>'success'").bind(now, event, row.order_id, lease),
+    // An after-sales hold raised during sending keeps the order open; it completes
+    // later through completeSentDelivery once the hold is cleared.
+    env.INTEREST_DB.prepare(`UPDATE orders SET status='success',updated_at=?,version=version+1,last_event_id=? WHERE id=? AND ${eligibilitySql} AND EXISTS(SELECT 1 FROM email_deliveries WHERE order_id=orders.id AND lease_token=? AND status='sent')`).bind(now, event, row.order_id, lease),
     env.INTEREST_DB.prepare("INSERT INTO order_events(id,order_id,actor,action,from_status,to_status,note,order_version,created_at) SELECT ?,id,?,'email-delivery-sent','processing',status,?,version,? FROM orders WHERE id=? AND last_event_id=?").bind(event, actor, note, now, row.order_id, event),
   ])
   if ((await find(env, row.order_id))?.status !== 'sent') throw new ApiError('发货记录正在核对，请刷新详情。', 409)
+}
+// Complete an order whose delivery email was already accepted while an
+// after-sales hold was active. Never resends; full refunds stay closed.
+export async function completeSentDelivery(env: Env, id: string) {
+  const now = Date.now(), event = crypto.randomUUID()
+  await env.INTEREST_DB.batch([
+    env.INTEREST_DB.prepare(`UPDATE orders SET status='success',updated_at=?,version=version+1,last_event_id=? WHERE id=? AND ${eligibilitySql} AND EXISTS(SELECT 1 FROM email_deliveries WHERE order_id=orders.id AND status='sent')`).bind(now, event, id),
+    env.INTEREST_DB.prepare("INSERT INTO order_events(id,order_id,actor,action,from_status,to_status,note,order_version,created_at) SELECT ?,id,'system','email-delivery-completed','processing',status,'发货邮件此前已被邮件服务接收，售后处理结束后完成订单',version,? FROM orders WHERE id=? AND last_event_id=?").bind(event, now, id, event),
+  ])
 }
 export async function emailDeliveryRoute(request: Request, env: Env, order: Order, actorOverride?: 'system') {
   const product = emailProduct(order.plan)
@@ -76,7 +87,7 @@ export async function emailDeliveryRoute(request: Request, env: Env, order: Orde
   const data = await body(request, 8192), now = Date.now(), actor = actorOverride ?? 'admin:' + env.ADMIN_USERNAME
   if (!['save', 'send', 'confirm-sent'].includes(String(data.action))) throw new ApiError('发货操作无效。')
   let row = await find(env, order.id)
-  if (data.action !== 'save' && row?.status === 'sent') return adminView(env, order)
+  if (data.action !== 'save' && row?.status === 'sent') { await completeSentDelivery(env, order.id); return adminView(env, await getOrder(env, order.id)) }
   if (!eligible(order)) throw new ApiError('仅已付款、无退款或暂停标记的待发货订单可发货。', 409)
   if (!env.RESEND_API_KEY || !env.RESEND_FROM) throw new ApiError('邮件服务尚未配置。', 503)
   if (data.orderVersion !== order.version || data.version !== (row?.version ?? -1)) throw new ApiError('发货资料或订单已更新，请刷新。', 409)
@@ -127,7 +138,8 @@ export async function emailDeliveryRoute(request: Request, env: Env, order: Orde
 // idempotency checks as administrator retries. No recipient/content overrides.
 export async function sendSavedDelivery(env: Env, order: Order) {
   const row = await find(env, order.id)
-  if (!row || row.status === 'sent' || row.lease_until > Date.now()) return
+  if (row?.status === 'sent') { await completeSentDelivery(env, order.id); return }
+  if (!row || row.lease_until > Date.now()) return
   await emailDeliveryRoute(new Request('https://internal.invalid/delivery', {
     method: 'POST', headers: { Origin: 'https://internal.invalid', 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'send', version: row.version, orderVersion: order.version }),

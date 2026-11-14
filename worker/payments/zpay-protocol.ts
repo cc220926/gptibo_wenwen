@@ -81,6 +81,10 @@ export async function queryZpayOrder(order: PaymentOrder, credentials: Credentia
     if (raw.length > 16000) throw new Error('large')
     record = JSON.parse(raw) as Record<string, unknown>
   } catch { throw new Error('ZPAY order query malformed') }
+  // Verified against production on 2026-11-14: an order whose cashier link was
+  // never opened is unknown to ZPAY and returns exactly this reply. Any other
+  // failure (wrong key, outage) stays an error and never closes the trade.
+  if (record.code === 0 && record.msg === '订单编号不存在' && Object.keys(record).length === 2) return { orderId: order.id, amountCents: order.amountCents, status: 'not_found' as const, tradeNo: undefined }
   if (record.code !== 1 || String(record.pid) !== credentials.pid || record.out_trade_no !== zpayMerchantOrderNo(order.id) || record.type !== 'alipay' || amountCents(record.money) !== order.amountCents) throw new Error('ZPAY order query mismatch')
   if (record.status !== 0 && record.status !== 1) throw new Error('ZPAY order status unknown')
   if (record.status === 1 && (typeof record.trade_no !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(record.trade_no))) throw new Error('ZPAY paid trade missing')

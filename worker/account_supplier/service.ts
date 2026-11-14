@@ -59,6 +59,15 @@ async function prepareEmail(env: Env, row: Purchase, lease: string) {
   ])
   await sendSavedDelivery(env, await getOrder(env, order.id))
 }
+// A supplier rejection or refund is terminal for procurement. Fail the paid
+// order visibly so the customer can use after-sales; never buy a replacement.
+async function failRejected(env: Env, id: string) {
+  const now = Date.now(), event = crypto.randomUUID()
+  await env.INTEREST_DB.batch([
+    env.INTEREST_DB.prepare(`UPDATE orders SET status='failed',updated_at=?,version=version+1,last_event_id=? WHERE id=? AND ${eligibility} AND EXISTS(SELECT 1 FROM account_supplier_orders k WHERE k.order_id=orders.id AND k.state='rejected')`).bind(now, event, id),
+    env.INTEREST_DB.prepare("INSERT INTO order_events(id,order_id,actor,action,from_status,to_status,note,order_version,created_at) SELECT ?,id,'system','gmail-purchase-rejected','processing',status,'供应商确认采购未完成或已退款，未重复采购；请通过原订单处理售后',version,? FROM orders WHERE id=? AND last_event_id=?").bind(event, now, id, event),
+  ])
+}
 export async function fulfillGmail(env: Env, id: string) {
   let row = await find(env, id)
   if (!row || row.state === 'rejected') return
@@ -88,7 +97,10 @@ export async function fulfillGmail(env: Env, id: string) {
       let result: SupplierOrder
       try { result = await call<SupplierOrder>(env, '/order/create', { goodsId: row.goods_id, count: 1, notifyUrl: '', outerNumber: id, safePrice: row.max_cost_cents / 100, sku: '', attach: [] }) }
       catch (error) {
-        if (error instanceof AccountSupplierRejected) await env.INTEREST_DB.prepare("UPDATE account_supplier_orders SET state='rejected',updated_at=? WHERE order_id=? AND lease_token=?").bind(Date.now(), id, lease).run()
+        if (error instanceof AccountSupplierRejected) {
+          await env.INTEREST_DB.prepare("UPDATE account_supplier_orders SET state='rejected',updated_at=? WHERE order_id=? AND lease_token=?").bind(Date.now(), id, lease).run()
+          await failRejected(env, id)
+        }
         throw error
       }
       if (typeof result.orderNumber !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(result.orderNumber)) throw new ApiError('采购编号待核对。', 502)
@@ -99,6 +111,7 @@ export async function fulfillGmail(env: Env, id: string) {
     // Supplier failure/refund is terminal for procurement; no replacement buy.
     if ((result.status === 4 || result.status === 5) && result.outerNumber === id && (!row.supplier_order || row.supplier_order === result.orderNumber)) {
       await env.INTEREST_DB.prepare("UPDATE account_supplier_orders SET state='rejected',updated_at=? WHERE order_id=? AND lease_token=?").bind(Date.now(), id, lease).run()
+      await failRejected(env, id)
       return
     }
     if (row.supplier_order && result.orderNumber !== row.supplier_order) throw new ApiError('采购单号不匹配。', 409)
@@ -112,7 +125,15 @@ export async function fulfillGmail(env: Env, id: string) {
   }
 }
 export async function reconcileGmail(env: Env) {
-  const rows = (await env.INTEREST_DB.prepare(`SELECT k.order_id FROM account_supplier_orders k JOIN orders o ON o.id=k.order_id WHERE k.state<>'rejected' AND k.lease_until<=? AND o.mode='live' AND o.is_test=0 AND o.payment_status='paid' AND o.refund_hold=0 AND o.refunded_cents=0 AND o.redemption_blocked=0 AND o.status IN ('session','processing') ORDER BY k.updated_at LIMIT 10`).bind(Date.now()).all<{ order_id: string }>()).results
+  // Earlier releases left rejected purchases' paid orders in processing.
+  const stuck = (await env.INTEREST_DB.prepare(`SELECT k.order_id FROM account_supplier_orders k JOIN orders o ON o.id=k.order_id WHERE k.state='rejected' AND k.lease_until<=? AND o.plan='gmail-account' AND o.mode='live' AND o.is_test=0 AND o.payment_status='paid' AND o.refund_hold=0 AND o.refunded_cents=0 AND o.redemption_blocked=0 AND o.status IN ('session','processing') LIMIT 10`).bind(Date.now()).all<{ order_id: string }>()).results
+  for (const row of stuck) { try { await failRejected(env, row.order_id) } catch { /* Retried next run. */ } }
+  // Skip rows this run cannot act on, so they never occupy every batch slot:
+  // unstarted buys while new procurement is paused, and purchases bound to a
+  // different supplier account (they need that account restored or review).
+  let account: { base: string; appId: string } | null = null
+  try { account = configuration(env) } catch { return { checked: 0, failed: 0 } }
+  const rows = (await env.INTEREST_DB.prepare(`SELECT k.order_id FROM account_supplier_orders k JOIN orders o ON o.id=k.order_id WHERE k.state<>'rejected' AND k.lease_until<=? AND k.api_base=? AND k.app_id=? AND (k.attempted_at IS NOT NULL OR ?=1) AND o.mode='live' AND o.is_test=0 AND o.payment_status='paid' AND o.refund_hold=0 AND o.refunded_cents=0 AND o.redemption_blocked=0 AND o.status IN ('session','processing') ORDER BY k.updated_at LIMIT 10`).bind(Date.now(), account.base, account.appId, Number(env.ACCOUNT_SUPPLIER_CHECKOUT_ENABLED === 'true')).all<{ order_id: string }>()).results
   let failed = 0
   for (const row of rows) {
     try { await fulfillGmail(env, row.order_id) }

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { customerFixture } from './customer-fixture.ts'
-import { fulfillXGift, recoverXGift } from '../worker/xgift/service.ts'
+import { fulfillXGift, reconcileXGift, recoverXGift } from '../worker/xgift/service.ts'
 import { signature } from '../shared/xgift-signature.ts'
 import { applyPaymentResult, findPayment } from '../worker/payments/service.ts'
 import { getOrder } from '../worker/order-state.ts'
@@ -174,4 +174,18 @@ test('admin recovery checks the expected version and preserves partner settlemen
   const current=await getOrder(s.env,o.id)
   assert.equal(current.cost_cents,2100)
   assert.equal(s.db.prepare('SELECT COUNT(*) n FROM xgift_recovery_attempts').get()!.n,1)
+})
+
+test('gifts bound to rotated credentials cannot starve reconciliation of current gifts',async t=>{
+  const s=await fixture(t),target=await s.create(),others=[] as string[]
+  for(let i=0;i<5;i++)others.push((await s.create()).id)
+  s.state.lost=true
+  for(const id of [...others,target.id])await s.pay(id)
+  // Simulate in-flight gifts from an earlier credential; the hash is immutable in production.
+  s.db.exec('DROP TRIGGER xgift_purchase_immutable')
+  for(const id of others)s.db.prepare("UPDATE xgift_purchases SET credential_hash='earlier-key',updated_at=1,next_check=0 WHERE order_id=?").run(id)
+  s.db.prepare('UPDATE xgift_purchases SET updated_at=2,next_check=0 WHERE order_id=?').run(target.id)
+  s.state.lost=false;s.state.succeeded=true
+  await reconcileXGift(s.env)
+  assert.equal(s.db.prepare('SELECT status FROM orders WHERE id=?').get(target.id)!.status,'success')
 })

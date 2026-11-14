@@ -119,8 +119,20 @@ export async function fulfillDeliverySupplier(env: Env, id: string) {
   } finally { await env.INTEREST_DB.prepare('UPDATE delivery_supplier_orders SET lease_until=0 WHERE order_id=? AND lease_token=?').bind(id, lease).run() }
 }
 export async function reconcileDeliverySupplier(env: Env) {
-  const rows = (await env.INTEREST_DB.prepare(`SELECT n.order_id FROM delivery_supplier_orders n JOIN orders o ON o.id=n.order_id WHERE n.state<>'rejected' AND n.next_check_at<=? AND n.lease_until<=? AND o.mode='live' AND o.is_test=0 AND o.payment_status='paid' AND o.refund_hold=0 AND o.refunded_cents=0 AND o.redemption_blocked=0 AND o.status IN ('session','processing') ORDER BY n.updated_at LIMIT 10`).bind(Date.now(), Date.now()).all<{ order_id: string }>()).results
-  for (const row of rows) { try { await fulfillDeliverySupplier(env, row.order_id) } catch { /* Retry original receipt, never substitute a new purchase. */ } }
+  if (!env.DELIVERY_SUPPLIER_API_KEY) return
+  // Skip rows this run cannot act on, so they never occupy every batch slot:
+  // purchases bound to other credentials (restore them or review), and
+  // unstarted buys while new procurement is paused.
+  const rows = (await env.INTEREST_DB.prepare(`SELECT n.order_id FROM delivery_supplier_orders n JOIN orders o ON o.id=n.order_id WHERE n.state<>'rejected' AND n.next_check_at<=? AND n.lease_until<=? AND n.credential_hash=? AND (n.attempted_at IS NOT NULL OR ?=1) AND o.mode='live' AND o.is_test=0 AND o.payment_status='paid' AND o.refund_hold=0 AND o.refunded_cents=0 AND o.redemption_blocked=0 AND o.status IN ('session','processing') ORDER BY n.updated_at LIMIT 10`)
+    .bind(Date.now(), Date.now(), await credentialHash(env), Number(delivery_supplierCheckoutEnabled(env))).all<{ order_id: string }>()).results
+  for (const row of rows) {
+    try { await fulfillDeliverySupplier(env, row.order_id) }
+    catch {
+      // Retry the original receipt later, never substitute a new purchase. Rotate
+      // a failure that left no trace behind, so it cannot block the next batch.
+      await env.INTEREST_DB.prepare('UPDATE delivery_supplier_orders SET next_check_at=MAX(next_check_at,?),updated_at=? WHERE order_id=? AND lease_until<=?').bind(Date.now() + 60000, Date.now(), row.order_id, Date.now()).run()
+    }
+  }
 }
 export async function delivery_supplierAdmin(env: Env, id: string) {
   const row = await find(env, id)

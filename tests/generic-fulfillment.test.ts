@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { generateKeyPairSync, sign } from 'node:crypto'
 import { customerFixture } from './customer-fixture.ts'
-import { applyPaymentResult, findPayment } from '../worker/payments/service.ts'
+import { applyPaymentResult, findPayment, reconcileOverdueReservations } from '../worker/payments/service.ts'
 import { expireReservations, fulfillService, reconcileServices, sendServiceMail } from '../worker/fulfillment/service.ts'
 import { signZpayParams } from '../worker/payments/zpay-protocol.ts'
 
@@ -429,4 +429,85 @@ test('mail lease excludes racing refund and redemption writes, then refunded cod
   s.db.prepare('UPDATE orders SET refunded_cents=1000 WHERE id=?').run(order.id)
   await expireReservations(s.env)
   assert.equal(s.db.prepare('SELECT state FROM cdk_stock WHERE order_id=?').get(order.id)!.state, 'quarantined')
+})
+
+test('refund review warns that a delivered code cannot be taken back', async t => {
+  const s = await setup(t), order = await s.order()
+  const before = await s.read(order.id)
+  assert.equal((await s.request(`/api/orders/${order.id}/refunds`, { key: crypto.randomUUID(), reason: '暂不需要', version: before.version }, s.buyer)).status, 409)
+  await s.pay(order.id)
+  const current = await s.read(order.id)
+  assert.equal((await s.request(`/api/orders/${order.id}/refunds`, { key: crypto.randomUUID(), reason: '商品不适用', version: current.version }, s.buyer)).status, 201)
+  const refund = s.db.prepare('SELECT id FROM refund_cases WHERE order_id=?').get(order.id) as { id: string }
+  const detail = await (await s.request('/api/admin/refunds/' + refund.id, undefined, s.admin)).json()
+  assert.match(detail.fulfillmentNotice, /已交付/)
+})
+
+test('overdue unpaid cashier trades close every minute so their stock returns to sale, while late receipts are still booked', async t => {
+  const s = await setup(t, 'stock', ['ONLY-CODE'])
+  const pid = '202600000001', key = 'local-test-key-keep-private'
+  Object.assign(s.env, { SERVICE_PAYMENT_PROVIDER: 'zpay', ZPAY_PID: pid, ZPAY_KEY: key, ALIPAY_APP_ID: undefined, ALIPAY_SELLER_ID: undefined, ALIPAY_APP_PRIVATE_KEY: undefined, ALIPAY_PUBLIC_KEY: undefined })
+  let paid = false
+  t.mock.method(globalThis, 'fetch', async (input: string) => {
+    const url = new URL(input), number = url.searchParams.get('out_trade_no')
+    return Response.json({ code: 1, pid, out_trade_no: number, type: 'alipay', money: '10.00', status: paid ? 1 : 0, trade_no: '2026000000009' })
+  })
+  const abandoned = await s.order()
+  assert.equal((await s.request(`/api/orders/${abandoned.id}/payment`, { action: 'create' }, s.buyer)).status, 200)
+  // The cashier and its two-minute safety allowance have passed; the reservation has too.
+  s.db.prepare('UPDATE payments SET expires_at=? WHERE order_id=?').run(Date.now() - 200000, abandoned.id)
+  s.db.prepare('UPDATE fulfillment_tasks SET expires_at=0 WHERE order_id=?').run(abandoned.id)
+  assert.equal((await s.create()).status, 409)
+  assert.deepEqual(await reconcileOverdueReservations(s.env), { checked: 1, closed: 1 })
+  assert.equal((await findPayment(s.env, abandoned.id))!.state, 'closed')
+  await reconcileServices(s.env)
+  assert.equal(s.db.prepare('SELECT state FROM cdk_stock').get()!.state, 'available')
+  // A buyer who pays at the last moment is booked, never closed.
+  const late = await s.order()
+  assert.equal((await s.request(`/api/orders/${late.id}/payment`, { action: 'create' }, s.buyer)).status, 200)
+  s.db.prepare('UPDATE payments SET expires_at=? WHERE order_id=?').run(Date.now() - 200000, late.id)
+  paid = true
+  await reconcileOverdueReservations(s.env)
+  assert.equal((await findPayment(s.env, late.id))!.state, 'paid')
+  assert.equal(s.db.prepare('SELECT payment_status FROM orders WHERE id=?').get(late.id)!.payment_status, 'paid')
+})
+
+test('overdue trades that keep failing rotate instead of holding every slot of the minute job', async t => {
+  const s = await setup(t, 'manual')
+  const pid = '202600000001', key = 'local-test-key-keep-private'
+  Object.assign(s.env, { SERVICE_PAYMENT_PROVIDER: 'zpay', ZPAY_PID: pid, ZPAY_KEY: key, ALIPAY_APP_ID: undefined, ALIPAY_SELLER_ID: undefined, ALIPAY_APP_PRIVATE_KEY: undefined, ALIPAY_PUBLIC_KEY: undefined })
+  t.mock.method(globalThis, 'fetch', async (input: string) => Response.json({ code: 1, pid, out_trade_no: new URL(input).searchParams.get('out_trade_no'), type: 'alipay', money: '10.00', status: 0, trade_no: '2026000000009' }))
+  const ids = [] as string[]
+  for (let i = 0; i < 11; i++) {
+    const order = await s.order(); ids.push(order.id)
+    assert.equal((await s.request(`/api/orders/${order.id}/payment`, { action: 'create' }, s.buyer)).status, 200)
+  }
+  const target = ids.pop()!
+  // Ten trades are bound to a merchant account that is no longer configured and
+  // expired earliest; each attempt fails without changing their state.
+  for (const id of ids) s.db.prepare("UPDATE payments SET account='earlier-merchant',expires_at=?,updated_at=? WHERE order_id=?").run(Date.now() - 900000, Date.now() - 900000, id)
+  s.db.prepare('UPDATE payments SET expires_at=?,updated_at=? WHERE order_id=?').run(Date.now() - 200000, Date.now() - 200000, target)
+  await reconcileOverdueReservations(s.env)
+  await reconcileOverdueReservations(s.env)
+  assert.equal((await findPayment(s.env, target))!.state, 'closed')
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM payments WHERE account='earlier-merchant' AND state='pending'").get()!.n, 10)
+})
+
+test('a ZPAY cashier link that was never opened closes after expiry and returns its stock to sale', async t => {
+  const s = await setup(t, 'stock', ['ONLY-CODE'])
+  const pid = '202600000001', key = 'local-test-key-keep-private'
+  Object.assign(s.env, { SERVICE_PAYMENT_PROVIDER: 'zpay', ZPAY_PID: pid, ZPAY_KEY: key, ALIPAY_APP_ID: undefined, ALIPAY_SELLER_ID: undefined, ALIPAY_APP_PRIVATE_KEY: undefined, ALIPAY_PUBLIC_KEY: undefined })
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ code: 0, msg: '订单编号不存在' }))
+  const order = await s.order()
+  assert.equal((await s.request(`/api/orders/${order.id}/payment`, { action: 'create' }, s.buyer)).status, 200)
+  // Not yet past the two-minute allowance: the trade stays open.
+  s.db.prepare('UPDATE payments SET expires_at=? WHERE order_id=?').run(Date.now() - 60000, order.id)
+  await reconcileOverdueReservations(s.env)
+  assert.equal((await findPayment(s.env, order.id))!.state, 'pending')
+  s.db.prepare('UPDATE payments SET expires_at=?,updated_at=0 WHERE order_id=?').run(Date.now() - 200000, order.id)
+  s.db.prepare('UPDATE fulfillment_tasks SET expires_at=0 WHERE order_id=?').run(order.id)
+  await reconcileOverdueReservations(s.env)
+  assert.equal((await findPayment(s.env, order.id))!.state, 'closed')
+  await reconcileServices(s.env)
+  assert.equal(s.db.prepare('SELECT state FROM cdk_stock').get()!.state, 'available')
 })

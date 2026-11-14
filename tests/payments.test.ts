@@ -313,6 +313,33 @@ test('real admin test uses shared payment callback and refund workflow, with dup
   assert.equal((await (await s.request('/api/admin/overview', undefined, admin)).json()).stats.refund_amount, 0)
 })
 
+test('closed ZPAY backlog cannot starve recently closed trades and old trades are rechecked less often', async t => {
+  const s = await setup(t); s.live()
+  const pid = '202600000001', key = 'local-test-key-keep-private'
+  s.env.ZPAY_PID = pid; s.env.ZPAY_KEY = key
+  const now = Date.now(), queried: string[] = []
+  const insert = s.db.prepare("INSERT INTO payments(order_id,provider,account,amount_cents,state,expires_at,created_at,updated_at) VALUES(?,?,?,13900,'closed',?,?,?)")
+  const copyOrder = (id: string) => {
+    s.db.exec('DROP TABLE IF EXISTS temp.order_copy'); s.db.prepare('CREATE TEMP TABLE order_copy AS SELECT * FROM orders WHERE id=?').run(s.id)
+    s.db.prepare('UPDATE temp.order_copy SET id=?,idempotency_key=?').run(id, 'backlog-' + id); s.db.exec('INSERT INTO orders SELECT * FROM temp.order_copy')
+  }
+  // Twelve old abandoned trades, all overdue under the old rotation.
+  for (let i = 0; i < 12; i++) { const id = 'YMX-' + i.toString(16).toUpperCase().padStart(32, '0'); copyOrder(id); insert.run(id, 'zpay', pid, now - 3 * 86400000, now - 3 * 86400000, now - 7 * 3600000 - i) }
+  // An old trade checked one hour ago is not yet due.
+  copyOrder('YMX-' + 'E'.repeat(32)); insert.run('YMX-' + 'E'.repeat(32), 'zpay', pid, now - 3 * 86400000, now - 3 * 86400000, now - 3600000)
+  insert.run(s.id, 'zpay', pid, now - 600000, now - 900000, now - 6 * 60000)
+  t.mock.method(globalThis, 'fetch', async (input: string) => {
+    const number = new URL(input).searchParams.get('out_trade_no')!; queried.push(number)
+    return Response.json({ code: 1, pid, out_trade_no: number, type: 'alipay', money: '139.00', status: number === s.id.slice(4) ? 1 : 0, trade_no: '2026000000001' })
+  })
+  await reconcilePayments(s.env)
+  // The recent trade goes first despite the backlog; the not-yet-due old trade waits.
+  assert.equal(queried[0], s.id.slice(4))
+  assert.equal(queried.length, 10)
+  assert.ok(!queried.includes('E'.repeat(32)))
+  assert.equal((await findPayment(s.env, s.id))!.state, 'paid')
+})
+
 test('missing expired QR trades retire only after the safety window', async t => {
   const s = await setup(t); s.live()
   mockGateway(t, (method, biz) => method === 'alipay.trade.precreate' ? { code: '10000', out_trade_no: biz.out_trade_no, qr_code: 'https://qr.alipay.com/test' } : { code: '40004', sub_code: 'ACQ.TRADE_NOT_EXIST' })

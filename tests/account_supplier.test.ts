@@ -160,6 +160,35 @@ test('pending, mismatched and over-budget supplier results never send credential
   await fulfillGmail(s.env, order.id)
   assert.equal(s.db.prepare('SELECT state FROM account_supplier_orders WHERE order_id=?').get(order.id)!.state, 'rejected')
   await fulfillGmail(s.env, order.id); assert.equal(s.state.creates, 1)
+  // The paid order fails visibly for after-sales instead of staying in processing.
+  assert.equal(s.db.prepare('SELECT status FROM orders WHERE id=?').get(order.id)!.status, 'failed')
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM order_events WHERE order_id=? AND action='gmail-purchase-rejected'").get(order.id)!.n, 1)
+  // Orders an earlier release left in processing are repaired once by reconciliation.
+  s.db.prepare("UPDATE orders SET status='processing' WHERE id=?").run(order.id)
+  await reconcileGmail(s.env); await reconcileGmail(s.env)
+  assert.equal(s.db.prepare('SELECT status FROM orders WHERE id=?').get(order.id)!.status, 'failed')
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM order_events WHERE order_id=? AND action='gmail-purchase-rejected'").get(order.id)!.n, 2)
+  assert.equal(s.state.creates, 1)
+})
+
+test('paused new procurement and changed supplier accounts cannot starve recovery of an in-flight purchase', async t => {
+  const s = await setup(t)
+  const target = await s.create(), idle = [] as string[], foreign = [] as string[]
+  for (let i = 0; i < 10; i++) idle.push((await s.create()).id)
+  for (let i = 0; i < 10; i++) foreign.push((await s.create()).id)
+  s.state.losePurchase = true; await s.pay(target.id)
+  assert.equal(s.db.prepare('SELECT state FROM account_supplier_orders WHERE order_id=?').get(target.id)!.state, 'unknown')
+  s.env.ACCOUNT_SUPPLIER_CHECKOUT_ENABLED = 'false'
+  for (const id of [...idle, ...foreign]) {
+    s.db.prepare("INSERT INTO payments(order_id,provider,account,amount_cents,expires_at,created_at,updated_at) SELECT id,'alipay',?,price_cents,?,?,? FROM orders WHERE id=?").run(s.env.ALIPAY_APP_ID!, Date.now() + 60000, Date.now(), Date.now(), id)
+    await applyPaymentResult(s.env, (await findPayment(s.env, id))!, { orderId: id, amountCents: 1880, status: 'paid', tradeNo: 'trade_' + id })
+  }
+  for (const id of foreign) s.db.prepare("UPDATE account_supplier_orders SET app_id='99999',state='unknown',attempted_at=1 WHERE order_id=?").run(id)
+  s.db.prepare('UPDATE account_supplier_orders SET updated_at=1 WHERE order_id<>?').run(target.id)
+  s.state.losePurchase = false
+  await reconcileGmail(s.env)
+  assert.equal(s.db.prepare('SELECT state FROM account_supplier_orders WHERE order_id=?').get(target.id)!.state, 'purchased')
+  assert.equal(s.state.creates, 1)
 })
 
 test('changed supplier account cannot redirect recovery to another account; checkout flag stops new buys', async t => {

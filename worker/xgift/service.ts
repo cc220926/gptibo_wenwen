@@ -102,8 +102,20 @@ async function finish(env: Env, row: Purchase, lease: string, state: string, sup
 }
 export async function reconcileXGift(env: Env) {
   await env.INTEREST_DB.prepare('DELETE FROM xgift_preflights WHERE expires_at<?').bind(Date.now()).run()
-  const rows = (await env.INTEREST_DB.prepare("SELECT x.order_id FROM xgift_purchases x JOIN orders o ON o.id=x.order_id WHERE x.state NOT IN ('failed','succeeded') AND x.next_check<=? AND x.lease_until<=? AND o.payment_status='paid' ORDER BY x.updated_at LIMIT 5").bind(Date.now(), Date.now()).all<{ order_id: string }>()).results
-  for (const row of rows) { try { await fulfillXGift(env, row.order_id) } catch { /* Isolate configuration failures per order. */ } }
+  // Select only rows this run can act on, so blocked rows never occupy every
+  // batch slot: each backend's current credentials, an eligible paid order, and
+  // unstarted gifts only while that backend accepts new orders.
+  const rows = (await env.INTEREST_DB.prepare(`SELECT x.order_id FROM xgift_purchases x JOIN orders o ON o.id=x.order_id WHERE x.state NOT IN ('failed','succeeded') AND x.next_check<=? AND x.lease_until<=?
+    AND ((x.supplier_backend='platform' AND x.credential_hash=? AND (x.attempted_at IS NOT NULL OR ?=1)) OR (x.supplier_backend<>'platform' AND x.credential_hash=? AND (x.attempted_at IS NOT NULL OR ?=1)))
+    AND o.mode='live' AND o.is_test=0 AND o.payment_status='paid' AND o.refund_hold=0 AND o.refunded_cents=0 AND o.redemption_blocked=0 AND o.status IN ('session','processing') ORDER BY x.updated_at LIMIT 5`)
+    .bind(Date.now(), Date.now(), await credentials(env, 'platform'), Number(xgiftCheckoutEnabled(env, 'platform')), await credentials(env, 'legacy'), Number(xgiftCheckoutEnabled(env, 'legacy'))).all<{ order_id: string }>()).results
+  for (const row of rows) {
+    try { await fulfillXGift(env, row.order_id) }
+    catch {
+      // Isolate failures per order and rotate one that left no trace behind.
+      await env.INTEREST_DB.prepare('UPDATE xgift_purchases SET next_check=MAX(next_check,?),updated_at=? WHERE order_id=? AND lease_until<=?').bind(Date.now() + 15000, Date.now(), row.order_id, Date.now()).run()
+    }
+  }
 }
 
 // A new supplier attempt is allowed only for a definitive pre-payment rejection.

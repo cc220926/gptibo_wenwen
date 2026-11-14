@@ -1,6 +1,7 @@
 import { ApiError, body, json, type Env } from './platform.ts'
 import { type Order } from './order-state.ts'
 import { findPayment, refundThroughProvider } from './payments/service.ts'
+import { completeSentDelivery } from './email-delivery.ts'
 import { findRechargeOrder, platformOrderStatus, reconcilePlatformRefund, refundThroughRecharge, verifyExternalRechargeRefund, RechargeRefundRejected } from './recharge/service.ts'
 
 type Case = { id: string; order_id: string; status: string; requested_cents: number; approved_cents: number | null; version: number; reason: string; note: string; created_at: number; updated_at: number }
@@ -30,7 +31,10 @@ export async function customerRefunds(request: Request, env: Env, order: Order) 
       db.prepare('UPDATE orders SET refund_hold=0,version=version+1,updated_at=? WHERE id=? AND EXISTS(SELECT 1 FROM refund_cases WHERE id=? AND last_event_id=?)').bind(now, order.id, row.id, eventId),
       event(env, eventId, row.id, 'customer', '客户撤回申请'),
     ])
-    await checkWritten(env, eventId); return json({ ok: true })
+    await checkWritten(env, eventId)
+    // A delivery email accepted while the hold was active completes the order now.
+    await completeSentDelivery(env, order.id).catch(() => { /* Retried by the delivery queue or the next admin action. */ })
+    return json({ ok: true })
   }
   const reason = text(data.reason, '售后原因')
   if (typeof data.key !== 'string' || !/^[a-f0-9-]{36}$/.test(data.key)) throw new ApiError('申请编号无效。')
@@ -53,6 +57,22 @@ export async function customerRefunds(request: Request, env: Env, order: Order) 
   await checkWritten(env, eventId); return json({ ok: true }, 201)
 }
 
+// Tell the reviewer when goods were already handed over or bought, since a
+// refund then cannot recover the delivered item or its procurement cost.
+async function fulfillmentNotice(env: Env, id: string) {
+  const row = await env.INTEREST_DB.prepare(`SELECT
+    (SELECT state FROM fulfillment_tasks WHERE order_id=?) task,
+    (SELECT status FROM email_deliveries WHERE order_id=?) mail,
+    (SELECT state FROM account_supplier_orders WHERE order_id=?) gmail,
+    (SELECT state FROM delivery_supplier_orders WHERE order_id=?) supplier,
+    (SELECT state FROM muse_orders WHERE order_id=?) muse,
+    (SELECT state FROM xgift_purchases WHERE order_id=?) xgift`).bind(id, id, id, id, id, id).first<Record<string, string | null>>()
+  if (!row) return null
+  if (row.task === 'delivered' || row.mail === 'sent' || row.muse === 'succeeded' || row.xgift === 'succeeded') return '商品已交付给客户，退款无法收回已交付内容，请核实后再审批。'
+  if (row.gmail === 'purchased' || row.supplier === 'purchased') return '供应商采购已完成，商品可能已在订单页展示或正在发送邮件；退款不会退回采购成本，请核实后再审批。'
+  if (row.task === 'running') return '人工交付已开始处理，请先与交付人员确认是否已交付。'
+  return null
+}
 export async function adminRefunds(request: Request, env: Env, url: URL) {
   const db = env.INTEREST_DB; const path = url.pathname
   if (path === '/api/admin/refunds/reconcile-external' && request.method === 'POST') { await body(request); return json(await reconcileExternalRechargeRefunds(env, 'admin')) }
@@ -76,7 +96,7 @@ export async function adminRefunds(request: Request, env: Env, url: URL) {
     const channel = order.mode === 'live' ? (await findRechargeOrder(env, order.id) ? 'recharge' : (await findPayment(env, order.id))?.provider ?? null) : null
     const platformStatus = channel === 'recharge' ? await platformOrderStatus(env, order) : null
     const upstreamRefund = channel === 'recharge' ? await db.prepare('SELECT remote_id,status,updated_at FROM recharge_refunds WHERE case_id=?').bind(row.id).first() : null
-    return json({ refund: row, upstreamRefund, hasPartner: order.partner_id !== null, partnerDebit, paymentProvider: channel, platformStatus: platformStatus ? { ...platformStatus, remote_id: platformStatus.remoteId } : null, order: { id: order.id, plan: order.plan_name, plan_id: order.plan, price_cents: order.price_cents, refunded_cents: order.refunded_cents, customer_email: order.customer_email, mode: order.mode, status: order.status, payment_status: order.payment_status, refund_hold: order.refund_hold, created_at: order.created_at, updated_at: order.updated_at, purchase_note: order.purchase_note, partner_name: order.partner_name }, payout, events })
+    return json({ refund: row, fulfillmentNotice: await fulfillmentNotice(env, order.id), upstreamRefund, hasPartner: order.partner_id !== null, partnerDebit, paymentProvider: channel, platformStatus: platformStatus ? { ...platformStatus, remote_id: platformStatus.remoteId } : null, order: { id: order.id, plan: order.plan_name, plan_id: order.plan, price_cents: order.price_cents, refunded_cents: order.refunded_cents, customer_email: order.customer_email, mode: order.mode, status: order.status, payment_status: order.payment_status, refund_hold: order.refund_hold, created_at: order.created_at, updated_at: order.updated_at, purchase_note: order.purchase_note, partner_name: order.partner_name }, payout, events })
   }
   const data = await body(request); const note = text(data.note, '处理说明'); const now = Date.now(); const eventId = crypto.randomUUID()
   if (row.version !== data.version) throw new ApiError('售后已更新，请刷新。', 409)
@@ -99,6 +119,7 @@ export async function adminRefunds(request: Request, env: Env, url: URL) {
       db.prepare('UPDATE orders SET refund_hold=0,updated_at=?,version=version+1 WHERE id=? AND EXISTS(SELECT 1 FROM refund_cases WHERE id=? AND last_event_id=?)').bind(now, order.id, row.id, eventId),
       event(env, eventId, row.id, 'admin', note),
     ])
+    if (await db.prepare('SELECT id FROM refund_events WHERE id=?').bind(eventId).first()) await completeSentDelivery(env, order.id).catch(() => { /* Never fail the recorded rejection. */ })
   } else if (data.action === 'reconcile-platform-refund' && row.status === 'approved') {
     await executeRefund(env, row, order, note, 'admin', undefined, true)
     return json({ ok: true })

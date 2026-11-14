@@ -68,6 +68,11 @@ test('gateway order query cross-checks merchant, order, method and amount', asyn
   await assert.rejects(queryZpayOrder(order, credentials, mocked({ pid: 'someone-else' })), /mismatch/)
   await assert.rejects(queryZpayOrder(order, credentials, mocked({ status: 1, trade_no: '' })), /missing/)
   await assert.rejects(queryZpayOrder(order, credentials, (async () => new Response('', { status: 302, headers: { location: 'https://evil.invalid/' } })) as typeof fetch), /unavailable/)
+  // A cashier link that was never opened: the exact production reply means not found.
+  const reply = (body: unknown) => (async () => Response.json(body)) as typeof fetch
+  assert.deepEqual(await queryZpayOrder(order, credentials, reply({ code: 0, msg: '订单编号不存在' })), { orderId, amountCents: 13800, status: 'not_found', tradeNo: undefined })
+  // Any other failure stays an error and can never close the trade.
+  for (const body of [{ code: 0, msg: 'KEY校验失败' }, { code: -1, msg: '订单编号不存在' }, { code: 0, msg: '订单编号不存在', status: 1 }, { code: 0 }]) await assert.rejects(queryZpayOrder(order, credentials, reply(body)), /mismatch/)
 })
 
 test('service payment selection only chooses ZPAY with its own credentials', () => {
