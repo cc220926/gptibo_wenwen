@@ -1,4 +1,5 @@
 import { GptAccountScene } from './gpt-account-scene'
+import { CodexCreditsScene } from './codex-credits-scene'
 import '@/styles/service-product.css'
 import { isGptAccountOffer, isMuseOffer, serviceProductRoute } from '../../shared/service-presentation'
 import { useStorefrontI18n } from '@/lib/storefront-i18n'
@@ -58,11 +59,15 @@ export function ProductCatalog({ onHelp, onOrders, onNavigate, offers, catalogRe
   const xAvailable = xOffers.some(p => p.enabled)
   const xOffer = [...xOffers].sort((a, b) => Number(Boolean(b.enabled)) - Number(Boolean(a.enabled)) || a.price_cents - b.price_cents)[0]
   const sms = matches('tool', 'Codex 接码 SMS verification')
+  const credits = matches('tool', 'Codex 点数 credits 250 500')
+  const creditOffers = offers.filter(p => p.product_id === 'codex-credits')
+  const creditPrice = [...creditOffers].sort((a, b) => Number(Boolean(b.enabled)) - Number(Boolean(a.enabled)) || a.price_cents - b.price_cents)[0]
   const navigate = (event: MouseEvent<HTMLAnchorElement>, page: string) => {
     if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
     event.preventDefault(); onNavigate(page)
   }
   const cards: { id: string; compact?: boolean; node: ReactNode }[] = [
+    { id: 'codex-credits', node: credits && <article className="store-product"><div className="store-product-heading"><h3>Codex 点数</h3>{!creditOffers.some(p => p.enabled) && <span>{t('暂停售卖')}</span>}</div><p className="store-spec">250 / 500 点 · 一次性点数包</p><CodexCreditsScene /><div className="store-product-bottom"><span className="store-starting-price">{creditPrice ? <>¥{formatCatalogPrice(creditPrice.price_cents / 100)}<small>{t(' 起')}</small></> : <small>{t('暂未开放')}</small>}</span><a className="store-action" href={storefrontHref('product/codex-credits')} onClick={e => navigate(e, 'product/codex-credits')}>{t('选择点数')}</a></div></article> },
     { id: "chatgpt", node: chatgpt && <article className="store-product"><div className="store-product-heading"><h3>ChatGPT</h3>{offers.length > 0 && !plans.some(p => p.enabled) && <span>{t('暂停售卖')}</span>}</div><p className="store-spec">{t('自有账号充值 · Plus / Pro')}</p><SubscriptionDeck plans={plans} /><div className="store-product-bottom"><span className="store-starting-price">{startingPrice === null ? <small>{t(offers.length ? '价格暂不可用' : '价格加载中')}</small> : <>¥{formatCatalogPrice(startingPrice)}<small>{t(' 起')}</small></>}</span><a className="store-action" href={storefrontHref('product/chatgpt')} onClick={e => navigate(e, 'product/chatgpt')}>{t('选择套餐')}</a></div></article> },
     ...memberships.map(([id, product]) => { const offer = offers.find(p => p.id === id); return { id: product.productId, node: <article key={id} className="store-product membership-product"><div className="store-product-heading"><h3>{product.productId === 'gemini' ? 'Gemini Pro' : t('多邻国')}</h3><span>{t(product.duration + '会员')}</span></div><p className="store-spec">{t(product.label)} · {t('邮件交付')}</p><MembershipScene productId={product.productId as 'gemini' | 'duolingo'} /><div className="store-product-bottom"><span className="store-starting-price">{offer ? <>¥{formatCatalogPrice(offer.price_cents / 100)}<small> / {t(product.duration)}</small></> : <small>{t(offers.length ? '暂未开放' : '价格加载中')}</small>}</span><a className="store-action" href={storefrontHref('product/' + product.productId)} onClick={e => navigate(e, 'product/' + product.productId)}>{t(offer?.enabled ? '查看商品' : '查看详情')}</a></div></article> } }),
     { id: "x-premium", node: xgift && <article className="store-product membership-product x-product"><div className="store-product-heading"><h3>X Premium</h3><span>{t(offers.length > 0 && !xAvailable ? '暂停售卖' : '会员订阅')}</span></div><p className="store-spec">{t('3 / 6 个月 · 你的账号，继续精彩')}</p><XPremiumScene /><div className="store-product-bottom"><span className="store-starting-price">{xOffer ? <>¥{formatCatalogPrice(xOffer.price_cents / 100)}<small>{t(' 起')}</small></> : <small>{t('价格加载中')}</small>}</span><a className="store-action" href={storefrontHref('product/x-premium')} onClick={e => navigate(e, 'product/x-premium')}>{t(xAvailable ? '选择套餐' : '查看详情')}</a></div></article> },

@@ -24,6 +24,10 @@ function fulfillmentNotice(plan: PlanId) {
       emphasis: '付款前请核对 X 用户名与订阅周期。',
       steps: ['填写并验证用户名，无需提供密码或 Cookie。', '付款后在订单查看进度，完成后前往 X 确认会员。'],
     }
+    case 'codex-credits': return {
+      emphasis: '一次性点数包，付款后需提交账号 Session 完成充值。',
+      steps: ['核对所选点数及金额；这不是月度订阅。', '付款后登录要充值的 ChatGPT 账号，提交完整 Session JSON，并核对目标邮箱。', '在原订单查看充值结果；等待或超时时不要重复下单。'],
+    }
     case 'codex-sms': return {
       emphasis: '单次接码服务，请先确认适用范围。',
       steps: ['付款后在订单获取手机号，再按指引查询验证码。', '接收结果在原订单查看，无需提交 ChatGPT Session。'],

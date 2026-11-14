@@ -79,13 +79,13 @@ export function LiveRechargeProcessing({ progressStage, progressUpdatedAt, recha
   </div>
 }
 
-export function LiveRechargeSuccess({ accountEmailMasked, finishedAt, onOrders, supportContacts, partnerName }: { accountEmailMasked?: string | null; finishedAt?: number | null; onOrders: () => void; supportContacts?: SupportContacts; partnerName?: string | null }) {
+export function LiveRechargeSuccess({ credits = false, accountEmailMasked, finishedAt, onOrders, supportContacts, partnerName }: { credits?: boolean; accountEmailMasked?: string | null; finishedAt?: number | null; onOrders: () => void; supportContacts?: SupportContacts; partnerName?: string | null }) {
   const hasContacts = Boolean(partnerName && supportContacts && Object.values(supportContacts).some(value => value.trim()))
   return <div className={`result-body${hasContacts ? ' live-success-with-contacts' : ''}`}>
     <div className="live-success-layout">
       <div className="live-success-summary">
         <SuccessMark /><h3>充值已完成</h3>
-        <p>{accountEmailMasked && <>账号：{accountEmailMasked}<br /></>}订阅已开通，可前往 ChatGPT 查看。</p>
+        <p>{accountEmailMasked && <>账号：{accountEmailMasked}<br /></>}{credits ? '点数充值已完成，可前往账号核对点数。' : '订阅已开通，可前往 ChatGPT 查看。'}</p>
       </div>
       <RechargeSuccessContacts contacts={supportContacts} name={partnerName} />
     </div>

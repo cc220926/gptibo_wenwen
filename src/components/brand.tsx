@@ -18,7 +18,7 @@ export function ProductLogo({ productId }: { productId: string }) {
   if (productId === 'duolingo') return <DuoMark />
   if (productId === 'gemini') return <GeminiMark />
   if (productId === 'gmail') return <Mail className="product-logo" style={{ background: 'none' }} aria-hidden="true" />
-  const slug = productId === 'chatgpt' ? 'openai' : productId === 'codex-sms' ? 'codex' : productId
+  const slug = productId === 'chatgpt' ? 'openai' : productId === 'codex-sms' || productId === 'codex-credits' ? 'codex' : productId
   return <span className="product-logo" style={{ maskImage: `url(/brands/${slug}.svg)` }} aria-hidden="true" />
 }
 export function SuccessMark() {

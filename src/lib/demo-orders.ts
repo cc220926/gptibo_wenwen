@@ -1,8 +1,10 @@
 import { isXGiftPlan } from '../../shared/xgift-products.ts'
+import { CODEX_CREDITS } from '../../shared/codex-credits.ts'
 import { emailProduct } from '../../shared/email-products.ts'
 import { confirmedRefundLabel, type PlatformOrderStatus } from '../../shared/platform-order-status.ts'
 
 export const PLANS = [
+  ...Object.entries(CODEX_CREDITS).map(([id, pack]) => ({ id: id as keyof typeof CODEX_CREDITS, productId: 'codex-credits', name: `${pack.points} 点`, price: pack.priceCents / 100, renewalOnly: false, subtitle: '继续你的下一次构建。', description: `${pack.points} 点 · 一次性点数包`, features: ['为自己的账号充值', '付款后提交 Session', '订单进度可查'] })),
   { id: 'x-premium-3m', productId: 'x-premium', name: 'Premium · 3 个月', price: 35, renewalOnly: false, subtitle: '三个月，探索更多。', description: '轻松开始，体验 Premium', features: ['无需账号密码', '付款前验证账号', '订单进度可查'] },
   { id: 'x-premium-6m', productId: 'x-premium', name: 'Premium · 6 个月', price: 55, renewalOnly: false, subtitle: '六个月，继续精彩。', description: '更长时间，持续探索', features: ['无需账号密码', '付款前验证账号', '订单进度可查'] },
   { id: 'plus', productId: 'chatgpt', name: 'Plus', price: 139, renewalOnly: false, subtitle: '日常灵感，持续在线。', description: '适合日常问答、写作与学习', features: ['写作、学习与灵感探索', '图片理解与创意表达', '个人账号使用体验'] },

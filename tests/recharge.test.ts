@@ -5,7 +5,7 @@ import { createHash, createHmac } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { readFileSync, readdirSync } from 'node:fs'
 import worker from '../worker/index.ts'
-import { alipayQr, canonicalQuery, request as supplierRequest, signature, marginCents, moneyCents, RechargeError } from '../worker/recharge/client.ts'
+import { alipayQr, canonicalQuery, request as supplierRequest, signature, marginCents, moneyCents, productMap, RechargeError } from '../worker/recharge/client.ts'
 import { reconcileRecharge } from '../worker/recharge/service.ts'
 import { purgeRetainedCredentials, retainedCredential, retainedRequest } from '../worker/recharge/saved-credentials.ts'
 import { getOrder } from '../worker/order-state.ts'
@@ -104,6 +104,68 @@ function setup(t: Context) {
     return worker.fetch(new Request('https://shop.example.invalid/api/recharge/webhook', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Quefa-Event': 'refund.succeeded', 'X-Quefa-Event-Id': id, 'X-Quefa-Delivery': 'dlv_'+id, 'X-Quefa-Timestamp': stamp, 'X-Quefa-Signature': `t=${stamp},v1=${mac(stamp+'.'+raw,webhookSecret)}` }, body: raw }), env)
   }
   return { db, env, call, buyer, create, query, submit, login, partner, notice, calls, products, remoteOrder, redemption, faceToFace: () => { faceToFace = true }, quote: (patch: Record<string, unknown>) => { quotePatch = patch }, setExpiry: (value: number) => { expiry = new Date(value).toISOString() }, setQr: (value: string | null) => { qr = value }, setPayment: (v: string) => { payment = v }, setTask: (v: string, retry = false) => { taskStatus = v; fallback = retry }, setRefund: (v: string) => { refundStatus = v }, override: (v: typeof override) => { override = v } }
+}
+
+test('separate Codex mapping preserves subscription SKUs and rejects point-tier swaps or conflicting mappings', t => {
+  const s = setup(t)
+  assert.deepEqual(productMap(s.env), { plus: 'demo_plus' })
+  s.env.RECHARGE_CODEX_PRODUCT_MAP = '{"codex-credits-250":"chatgpt_codex_250_cdk","codex-credits-500":"chatgpt_codex_500_cdk"}'
+  assert.deepEqual(productMap(s.env), { plus: 'demo_plus', 'codex-credits-250': 'chatgpt_codex_250_cdk', 'codex-credits-500': 'chatgpt_codex_500_cdk' })
+  s.env.RECHARGE_CODEX_PRODUCT_MAP = '{"codex-credits-250":"chatgpt_codex_500_cdk"}'
+  assert.throws(() => productMap(s.env), /映射配置无效/)
+  s.env.RECHARGE_CODEX_PRODUCT_MAP = '{"plus":"chatgpt_codex_250_cdk"}'
+  assert.throws(() => productMap(s.env), /映射配置无效/)
+  s.env.RECHARGE_CODEX_PRODUCT_MAP = '{"codex-credits-250":"chatgpt_codex_250_cdk"}'
+  s.env.RECHARGE_PRODUCT_MAP = '{"codex-credits-250":"another_sku"}'
+  assert.throws(() => productMap(s.env), /映射配置无效/)
+})
+
+for (const [plan, points, price, supply] of [['codex-credits-250', 250, 9900, '78.82'], ['codex-credits-500', 500, 19900, '156.33']] as const) {
+  test(`Codex ${points} points freeze the correct SKU and retail price, require verified payment and finish only after recharge success`, async t => {
+    const s = setup(t), buyer = await s.buyer()
+    const product = `chatgpt_codex_${points}_cdk`
+    s.env.RECHARGE_CODEX_PRODUCT_MAP = JSON.stringify({ [plan]: product })
+    Object.assign(s.products[0], { product_code: product, supply_price: supply })
+    const payload = { plan, expectedPrice: price, email: 'buyer@example.test', key: crypto.randomUUID() }
+    const response = await s.call('/api/orders', payload, buyer)
+    assert.equal(response.status, 201, await response.clone().text())
+    const order = (await response.json()).order
+    assert.equal(order.price, price / 100); assert.equal(order.planName, `${points} 点`)
+    assert.equal(order.manualFulfillment, false)
+    assert.equal((await (await s.call('/api/orders', payload, buyer)).json()).order.id, order.id)
+    const snapshot = JSON.parse(s.db.prepare('SELECT create_body FROM recharge_orders WHERE order_id=?').get(order.id)!.create_body as string)
+    assert.equal(snapshot.product_code, product); assert.equal(snapshot.sale_amount, (price / 100).toFixed(2))
+    assert.equal(snapshot.quantity, 1); assert.equal(snapshot.delivery_mode, 'auto_recharge')
+    assert.equal(snapshot.collection_mode, 'platform_collect')
+    assert.equal((await s.submit(order.id, buyer)).status, 409)
+    await s.query(order.id, buyer); s.setPayment('paid')
+    assert.equal((await (await s.query(order.id, buyer)).json()).order.status, 'session')
+    const key = crypto.randomUUID()
+    assert.equal((await s.submit(order.id, buyer, key)).status, 200)
+    assert.equal((await s.submit(order.id, buyer, key)).status, 200)
+    assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 1)
+    assert.equal((await (await s.query(order.id, buyer)).json()).order.status, 'processing')
+    s.setTask('succeeded')
+    const completed = (await (await s.query(order.id, buyer)).json()).order
+    assert.equal(completed.status, 'success'); assert.equal(orderLabel(completed), '已完成')
+    assert.doesNotMatch(JSON.stringify(s.db.prepare('SELECT * FROM recharge_redemptions').all()), /PRIVATE-TOKEN-NOT-FOR-STORAGE/)
+  })
+
+  test(`Codex ${points} points reject changed prices, unavailable supply, CDK-only products and foreign buyers`, async t => {
+    const s = setup(t), buyer = await s.buyer()
+    s.env.RECHARGE_CODEX_PRODUCT_MAP = JSON.stringify({ [plan]: `chatgpt_codex_${points}_cdk` })
+    Object.assign(s.products[0], { product_code: `chatgpt_codex_${points}_cdk`, supply_price: supply })
+    const create = (expectedPrice = price) => s.call('/api/orders', { plan, expectedPrice, email: 'buyer@example.test', key: crypto.randomUUID() }, buyer)
+    assert.equal((await create(price - 100)).status, 409)
+    s.products[0].available = false; assert.equal((await create()).status, 409)
+    s.products[0].available = true; s.products[0].delivery_modes = ['cdk']; assert.equal((await create()).status, 409)
+    s.products[0].delivery_modes = ['auto_recharge']; s.products[0].supply_price = '250.00'; assert.equal((await create()).status, 409)
+    s.products[0].supply_price = supply
+    const response = await create(); assert.equal(response.status, 201, await response.clone().text())
+    const order = (await response.json()).order
+    assert.equal((await s.submit(order.id, await s.buyer())).status, 404)
+    assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 0)
+  })
 }
 
 async function retainedSetup(t: Context, rawSession = session) {
@@ -1042,7 +1104,7 @@ test('configured catalog is independent of supplier prices; orders still enforce
   const s = setup(t)
   const catalog = (await (await s.call('/api/catalog')).json())
   assert.equal(catalog.checkoutEnabled, true); assert.equal(catalog.testingEnabled, false)
-  assert.deepEqual(catalog.plans.map((p: { enabled: number }) => p.enabled), [1,0,0,0,0,0,0,0,0,0])
+  assert.deepEqual(catalog.plans.map((p: { enabled: number }) => p.enabled), [1,0,0,0,0,0,0,0,0,0,0,0])
   s.products[0].supply_price = '140.00'
   assert.equal((await (await s.call('/api/catalog')).json()).plans[0].enabled, 1)
   const buyer = await s.buyer()

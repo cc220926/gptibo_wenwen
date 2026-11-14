@@ -1,4 +1,5 @@
 import { ApiError, hash, type Env } from '../platform.ts'
+import { CODEX_CREDITS } from '../../shared/codex-credits.ts'
 import { publicCode, requestMessages } from './errors.ts'
 
 const encoder = new TextEncoder()
@@ -30,8 +31,11 @@ export function configured(env: Env) { try { config(env); return true } catch { 
 export function productMap(env: Env): Record<string, string> {
   try {
     const map = JSON.parse(env.RECHARGE_PRODUCT_MAP ?? '{}')
-    if (!map || typeof map !== 'object' || Array.isArray(map) || Object.entries(map).some(([k, v]) => !['plus', 'pro-5x', 'pro-20x', 'pro-25x'].includes(k) || typeof v !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(v))) throw new Error()
-    return map
+    if (!map || typeof map !== 'object' || Array.isArray(map) || Object.entries(map).some(([k, v]) => !['plus', 'pro-5x', 'pro-20x', 'pro-25x', 'codex-credits-250', 'codex-credits-500'].includes(k) || typeof v !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(v))) throw new Error()
+    const credits = JSON.parse(env.RECHARGE_CODEX_PRODUCT_MAP ?? '{}')
+    const creditCodes: Record<string, string> = Object.fromEntries(Object.entries(CODEX_CREDITS).map(([id, pack]) => [id, pack.productCode]))
+    if (!credits || typeof credits !== 'object' || Array.isArray(credits) || Object.entries(credits).some(([key, value]) => creditCodes[key] !== value || (map[key] !== undefined && map[key] !== value))) throw new Error()
+    return { ...map, ...credits }
   } catch { throw new ApiError('充值商品映射配置无效。', 503) }
 }
 export function collectionMode(env: Env) {

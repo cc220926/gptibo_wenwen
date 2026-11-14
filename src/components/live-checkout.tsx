@@ -1,3 +1,4 @@
+import { isCodexCreditsPlan } from '../../shared/codex-credits'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toString as qrToString } from 'qrcode'
@@ -153,7 +154,7 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
 
       {stage === 'processing' && <LiveRechargeProcessing progressStage={info.progressStage} progressUpdatedAt={info.progressUpdatedAt} rechargeStatus={info.rechargeStatus} syncError={Boolean(info.syncError || failure || error)} />}
       </>}</CheckoutStageTransition>
-      {order.status === 'success' && <LiveRechargeSuccess accountEmailMasked={info.accountEmailMasked} finishedAt={info.finishedAt} supportContacts={order.supportContacts} partnerName={order.partnerName} onOrders={onOrders} />}
+      {order.status === 'success' && <LiveRechargeSuccess credits={isCodexCreditsPlan(order.plan)} accountEmailMasked={info.accountEmailMasked} finishedAt={info.finishedAt} supportContacts={order.supportContacts} partnerName={order.partnerName} onOrders={onOrders} />}
       {order.status === 'cancelled' && (info.paymentExpired ? <PaymentMessage state="expired" title="订单已过期">付款有效期已结束，请重新下单。若已付款，请先核对付款结果，勿重复支付。</PaymentMessage> : <PaymentMessage state="closed" title="订单已关闭">此订单不再接受付款。</PaymentMessage>)}
       {order.status === 'failed' && !info.canSubmit && <div className="result-body"><div className="result-icon warning"><TriangleAlert size={30} /></div><h3>{failureTitle}</h3><p>{info.message ?? '请联系客服核对。'}</p></div>}
       {!info.canSubmit && info.message && !['failed', 'success'].includes(order.status) && <Alert className="live-notice" role="status"><TriangleAlert aria-hidden="true" /><AlertDescription>{info.message}</AlertDescription></Alert>}

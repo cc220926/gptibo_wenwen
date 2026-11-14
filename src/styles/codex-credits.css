@@ -1,0 +1,7 @@
+.codex-credits-scene { display:grid; place-items:center; height:238px; margin:0; min-width:0; }
+.codex-credits-float { display:block; width:min(100%,350px); max-width:100%; height:auto; animation:codex-credits-hover 6.5s ease-in-out infinite; }
+.codex-credits-scene.large { height:300px; margin:4px 0 8px; }
+.codex-credits-scene.large .codex-credits-float { width:min(100%,480px); }
+@keyframes codex-credits-hover { 0%,100% { transform:translateY(4px); } 50% { transform:translateY(-5px); } }
+@media(max-width:420px) { .codex-credits-scene.large { height:230px; } }
+@media(prefers-reduced-motion:reduce) { .codex-credits-float { animation:none; } }
