@@ -508,7 +508,7 @@ test('TOTP replay and concurrent logins consume a time step only once, including
 test('account-wide TOTP throttling bounds guesses spread over different IPs', async t => {
   const s = await setup(); t.after(() => s.db.close())
   for (let i = 0; i < 31; i++) {
-    const response = await worker.fetch(new Request('https://shop.example.invalid/api/admin/login', { method: 'POST', headers: { Origin: 'https://shop.example.invalid', 'Content-Type': 'application/json', 'CF-Connecting-IP': `192.0.2.${i}` }, body: JSON.stringify({ username: 'tester', code: 'invalid' }) }), s.env)
+    const response = await worker.fetch(new Request('https://shop.example.invalid/api/admin/login', { method: 'POST', headers: { Origin: 'https://shop.example.invalid', 'Content-Type': 'application/json', 'CF-Connecting-IP': `192.0.2.${i}` }, body: JSON.stringify({ username: 'tester', code: 'invalid', ...await seedAdminEmailCode(s.db, s.env) }) }), s.env)
     assert.equal(response.status, i < 30 ? 401 : 429)
   }
 })

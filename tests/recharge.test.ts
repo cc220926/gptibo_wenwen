@@ -1256,7 +1256,10 @@ test('redemption fallback permits a new attempt without another order/payment, a
   assert.equal(current.fulfillment.canSubmit, true)
   s.setTask('queued'); assert.equal((await s.submit(order.id, buyer)).status, 200)
   assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_redemptions').get()!.n, 2)
-  current = (await (await s.call('/api/orders/' + order.id, undefined, buyer)).json()).order
+  // A running retry must resolve before the order can enter refund hold.
+  current = (await (await s.query(order.id, buyer)).json()).order
+  assert.equal((await s.call(`/api/orders/${order.id}/refunds`, { key: crypto.randomUUID(), version: current.version, reason: '取消服务' }, buyer)).status, 409)
+  s.setTask('failed', true); current = (await (await s.query(order.id, buyer)).json()).order
   assert.equal((await s.call(`/api/orders/${order.id}/refunds`, { key: crypto.randomUUID(), version: current.version, reason: '取消服务' }, buyer)).status, 201)
   assert.equal((await s.submit(order.id, buyer)).status, 409)
 })
@@ -1469,10 +1472,14 @@ test('background refund reconciliation only follows initiated refunds and recove
 
 test('confirmed supplier rejection releases this refund hold and preserves a completed task observed while frozen', async t => {
   const s = setup(t); const buyer = await s.buyer(); const order = await s.create(buyer); await s.query(order.id,buyer); s.setPayment('paid'); await s.query(order.id,buyer); await s.submit(order.id,buyer)
+  // Refunds start only once fulfillment has a definitive outcome.
+  s.setTask('failed'); await s.query(order.id,buyer)
   const admin = await s.login(); const refund = await approveRefund(s,order.id,buyer,admin,13900)
   assert.equal((await s.call('/api/admin/refunds/'+refund,{ action: 'execute-refund', version: 1, note: '执行退款' },admin)).status,409)
-  s.setTask('succeeded'); await s.query(order.id,buyer)
-  assert.equal((await getOrder(s.env,order.id)).status,'processing')
+  s.setTask('succeeded')
+  s.override(path => path.startsWith('/v1/redemptions/') ? Response.json({ data: { ...s.redemption(), progress_version: 1 } }) : undefined)
+  await s.query(order.id,buyer)
+  assert.equal((await getOrder(s.env,order.id)).status,'failed')
   s.setRefund('rejected'); assert.equal((await reconcileRechargeRefunds(s.env)).completed,1)
   assert.equal(s.db.prepare('SELECT status FROM refund_cases').get()!.status,'rejected')
   assert.equal((await getOrder(s.env,order.id)).refund_hold,0)
@@ -2083,4 +2090,107 @@ test('independently successful reads acknowledge the same notification without r
   const row = s.db.prepare('SELECT notify_version,checked_notify_version FROM recharge_orders').get()!
   assert.equal(row.notify_version, 1); assert.equal(row.checked_notify_version, 1)
   assert.equal(s.db.prepare('SELECT status FROM orders').get()!.status, 'success')
+})
+
+test('security fix: active recharge dispatch excludes a racing refund request', async t => {
+ const s=setup(t), buyer=await s.buyer(), order=await s.create(buyer)
+ await s.query(order.id,buyer); s.setPayment('paid'); await s.query(order.id,buyer)
+ const original=s.env.INTEREST_DB.batch.bind(s.env.INTEREST_DB)
+ let triggered=false, refundStatus=0
+ s.env.INTEREST_DB.batch=async statements=>{
+  const result=await original(statements)
+  if (!triggered && s.db.prepare('SELECT 1 FROM recharge_redemptions WHERE order_id=?').get(order.id)) {
+   triggered=true
+   const row=s.db.prepare('SELECT version FROM orders WHERE id=?').get(order.id)!
+   const response=await s.call(`/api/orders/${order.id}/refunds`,{key:crypto.randomUUID(),version:row.version,reason:'取消服务'},buyer)
+   refundStatus=response.status
+  }
+  return result
+ }
+ const response=await s.submit(order.id,buyer)
+ assert.equal(response.status,200,await response.clone().text())
+ assert.equal(refundStatus,409)
+ assert.equal(s.db.prepare('SELECT refund_hold FROM orders WHERE id=?').get(order.id)!.refund_hold,0)
+ assert.equal(s.calls.filter(c=>c.path==='/v1/redemptions').length,1)
+})
+
+
+test('security fix: anonymous empty requests cannot lock out a valid administrator', async t=>{
+ const s=setup(t)
+ for(let ip=1;ip<=4;ip++)for(let i=0;i<8;i++){
+  const r=await worker.fetch(new Request('https://shop.example.invalid/api/admin/login',{method:'POST',headers:{Origin:'https://shop.example.invalid','Content-Type':'application/json','CF-Connecting-IP':'192.0.2.'+ip},body:'{}'}),s.env)
+  assert.ok([401,429].includes(r.status))
+ }
+ const valid={username:'tester',code:await totpCode(s.env.ADMIN_TOTP_SECRET!),...await seedAdminEmailCode(s.db,s.env)}
+ const r=await worker.fetch(new Request('https://shop.example.invalid/api/admin/login',{method:'POST',headers:{Origin:'https://shop.example.invalid','Content-Type':'application/json','CF-Connecting-IP':'198.51.100.1'},body:JSON.stringify(valid)}),s.env)
+ assert.equal(r.status,200)
+})
+
+test('security fix: unresolved recharge blocks refunds after lease expiry, failed recharge allows refunds', async t => {
+  const s = setup(t), buyer = await s.buyer(), order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)
+  const key = crypto.randomUUID()
+  s.override(path => path === '/v1/redemptions' ? new Response('temporary', { status: 503 }) : undefined)
+  assert.equal((await s.submit(order.id, buyer, key)).status, 503)
+  assert.equal(s.db.prepare('SELECT status FROM recharge_redemptions').get()!.status, 'unknown')
+  const refund = async () => s.call(`/api/orders/${order.id}/refunds`, { key: crypto.randomUUID(), version: (await getOrder(s.env, order.id)).version, reason: '申请退款' }, buyer)
+  assert.equal((await refund()).status, 409)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM refund_cases').get()!.n, 0)
+  s.override(() => undefined)
+  assert.equal((await s.submit(order.id, buyer, key)).status, 200)
+  assert.equal((await refund()).status, 409)
+  s.setTask('failed', true); await s.query(order.id, buyer)
+  assert.equal((await refund()).status, 201)
+  const before = s.calls.filter(c => c.path === '/v1/redemptions').length
+  assert.equal((await s.submit(order.id, buyer)).status, 409)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, before)
+})
+
+test('security fix: refund winning before recharge prevents dispatch', async t => {
+  const s = setup(t), buyer = await s.buyer(), order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)
+  const refund = await s.call(`/api/orders/${order.id}/refunds`, { key: crypto.randomUUID(), version: (await getOrder(s.env, order.id)).version, reason: '取消充值' }, buyer)
+  assert.equal(refund.status, 201)
+  assert.equal((await s.submit(order.id, buyer)).status, 409)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 0)
+})
+
+test('security fix: valid email challenges still share a distributed TOTP attempt budget', async t => {
+  const s = setup(t)
+  const wrong = String((Number(await totpCode(s.env.ADMIN_TOTP_SECRET!)) + 1) % 1000000).padStart(6, '0')
+  for (let i = 0; i < 31; i++) {
+    const data = { username: 'tester', code: wrong, ...await seedAdminEmailCode(s.db, s.env) }
+    const r = await worker.fetch(new Request('https://shop.example.invalid/api/admin/login', { method: 'POST', headers: { Origin: 'https://shop.example.invalid', 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.' + (i + 1) }, body: JSON.stringify(data) }), s.env)
+    assert.equal(r.status, i < 30 ? 401 : 429)
+  }
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM admin_sessions').get()!.n, 0)
+})
+
+test('security fix: legacy refund hold cannot start an upstream refund while recharge is unresolved', async t => {
+  const s = setup(t), buyer = await s.buyer(), order = await s.create(buyer), admin = await s.login()
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)
+  const refund = await approveRefund(s, order.id, buyer, admin, 13900)
+  // Simulate the persisted state created by the pre-fix race: an approved refund
+  // and an already-dispatched recharge. New customer requests cannot create it.
+  s.db.prepare('UPDATE orders SET refund_hold=0 WHERE id=?').run(order.id)
+  assert.equal((await s.submit(order.id, buyer)).status, 200)
+  s.db.prepare('UPDATE orders SET refund_hold=1 WHERE id=?').run(order.id)
+  const r = await s.call('/api/admin/refunds/' + refund, { action: 'execute-refund', version: 1, note: '核对后退款' }, admin)
+  assert.equal(r.status, 409)
+  assert.equal(s.calls.filter(c => c.path.endsWith('/refunds')).length, 0)
+  s.setTask('failed'); await s.query(order.id, buyer)
+  // An existing held order can still query its fulfillment and then submit refund.
+  assert.equal((await s.call('/api/admin/refunds/' + refund, { action: 'execute-refund', version: 1, note: '核对后退款' }, admin)).status, 409)
+  assert.equal(s.calls.filter(c => c.path.endsWith('/refunds')).length, 1)
+})
+
+test('security fix: active recharge lease blocks refund before an attempt exists, expired lease alone does not', async t => {
+  const s = setup(t), buyer = await s.buyer(), order = await s.create(buyer)
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)
+  s.db.prepare('UPDATE recharge_orders SET lease_token=?,lease_until=? WHERE order_id=?').run('in-flight', Date.now() + 45000, order.id)
+  const refund = () => s.call(`/api/orders/${order.id}/refunds`, { key: crypto.randomUUID(), version: s.db.prepare('SELECT version FROM orders WHERE id=?').get(order.id)!.version, reason: '申请退款' }, buyer)
+  assert.equal((await refund()).status, 409)
+  assert.equal(s.db.prepare('SELECT refund_hold FROM orders WHERE id=?').get(order.id)!.refund_hold, 0)
+  s.db.prepare('UPDATE recharge_orders SET lease_until=? WHERE order_id=?').run(Date.now() - 1, order.id)
+  assert.equal((await refund()).status, 201)
 })

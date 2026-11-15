@@ -71,13 +71,14 @@ export async function authRoute(request: Request, env: Env, path: string) {
     const accountKey = await hash('totp-account:' + env.ADMIN_USERNAME)
     const now = Date.now()
     await reserveAttempt(env, key, now, 8)
-    // A shared account limit also bounds distributed guesses of the six-digit code.
-    await reserveAttempt(env, accountKey, now, 30)
     const db = env.INTEREST_DB
     if (typeof data.challenge !== 'string' || !/^[a-f0-9-]{36}$/.test(data.challenge) || typeof data.emailCode !== 'string' || !/^\d{6}$/.test(data.emailCode)) throw invalidLogin()
     const version = await credentialVersion(env)
     const challenge = await db.prepare('UPDATE admin_email_login_codes SET attempts=attempts+1 WHERE id=? AND credential_version=? AND ready=1 AND consumed_by IS NULL AND attempts<5 AND expires_at>? RETURNING code_hash').bind(data.challenge, version, now).first<{code_hash:string}>()
     if (!challenge || data.username !== env.ADMIN_USERNAME || challenge.code_hash !== await codeHash(env, version, data.challenge, data.emailCode)) throw invalidLogin()
+    // Only a verified email challenge can spend the shared TOTP budget.
+    // Anonymous requests still consume the IP budget and cannot lock the account.
+    await reserveAttempt(env, accountKey, now, 30)
     const step = await verifyTotp(env.ADMIN_TOTP_SECRET!, data.code, now)
     if (step === null) throw invalidLogin()
     const token = randomToken(), tokenHash = await hash(token)

@@ -23,6 +23,14 @@ export async function serviceCatalog(env: Env) {
     FROM catalog_plans c JOIN service_products p ON p.id=c.product_id LEFT JOIN muse_plans m ON m.plan=c.id WHERE c.delivery_type<>'legacy' ORDER BY p.category,p.name,c.rowid`).all()).results
 }
 
+// Keep a few simultaneous checkouts available, without letting one buyer reserve
+// an entire SKU. Email supplements the browser identity; neither is a verified
+// identity by itself. Count unresolved payment reservations even after expiry.
+const MAX_UNPAID_RESERVATIONS = 3
+const pendingReservations = `SELECT COUNT(*) total FROM orders o JOIN fulfillment_tasks t ON t.order_id=o.id
+  WHERE o.plan=? AND (o.owner_hash=? OR o.customer_email=?) AND o.payment_status='unpaid' AND t.state='reserved'`
+const reservationLimitMessage = '该商品已有 3 笔待付款订单，请到“我的订单”继续支付，或等待未付款订单关闭后重试。'
+
 /** Order + immutable delivery snapshot + reservation commit in one transaction. */
 export async function createServiceOrder(env: Env, ownerHash: string, email: string, data: Record<string, unknown>) {
   if (data.partner) throw new ApiError('该商品暂仅支持平台直营购买。', 409)
@@ -33,13 +41,16 @@ export async function createServiceOrder(env: Env, ownerHash: string, email: str
   const mapping = await museMapping(env, plan.id)
   if (!await serviceCheckoutEnabled(env, Boolean(mapping && isMuseCode(mapping.product_code)))) throw new ApiError('该商品的支付服务暂未配置，请联系商家。', 409)
   if (data.expectedPrice !== plan.price_cents) throw new ApiError('价格已更新，请刷新后重新确认。', 409)
+  const pending = await env.INTEREST_DB.prepare(pendingReservations).bind(plan.id, ownerHash, email).first<{ total: number }>()
+  if (pending && pending.total >= MAX_UNPAID_RESERVATIONS) throw new ApiError(reservationLimitMessage, 409)
   const cost = mapping ? await prepareMuse(env, mapping, plan.price_cents) : 0
   const now = Date.now(), id = 'YMX-' + crypto.randomUUID().replaceAll('-', '').toUpperCase(), event = crypto.randomUUID()
   const statements: Statement[] = [
     env.INTEREST_DB.prepare(`INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,mode,status,created_at,updated_at,last_event_id,customer_email,purchase_note)
       SELECT ?,?,?,c.id,c.name,c.price_cents,'live','pending',?,?,?,?,c.purchase_note FROM catalog_plans c
       WHERE c.id=? AND c.version=? AND c.enabled=1 AND c.delisted=0 AND EXISTS(SELECT 1 FROM service_products p WHERE p.id=c.product_id AND p.hidden=0) AND (c.delivery_type='manual' OR EXISTS(SELECT 1 FROM cdk_stock s WHERE s.plan=c.id AND s.state='available'))
-      ON CONFLICT(owner_hash,idempotency_key) DO NOTHING`).bind(id, ownerHash, String(data.key), now, now, event, email, plan.id, plan.version),
+      AND (${pendingReservations}) < ${MAX_UNPAID_RESERVATIONS}
+      ON CONFLICT(owner_hash,idempotency_key) DO NOTHING`).bind(id, ownerHash, String(data.key), now, now, event, email, plan.id, plan.version, plan.id, ownerHash, email),
   ]
   // Bind the first still-available unit while the order transaction owns the write lock.
   statements.push(env.INTEREST_DB.prepare(`INSERT INTO fulfillment_tasks(order_id,kind,state,product_id,product_name,instructions,stock_id,expires_at,updated_at)
@@ -52,7 +63,11 @@ export async function createServiceOrder(env: Env, ownerHash: string, email: str
   if (mapping) statements.push(museSnapshot(env, id, mapping, cost))
   await env.INTEREST_DB.batch(statements)
   const created = await env.INTEREST_DB.prepare('SELECT * FROM orders WHERE owner_hash=? AND idempotency_key=?').bind(ownerHash, String(data.key)).first<Order>()
-  if (!created) throw new ApiError('库存不足或商品已更新，请刷新后重试。', 409)
+  if (!created) {
+    const pending = await env.INTEREST_DB.prepare(pendingReservations).bind(plan.id, ownerHash, email).first<{ total: number }>()
+    if (pending && pending.total >= MAX_UNPAID_RESERVATIONS) throw new ApiError(reservationLimitMessage, 409)
+    throw new ApiError('库存不足或商品已更新，请刷新后重试。', 409)
+  }
   if (created.plan !== plan.id || created.customer_email !== email || created.partner_id) throw new ApiError('请求编号已被其他订单使用。', 409)
   return created
 }

@@ -434,6 +434,12 @@ export async function refundThroughRecharge(env: Env, order: Order, caseId: stri
   return locked(env, row, async fresh => {
     const db = env.INTEREST_DB
     let record = await db.prepare('SELECT * FROM recharge_refunds WHERE case_id=?').bind(caseId).first<{ create_body: string; remote_id: string | null; status: string }>()
+    // Also protect old refund holds created before the dispatch/refund gate was
+    // atomic. Existing upstream refunds remain queryable for reconciliation.
+    if (!record?.remote_id) {
+      const attempt = await latestAttempt(env, order.id)
+      if (attempt && !terminal(attempt.status)) throw new ApiError('充值结果尚未确认，请先刷新原任务，确认完成或失败后再退款。', 409)
+    }
     if (!record?.remote_id && fresh.refunded_cents > order.refunded_cents) throw new ApiError('平台原订单已确认退款，请使用“核对上游已退款”完成记账。', 409)
     if (!record) {
       const raw = JSON.stringify({ merchant_refund_no: caseId, type: amount === order.price_cents - order.refunded_cents ? 'full' : 'partial', amount: amountText(amount), reason: '本站售后审核通过' })
