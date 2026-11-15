@@ -161,3 +161,22 @@ test('active dispatch serializes concurrent calls and refuses a racing refund', 
   assert.equal(s.db.prepare('SELECT state FROM xgift_purchases').get()!.state, 'unknown')
   assert.notEqual(s.db.prepare('SELECT status FROM orders').get()!.status, 'success')
 })
+
+test('restricting partner products preserves payment, delivery and earnings of an existing excluded order',async t=>{
+  const s=await fixture(t),agent=await s.agent('legacy X partner')
+  s.db.prepare("INSERT INTO partner_prices(partner_id,plan,cost_cents,price_cents) VALUES (?,'x-premium-6m',4000,9900)").run(agent.id)
+  s.db.exec("UPDATE catalog_plans SET partner_enabled=1 WHERE id='x-premium-6m'")
+  const payload={...await s.draft('x-premium-6m'),expectedPrice:9900,partner:agent.id.slice(0,6)}
+  const response=await s.request('/api/orders',payload,s.buyer)
+  assert.equal(response.status,201,await response.clone().text());const order=(await response.json()).order
+  s.env.PARTNER_PRODUCT_IDS='chatgpt,codex-credits'
+  assert.equal((await s.request('/api/orders',{...payload,key:crypto.randomUUID()},s.buyer)).status,409)
+  assert.equal((await s.request('/api/orders',payload,s.buyer)).status,200)
+  await s.pay(order.id);s.state.success=true;s.db.exec('UPDATE xgift_purchases SET next_check=0')
+  await fulfillXGift(s.env,order.id)
+  const saved=s.db.prepare('SELECT status,price_cents,cost_cents FROM orders WHERE id=?').get(order.id)!
+  assert.equal(saved.status,'success');assert.equal(saved.price_cents,9900);assert.equal(saved.cost_cents,4000)
+  const dashboard=await (await s.request('/api/partner/dashboard',undefined,agent.cookie)).json()
+  assert.equal(dashboard.plans.some((p:{id:string})=>p.id==='x-premium-6m'),false)
+  assert.equal(dashboard.stats.available,5900)
+})

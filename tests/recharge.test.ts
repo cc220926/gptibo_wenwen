@@ -129,6 +129,7 @@ test('separate Codex mapping preserves subscription SKUs and rejects point-tier 
 for (const [plan, points, price, supply] of [['codex-credits-250', 250, 9900, '78.82'], ['codex-credits-500', 500, 19900, '156.33']] as const) {
   test(`Codex ${points} points freeze the correct SKU and retail price, require verified payment and finish only after recharge success`, async t => {
     const s = setup(t), buyer = await s.buyer()
+    s.env.PARTNER_PRODUCT_IDS = 'chatgpt,codex-credits'
     const product = `chatgpt_codex_${points}_cdk`
     s.env.RECHARGE_CODEX_PRODUCT_MAP = JSON.stringify({ [plan]: product })
     Object.assign(s.products[0], { product_code: product, supply_price: supply })
@@ -2584,6 +2585,7 @@ test('unified supply: payment and fulfillment after repricing preserve original 
 for (const [plan, points, price, cost, supply] of [['codex-credits-250', 250, 9900, 8200, '78.82'], ['codex-credits-500', 500, 19900, 16000, '156.33']] as const) {
   test(`partner Codex ${points}: catalog, verified payment, fulfillment and commission use the right tier`, async t => {
     const s = setup(t), partner = s.partner(), buyer = await s.buyer(), admin = await s.login()
+    s.env.PARTNER_PRODUCT_IDS = 'chatgpt,codex-credits'
     const product = `chatgpt_codex_${points}_cdk`
     s.env.RECHARGE_CODEX_PRODUCT_MAP = JSON.stringify({ [plan]: product })
     Object.assign(s.products[0], { product_code: product, supply_price: supply })
@@ -2615,6 +2617,7 @@ for (const [plan, points, price, cost, supply] of [['codex-credits-250', 250, 99
 for (const paidBefore of [false,true]) {
  test(`partner sync: disabling a plan and agent sales (${paidBefore?'paid':'pending'}) preserves frozen payment, fulfillment and commission`,async t=>{
   const s=setup(t),partner=s.partner(),buyer=await s.buyer(),admin=await s.login()
+  s.env.PARTNER_PRODUCT_IDS = 'chatgpt,codex-credits'
   const check=async(r:Response,status=200)=>{assert.equal(r.status,status,await r.clone().text());return r.json()}
   const payload={plan:'plus',partner:'partner-test',expectedPrice:15900,email:'buyer@example.test',key:crypto.randomUUID()}
   const order=(await check(await s.call('/api/orders',payload,buyer),201)).order

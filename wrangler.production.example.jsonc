@@ -9,6 +9,7 @@
   "preview_urls": false,
   "main": "worker/index.ts",
   "vars": {
+    "PARTNER_PRODUCT_IDS": "chatgpt,codex-credits",
     "ORDER_TESTING_ENABLED": "false",
     "TURNSTILE_ENABLED": "false",
     "TURNSTILE_SITE_KEY": "",

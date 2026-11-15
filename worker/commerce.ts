@@ -38,6 +38,7 @@ import { opsNotificationsAdmin } from './ops-notifications.ts'
 import { adminGmailOrder, confirmGmailNotPurchased, fulfillGmail, gmailCheckoutEnabled, gmailProductsRoute, gmailSnapshot, gmailSnapshotStatement } from './account_supplier/service.ts'
 import { platformProductHidden, platformProductVisibility, platformProductVisibilityRoute } from './platform-product-visibility.ts'
 import { backfillPartnerPrices } from './partner-price-backfill.ts'
+import { partnerProductAllowed, partnerProductIds } from './partner-product-policy.ts'
 import { platformMarketingMetric, platformMarketingMetricRoute } from './platform-marketing-metric.ts'
 
 type Plan = { delivery_instructions: string; partner_enabled: number; id: string; product_id: string; name: string; price_cents: number; enabled: number; renewal_only: number; version: number }
@@ -190,7 +191,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
       if (emailDelivery && !live) throw new ApiError('邮件交付商品暂未开放购买。', 409)
       if (env.ORDER_TESTING_ENABLED !== 'true' && !live) throw new ApiError('该服务暂未开放购买，请稍后再来。', 409)
       const plan = await env.INTEREST_DB.prepare('SELECT * FROM catalog_plans WHERE id=? AND enabled=1').bind(data.plan).first<Plan>()
-      if (partner && plan && !plan.partner_enabled) throw new ApiError('该商品暂未开放代理销售。', 409)
+      if (partner && plan && (!plan.partner_enabled || !partnerProductAllowed(env, plan.product_id))) throw new ApiError('该商品暂未开放代理销售。', 409)
       if (!plan) throw new ApiError('该套餐已暂停销售，请选择其他套餐。', 409)
       if (partner && await env.INTEREST_DB.prepare('SELECT 1 FROM partner_product_order p,json_each(p.hidden_product_ids) h WHERE p.partner_id=? AND h.value=?').bind(partner.id, plan.product_id).first()) throw new ApiError('该商品已被商店下架，请选择其他商品。', 409)
       if (await platformProductHidden(env, plan.product_id)) throw new ApiError('该商品已下架，请选择其他商品。', 409)
@@ -204,8 +205,8 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
       const xgift = isXGiftPlan(plan.id) ? await xgiftSnapshot(env, ownerHash, data) : null
       const id = 'YMX-' + crypto.randomUUID().replaceAll('-', '').toUpperCase(); const eventId = crypto.randomUUID(); const now = Date.now()
       await env.INTEREST_DB.batch([
-        partner && offer ? env.INTEREST_DB.prepare("INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,status,created_at,updated_at,last_event_id,customer_email,partner_id,partner_name,cost_cents) SELECT ?,?,?,c.id,c.name,pp.price_cents,'pending',?,?,?,?,p.id,p.name,pp.cost_cents FROM catalog_plans c JOIN partner_prices pp ON pp.plan=c.id JOIN partners p ON p.id=pp.partner_id WHERE c.id=? AND c.enabled=1 AND c.version=? AND pp.version=? AND p.id=? AND p.active=1 AND p.version=? AND c.partner_enabled=1 AND NOT EXISTS(SELECT 1 FROM platform_product_visibility v,json_each(v.hidden_product_ids) h WHERE v.id=1 AND h.value=c.product_id) AND NOT EXISTS(SELECT 1 FROM partner_product_order po,json_each(po.hidden_product_ids) h WHERE po.partner_id=p.id AND h.value=c.product_id) ON CONFLICT(owner_hash,idempotency_key) DO NOTHING")
-          .bind(id, ownerHash, data.key, now, now, eventId, email, plan.id, plan.version, offer.version, partner.id, partner.version)
+        partner && offer ? env.INTEREST_DB.prepare("INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,status,created_at,updated_at,last_event_id,customer_email,partner_id,partner_name,cost_cents) SELECT ?,?,?,c.id,c.name,pp.price_cents,'pending',?,?,?,?,p.id,p.name,pp.cost_cents FROM catalog_plans c JOIN partner_prices pp ON pp.plan=c.id JOIN partners p ON p.id=pp.partner_id WHERE c.id=? AND c.enabled=1 AND c.version=? AND pp.version=? AND p.id=? AND p.active=1 AND p.version=? AND c.partner_enabled=1 AND c.product_id IN (SELECT value FROM json_each(?)) AND NOT EXISTS(SELECT 1 FROM platform_product_visibility v,json_each(v.hidden_product_ids) h WHERE v.id=1 AND h.value=c.product_id) AND NOT EXISTS(SELECT 1 FROM partner_product_order po,json_each(po.hidden_product_ids) h WHERE po.partner_id=p.id AND h.value=c.product_id) ON CONFLICT(owner_hash,idempotency_key) DO NOTHING")
+          .bind(id, ownerHash, data.key, now, now, eventId, email, plan.id, plan.version, offer.version, partner.id, partner.version, JSON.stringify(partnerProductIds(env)))
         : env.INTEREST_DB.prepare("INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,status,created_at,updated_at,last_event_id,customer_email) SELECT ?,?,?,c.id,c.name,c.price_cents,'pending',?,?,?,? FROM catalog_plans c WHERE c.id=? AND c.enabled=1 AND c.version=? AND NOT EXISTS(SELECT 1 FROM platform_product_visibility v,json_each(v.hidden_product_ids) h WHERE v.id=1 AND h.value=c.product_id) ON CONFLICT(owner_hash,idempotency_key) DO NOTHING")
           .bind(id, ownerHash, data.key, now, now, eventId, email, plan.id, plan.version),
         env.INTEREST_DB.prepare('UPDATE orders SET purchase_note=(SELECT purchase_note FROM catalog_plans WHERE id=orders.plan) WHERE id=?').bind(id),
