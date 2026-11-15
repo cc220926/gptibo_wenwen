@@ -1,3 +1,4 @@
+import { platformProductVisibility } from './platform-product-visibility.ts'
 import { handlePayout } from './payout-transfer.ts'
 import { checkoutEnabled as supplierCheckoutEnabled } from './recharge/client.ts'
 import { eligibleSql, profitSql, MIN_PAYOUT_CENTS, PAYOUT_COOLDOWN_MS } from './finance.ts'
@@ -55,6 +56,8 @@ async function verifySupplierPayout(env: Env, partnerId: string, payoutId?: stri
 export async function partnerDashboard(env: Env, p: Partner) {
   await settleDue(env, p.id)
   let plans = (await env.INTEREST_DB.prepare('SELECT c.id,c.product_id,c.name,CASE WHEN c.partner_enabled=1 THEN c.enabled ELSE 0 END enabled,c.renewal_only,pp.cost_cents,pp.price_cents,pp.version FROM catalog_plans c JOIN partner_prices pp ON pp.plan=c.id WHERE pp.partner_id=? ORDER BY c.rowid').bind(p.id).all<{ id: string; product_id: string; name: string; enabled: number; renewal_only: number; cost_cents: number; price_cents: number; version: number }>()).results
+  const visibility = await platformProductVisibility(env)
+  plans = plans.filter(plan => !visibility.hiddenProductIds.some(id => id === plan.product_id))
   if (supplierCheckoutEnabled(env)) plans = await supplierCatalog(env, plans, p.id)
   const stats = await env.INTEREST_DB.prepare(`SELECT COUNT(*) total, COALESCE(SUM(CASE WHEN mode='demo' AND status='success' THEN ${profit} ELSE 0 END),0) demo_profit, COALESCE(SUM(CASE WHEN ${eligible} AND payout_id IS NULL THEN ${profit} ELSE 0 END),0) available FROM orders WHERE partner_id=?`).bind(p.id).first<{total:number;demo_profit:number;available:number}>()
   const debts = await env.INTEREST_DB.prepare('SELECT COALESCE(SUM(amount_cents),0) amount FROM partner_debits WHERE partner_id=? AND payout_id IS NULL').bind(p.id).first<{amount:number}>()

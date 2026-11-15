@@ -11,7 +11,7 @@ export const STOREFRONT_PRODUCTS = [
 ] as const
 
 export type StorefrontProductId = typeof STOREFRONT_PRODUCTS[number]['id']
-export type ProductOrderSettings = { productIds: StorefrontProductId[]; version: number; hiddenProductIds?: StorefrontProductId[] }
+export type ProductOrderSettings = { productIds: StorefrontProductId[]; version: number; hiddenProductIds?: StorefrontProductId[]; platformHiddenProductIds?: StorefrontProductId[] }
 export const DEFAULT_PRODUCT_ORDER = STOREFRONT_PRODUCTS.map(product => product.id)
 
 // Keep saved positions when products are added or retired.

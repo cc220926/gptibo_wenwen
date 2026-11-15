@@ -2580,3 +2580,34 @@ test('unified supply: payment and fulfillment after repricing preserve original 
   assert.equal((await check(await s.call('/api/partner/dashboard', undefined, partner))).totals.paid, 4900)
   assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 1)
 })
+
+for (const [plan, points, price, cost, supply] of [['codex-credits-250', 250, 9900, 8200, '78.82'], ['codex-credits-500', 500, 19900, 16000, '156.33']] as const) {
+  test(`partner Codex ${points}: catalog, verified payment, fulfillment and commission use the right tier`, async t => {
+    const s = setup(t), partner = s.partner(), buyer = await s.buyer(), admin = await s.login()
+    const product = `chatgpt_codex_${points}_cdk`
+    s.env.RECHARGE_CODEX_PRODUCT_MAP = JSON.stringify({ [plan]: product })
+    Object.assign(s.products[0], { product_code: product, supply_price: supply })
+    s.db.prepare('INSERT INTO partner_prices(partner_id,plan,cost_cents,price_cents) VALUES (\'partner-test\',?,?,?)').run(plan,cost,price)
+    const check = async (r: Response, status = 200) => { assert.equal(r.status,status,await r.clone().text());return r.json() }
+    const catalog = await check(await s.call('/api/catalog?partner=partner-test'))
+    const offer = catalog.plans.find((p: { id: string })=>p.id===plan)
+    assert.equal(offer.enabled,1);assert.equal(offer.price_cents,price);assert.equal('cost_cents' in offer,false)
+    const payload = { plan,partner:'partner-test',expectedPrice:price,email:'buyer@example.test',key:crypto.randomUUID() }
+    const order = (await check(await s.call('/api/orders',payload,buyer),201)).order
+    assert.equal(s.db.prepare('SELECT cost_cents FROM orders WHERE id=?').get(order.id)!.cost_cents,cost)
+    const frozen = JSON.parse(s.db.prepare('SELECT create_body FROM recharge_orders WHERE order_id=?').get(order.id)!.create_body as string)
+    assert.equal(frozen.product_code,product);assert.equal(frozen.delivery_mode,'auto_recharge')
+    assert.equal((await s.submit(order.id,buyer)).status,409)
+    await check(await s.query(order.id,buyer));s.setPayment('paid');await check(await s.query(order.id,buyer))
+    // Platform delisting must stop new sales without stranding an already paid order.
+    await check(await s.call('/api/admin/product-visibility',{hiddenProductIds:['codex-credits','claude','grok'],version:0,note:'本地停售测试'},admin))
+    assert.equal((await s.call('/api/orders',{...payload,key:crypto.randomUUID()},buyer)).status,409)
+    await check(await s.submit(order.id,buyer));s.setTask('succeeded')
+    assert.equal((await check(await s.query(order.id,buyer))).order.status,'success')
+    const dashboard = await check(await s.call('/api/partner/dashboard',undefined,partner))
+    assert.equal(dashboard.stats.available,price-cost)
+    assert.equal(dashboard.plans.some((p:{id:string})=>p.id===plan),false)
+    assert.equal(s.calls.filter(c=>c.path==='/v1/redemptions').length,1)
+    assert.equal((await check(await s.call('/api/orders',payload,buyer))).order.id,order.id)
+  })
+}

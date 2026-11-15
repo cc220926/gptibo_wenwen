@@ -60,6 +60,7 @@ function ProductManagementForm({ settings, plans, endpoint, disabled, readOnly, 
   const [message, setMessage] = useState('')
   const submitting = useRef(false)
   const changed = ids.join(',') !== saved.productIds.join(',') || [...hiddenIds].sort().join(',') !== [...(saved.hiddenProductIds ?? [])].sort().join(',')
+  const visibleIds = ids.filter(id => !(saved.platformHiddenProductIds ?? []).includes(id))
   const locked = disabled || readOnly || busy
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }))
 
@@ -75,7 +76,7 @@ function ProductManagementForm({ settings, plans, endpoint, disabled, readOnly, 
     if (locked || !over || active.id === over.id) return
     const from = ids.indexOf(active.id as StorefrontProductId), to = ids.indexOf(over.id as StorefrontProductId)
     if (from < 0 || to < 0) return
-    setIds(arrayMove(ids, from, to)); setError(''); setMessage(`${productFor(String(active.id)).name} 已移至第 ${to + 1} 位，保存设置后生效。`)
+    setIds(arrayMove(ids, from, to)); setError(''); setMessage(`${productFor(String(active.id)).name} 已移至第 ${visibleIds.indexOf(over.id as StorefrontProductId) + 1} 位，保存设置后生效。`)
   }
 
   async function save() {
@@ -90,7 +91,7 @@ function ProductManagementForm({ settings, plans, endpoint, disabled, readOnly, 
 
   return <section className="partner-products-panel" aria-label="商品上下架、排序与定价" aria-busy={busy}>
     <div className="partner-products-toolbar">
-      <div><strong>商店商品设置</strong><span>{ids.length} 件商品</span><span className="partner-products-dirty">{changed ? '设置未保存' : '已同步'}</span></div>
+      <div><strong>商店商品设置</strong><span>{visibleIds.length} 件商品</span><span className="partner-products-dirty">{changed ? '设置未保存' : '已同步'}</span></div>
       <div>
         <Button type="button" variant="ghost" size="sm" disabled={loading || busy || changed || Boolean(activeId)} aria-label="重新读取已保存的商品设置" onClick={onReload}><RefreshCw size={14} />重新读取</Button>
         {!readOnly && <Button type="button" variant="ghost" size="sm" disabled={locked || Boolean(activeId) || ids.join(',') === DEFAULT_PRODUCT_ORDER.join(',')} onClick={() => { setIds([...DEFAULT_PRODUCT_ORDER]); setError(''); setMessage('已恢复默认顺序，保存后生效。') }}><RotateCcw size={14} />恢复默认</Button>}
@@ -100,14 +101,14 @@ function ProductManagementForm({ settings, plans, endpoint, disabled, readOnly, 
       screenReaderInstructions: { draggable: '按空格键开始拖动，使用上下方向键调整商品顺序，再按空格键放下，按 Escape 取消。' },
       announcements: {
         onDragStart: ({ active }) => `已拾起 ${productFor(String(active.id)).name}。`,
-        onDragOver: ({ active, over }) => over ? `${productFor(String(active.id)).name} 将移至第 ${ids.indexOf(over.id as StorefrontProductId) + 1} 位。` : undefined,
-        onDragEnd: ({ active, over }) => over ? `${productFor(String(active.id)).name} 已放至第 ${ids.indexOf(over.id as StorefrontProductId) + 1} 位，请保存设置。` : '已取消拖动。',
+        onDragOver: ({ active, over }) => over ? `${productFor(String(active.id)).name} 将移至第 ${visibleIds.indexOf(over.id as StorefrontProductId) + 1} 位。` : undefined,
+        onDragEnd: ({ active, over }) => over ? `${productFor(String(active.id)).name} 已放至第 ${visibleIds.indexOf(over.id as StorefrontProductId) + 1} 位，请保存设置。` : '已取消拖动。',
         onDragCancel: () => '已取消拖动，顺序未改变。',
       },
     }}>
-      <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+      <SortableContext items={visibleIds} strategy={verticalListSortingStrategy}>
         <ol className="partner-products-list" aria-label="商店商品展示顺序">
-          {ids.map((id, index) => <SortableProduct key={id} id={id} index={index} plans={plans.filter(plan => plan.product_id === id)} locked={locked} readOnly={readOnly} hidden={hiddenIds.includes(id)} onToggle={() => { setHiddenIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]); setError(''); setMessage(`${productFor(id).name} 已选择${hiddenIds.includes(id) ? '上架' : '下架'}，保存设置后生效。`) }} onSaved={onSaved} />)}
+          {visibleIds.map((id, index) => <SortableProduct key={id} id={id} index={index} plans={plans.filter(plan => plan.product_id === id)} locked={locked} readOnly={readOnly} hidden={hiddenIds.includes(id)} onToggle={() => { setHiddenIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]); setError(''); setMessage(`${productFor(id).name} 已选择${hiddenIds.includes(id) ? '上架' : '下架'}，保存设置后生效。`) }} onSaved={onSaved} />)}
         </ol>
       </SortableContext>
       <DragOverlay dropAnimation={{ duration: 180, easing: 'ease-out' }}>{activeId && <div className="partner-product-overlay"><GripVertical size={18} /><ProductSummary product={productFor(activeId)} plans={plans.filter(plan => plan.product_id === activeId)} /></div>}</DragOverlay>
@@ -126,7 +127,7 @@ export function ProductManagement({ endpoint, plans, readOnly = false, disabled 
   const [revision, setRevision] = useState(0)
   const { data, error, loading } = useResource<ProductOrderSettings>(endpoint, revision)
   return <>
-    <div className="partner-section-heading partner-products-heading"><div><h2>商品管理</h2><p>下架不卖的商品，调整展示顺序与售价。上架仍以平台开放和库存为准。</p></div><a href={storeUrl} target="_blank" rel="noreferrer">预览商店 <ArrowUpRight size={14} /></a></div>
+    <div className="partner-section-heading partner-products-heading"><div><h2>商品管理</h2><p>总站隐藏的商品不在此展示。可调整其余商品的顺序、售价或自行下架；上架仍以平台开放和库存为准。</p></div><a href={storeUrl} target="_blank" rel="noreferrer">预览商店 <ArrowUpRight size={14} /></a></div>
     <Feedback error={error} loading={loading} data={data} shape="compact" />
     {error && <Button variant="outline" onClick={() => setRevision(value => value + 1)}>重新加载商品</Button>}
     {data && <ProductManagementForm key={endpoint + ':' + revision + ':' + data.version} settings={data} plans={plans} endpoint={endpoint} disabled={disabled || loading || Boolean(error)} loading={loading} readOnly={readOnly} onSaved={onSaved} onReload={() => setRevision(value => value + 1)} />}

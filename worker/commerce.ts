@@ -118,7 +118,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
         partner ? partnerCatalog(env, partner) : plans(env).then(plans => ({ plans })),
         supportContactsSettings(env, partner?.id),
         partner ? publicAnnouncement(env, partner.id) : platformAnnouncement(env).then(value => value.enabled ? value : null),
-        partner ? null : platformProductVisibility(env),
+        platformProductVisibility(env),
         partner ? null : platformMarketingMetric(env),
         partner ? null : platformBranding(env),
       ])
@@ -132,7 +132,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
         isXGiftPlan(plan.id) ? xgiftCheckoutEnabled(env) : plan.id === 'gmail-account' ? gmail : isDeliverySupplierPlan(plan.id) ? delivery_supplier : emailProduct(plan.id) ? email : testing || (live && Boolean(mapped[plan.id]))
       ) ? 1 : 0 }))
       if (partner && live) offers = await supplierCatalog(env, offers, partner.id)
-      const hiddenProductIds: readonly string[] = platformVisibility?.hiddenProductIds ?? ('hiddenProductIds' in catalog ? catalog.hiddenProductIds : [])
+      const hiddenProductIds: readonly string[] = [...new Set([...platformVisibility.hiddenProductIds, ...('hiddenProductIds' in catalog ? catalog.hiddenProductIds : [])])]
       return json({ ...catalog, platformBranding: branding, hiddenProductIds, marketingMetric: marketingMetric && { enabled: marketingMetric.enabled, displayText: marketingMetric.displayText, displayCount: marketingMetric.displayCount }, supportContacts: support.contacts, announcement, plans: [...offers, ...customOffers.filter(plan => !plan.hidden && !plan.delisted).map(({ muse_product_code: code, muse_max_cost_cents: _cost, ...plan }) => ({ ...plan, supply_kind: supplyKind(code), enabled: plan.enabled && (plan.delivery_provider === 'muse' ? supplyOpen(code) : customOpen) && (plan.delivery_type !== 'stock' || plan.stock_available > 0) ? 1 : 0 }))].filter(plan => !hiddenProductIds.includes(plan.product_id)), mode: live ? 'live' : 'demo', checkoutEnabled: testing || live || email || xgiftCheckoutEnabled(env) || customOpen || museOpen, testingEnabled: testing }, 200, { 'Server-Timing': `catalog;dur=${(performance.now() - started).toFixed(1)}` })
     }
     if (path === '/api/orders/client' && method === 'POST') {
@@ -192,7 +192,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
       if (partner && plan && !plan.partner_enabled) throw new ApiError('该商品暂未开放代理销售。', 409)
       if (!plan) throw new ApiError('该套餐已暂停销售，请选择其他套餐。', 409)
       if (partner && await env.INTEREST_DB.prepare('SELECT 1 FROM partner_product_order p,json_each(p.hidden_product_ids) h WHERE p.partner_id=? AND h.value=?').bind(partner.id, plan.product_id).first()) throw new ApiError('该商品已被商店下架，请选择其他商品。', 409)
-      if (!partner && await platformProductHidden(env, plan.product_id)) throw new ApiError('该商品已下架，请选择其他商品。', 409)
+      if (await platformProductHidden(env, plan.product_id)) throw new ApiError('该商品已下架，请选择其他商品。', 409)
       const offer = partner ? await env.INTEREST_DB.prepare('SELECT * FROM partner_prices WHERE partner_id=? AND plan=?').bind(partner.id, plan.id).first<{ price_cents: number; cost_cents: number; version: number }>() : null
       if (partner && !offer) throw new ApiError('该代理尚未开通此套餐。', 409)
       if (data.expectedPrice !== (offer?.price_cents ?? plan.price_cents)) throw new ApiError('套餐价格已更新，请刷新后重新确认。', 409)
@@ -203,7 +203,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
       const xgift = isXGiftPlan(plan.id) ? await xgiftSnapshot(env, ownerHash, data) : null
       const id = 'YMX-' + crypto.randomUUID().replaceAll('-', '').toUpperCase(); const eventId = crypto.randomUUID(); const now = Date.now()
       await env.INTEREST_DB.batch([
-        partner && offer ? env.INTEREST_DB.prepare("INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,status,created_at,updated_at,last_event_id,customer_email,partner_id,partner_name,cost_cents) SELECT ?,?,?,c.id,c.name,pp.price_cents,'pending',?,?,?,?,p.id,p.name,pp.cost_cents FROM catalog_plans c JOIN partner_prices pp ON pp.plan=c.id JOIN partners p ON p.id=pp.partner_id WHERE c.id=? AND c.enabled=1 AND c.version=? AND pp.version=? AND p.id=? AND p.active=1 AND p.version=? AND c.partner_enabled=1 AND NOT EXISTS(SELECT 1 FROM partner_product_order po,json_each(po.hidden_product_ids) h WHERE po.partner_id=p.id AND h.value=c.product_id) ON CONFLICT(owner_hash,idempotency_key) DO NOTHING")
+        partner && offer ? env.INTEREST_DB.prepare("INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,status,created_at,updated_at,last_event_id,customer_email,partner_id,partner_name,cost_cents) SELECT ?,?,?,c.id,c.name,pp.price_cents,'pending',?,?,?,?,p.id,p.name,pp.cost_cents FROM catalog_plans c JOIN partner_prices pp ON pp.plan=c.id JOIN partners p ON p.id=pp.partner_id WHERE c.id=? AND c.enabled=1 AND c.version=? AND pp.version=? AND p.id=? AND p.active=1 AND p.version=? AND c.partner_enabled=1 AND NOT EXISTS(SELECT 1 FROM platform_product_visibility v,json_each(v.hidden_product_ids) h WHERE v.id=1 AND h.value=c.product_id) AND NOT EXISTS(SELECT 1 FROM partner_product_order po,json_each(po.hidden_product_ids) h WHERE po.partner_id=p.id AND h.value=c.product_id) ON CONFLICT(owner_hash,idempotency_key) DO NOTHING")
           .bind(id, ownerHash, data.key, now, now, eventId, email, plan.id, plan.version, offer.version, partner.id, partner.version)
         : env.INTEREST_DB.prepare("INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,status,created_at,updated_at,last_event_id,customer_email) SELECT ?,?,?,c.id,c.name,c.price_cents,'pending',?,?,?,? FROM catalog_plans c WHERE c.id=? AND c.enabled=1 AND c.version=? AND NOT EXISTS(SELECT 1 FROM platform_product_visibility v,json_each(v.hidden_product_ids) h WHERE v.id=1 AND h.value=c.product_id) ON CONFLICT(owner_hash,idempotency_key) DO NOTHING")
           .bind(id, ownerHash, data.key, now, now, eventId, email, plan.id, plan.version),
