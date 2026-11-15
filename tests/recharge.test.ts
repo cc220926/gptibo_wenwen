@@ -2550,3 +2550,33 @@ for (const outcome of ['paid', 'not-sent'] as const) {
     t.diagnostic('对照订单、事件、商品及其他代理配置逐字段一致；没有真实外部调用，没有二次履约或主动退款。')
   })
 }
+
+test('unified supply: payment and fulfillment after repricing preserve original commission and payout', async t => {
+  const s = setup(t), partner = s.partner(), buyer = await s.buyer(), admin = await s.login()
+  const check = async (r: Response, status = 200) => { assert.equal(r.status, status, await r.clone().text()); return r.json() }
+  const payload = { email: 'buyer@example.test', plan: 'plus', partner: 'partner-test', expectedPrice: 15900, key: crypto.randomUUID() }
+  const order = (await check(await s.call('/api/orders', payload, buyer), 201)).order
+  const original = s.db.prepare('SELECT * FROM orders WHERE id=?').get(order.id)
+  const reprice = async (cost: number) => {
+    const settings = await check(await s.call('/api/admin/partners/default-prices', undefined, admin))
+    await check(await s.call('/api/admin/partners/default-prices', { version: settings.version, prices: settings.plans.map((p: { id: string; cost_cents: number; catalog_version: number }) => ({ plan: p.id, costCents: p.id === 'plus' ? cost : p.cost_cents, catalogVersion: p.catalog_version })) }, admin))
+  }
+  await reprice(11500)
+  assert.deepEqual(s.db.prepare('SELECT * FROM orders WHERE id=?').get(order.id), original)
+  await check(await s.query(order.id, buyer)); s.setPayment('paid'); await check(await s.query(order.id, buyer))
+  await check(await s.submit(order.id, buyer)); s.setTask('succeeded')
+  assert.equal((await check(await s.query(order.id, buyer))).order.status, 'success')
+  assert.equal((await check(await s.call('/api/partner/dashboard', undefined, partner))).stats.available, 4900)
+  const next = (await check(await s.call('/api/orders', { ...payload, key: crypto.randomUUID() }, buyer), 201)).order
+  assert.equal(s.db.prepare('SELECT cost_cents FROM orders WHERE id=?').get(next.id)!.cost_cents, 11500)
+  await check(await s.call('/api/partner/payouts', { recipient: 'local simulation', key: crypto.randomUUID() }, partner), 201)
+  const ps = s.db.prepare('SELECT * FROM partner_payouts').get()!, payoutPath = '/api/admin/partner-payouts/' + ps.id
+  const before = { order: s.db.prepare('SELECT * FROM orders WHERE id=?').get(order.id), payout: ps, items: s.db.prepare('SELECT * FROM partner_payout_items').all() }
+  await reprice(12000)
+  assert.deepEqual({ order: s.db.prepare('SELECT * FROM orders WHERE id=?').get(order.id), payout: s.db.prepare('SELECT * FROM partner_payouts').get(), items: s.db.prepare('SELECT * FROM partner_payout_items').all() }, before)
+  await check(await s.call(payoutPath, { action: 'approve', version: 0, note: '本地核验旧收益' }, admin))
+  const claim = await check(await s.call(payoutPath, { action: 'start-transfer', version: 1, note: '本地领取' }, admin))
+  await check(await s.call(payoutPath, { action: 'paid', version: 2, attemptId: claim.attemptId, transferConfirmed: true, reference: 'LOCAL-REPRICE-ONLY', note: '本地模拟，不实际转账' }, admin))
+  assert.equal((await check(await s.call('/api/partner/dashboard', undefined, partner))).totals.paid, 4900)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 1)
+})

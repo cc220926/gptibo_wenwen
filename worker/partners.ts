@@ -240,14 +240,7 @@ export async function adminPartnerRoutes(request: Request, env: Env, url: URL) {
         db.prepare('UPDATE partners SET name=?,email=?,active=?,version=version+1,auth_version=auth_version+?,updated_at=? WHERE id=? AND version=?').bind(name, email, Number(data.active), email !== p.email || Number(data.active) !== p.active ? 1 : 0, Date.now(), p.id, p.version),
       ])
     } else if (match[3] && method === 'POST') {
-      const cost = cents(data.costCents)
-      const row = await db.prepare('SELECT * FROM partner_prices WHERE partner_id=? AND plan=?').bind(p.id, match[3]).first<{ price_cents: number; cost_cents: number; version: number }>()
-      if (!row || data.version !== row.version) throw new ApiError('价格已更新，请刷新后重试。', 409)
-      if (cost > row.price_cents) throw new ApiError('供货价不能高于当前代理售价，请先联系代理调整售价。')
-      await db.batch([
-        db.prepare("INSERT INTO admin_audit(id,target_id,action,note,created_at) SELECT ?,partner_id,'partner-cost',?,? FROM partner_prices WHERE partner_id=? AND plan=? AND version=?").bind(id, `${env.ADMIN_USERNAME} 调整 ${planText(match[3])} 供货价：${priceText(row.cost_cents)} → ${priceText(cost)}`, Date.now(), p.id, match[3], row.version),
-        db.prepare('UPDATE partner_prices SET cost_cents=?,version=version+1 WHERE partner_id=? AND plan=? AND version=?').bind(cost, p.id, match[3], row.version),
-      ])
+      throw new ApiError('供货价已由总站统一管理，请在统一供货价中修改并同步全部代理。', 409)
     } else throw new ApiError('未找到操作。', 404)
     if (!await db.prepare('SELECT id FROM admin_audit WHERE id=?').bind(id).first()) throw new ApiError('数据已更新，请刷新后重试。', 409)
     return json({ ok: true })

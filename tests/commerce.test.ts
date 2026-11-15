@@ -13,9 +13,9 @@ import { emptyAnnouncement } from '../shared/announcements.ts'
 import { provisionPartner } from '../worker/partner-provision.ts'
 
 const credential = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
-async function setup() {
+async function setup(beforeMigration?: string) {
   const db = new DatabaseSync(':memory:')
-  for (const file of readdirSync(new URL('../migrations/', import.meta.url)).filter(f => f.endsWith('.sql')).sort()) db.exec(readFileSync(new URL('../migrations/' + file, import.meta.url), 'utf8'))
+  for (const file of readdirSync(new URL('../migrations/', import.meta.url)).filter(f => f.endsWith('.sql') && (!beforeMigration || f < beforeMigration)).sort()) db.exec(readFileSync(new URL('../migrations/' + file, import.meta.url), 'utf8'))
   const bound = new WeakMap<Statement, { sql: string; values: Value[] }>()
   const env: Env = {
     ORDER_TESTING_ENABLED: 'true', ASSETS: { fetch: async () => new Response('asset') }, ADMIN_EMAIL: 'admin@example.invalid', ADMIN_USERNAME: 'tester', ADMIN_TOTP_SECRET: credential,
@@ -610,7 +610,7 @@ test('admin notes, permitted cancellation and plan edits are audited; paused pla
   assert.equal((await s.request('/api/admin/plans/plus', planBody, admin, 'https://evil.test')).status, 403)
   assert.equal((await s.request('/api/admin/plans/plus', planBody, admin)).status, 200)
   assert.equal((await s.request('/api/admin/plans/plus', planBody, admin)).status, 409)
-  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM admin_audit').get()!.n, 1)
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM admin_audit WHERE action<>'partner-supply-unified'").get()!.n, 1)
   assert.equal((await s.request('/api/orders', { email: 'buyer@example.test', plan: 'plus', expectedPrice: 13950, key: crypto.randomUUID() }, buyer)).status, 409)
   assert.equal((await (await s.request('/api/catalog')).json()).plans[0].enabled, 0)
   assert.equal((await s.request('/api/admin/plans/plus', { ...planBody, enabled: true, version: 1 }, admin)).status, 200)
@@ -748,7 +748,7 @@ test('default supply prices require an administrator and same-origin writes, and
   assert.equal((await s.request(defaultPricesPath)).status, 401)
   assert.equal((await s.request(defaultPricesPath, undefined, partner)).status, 401)
   const settings: DefaultSupplySettings = await (await s.request(defaultPricesPath, undefined, admin)).json()
-  assert.equal(settings.version, 2); assert.equal(settings.plans.length, 12)
+  assert.equal(settings.version, 3); assert.equal(settings.plans.length, 12)
   for (const plan of settings.plans) assert.equal(plan.cost_cents, plan.id === 'pro-25x' ? 330000 : plan.id === 'gmail-account' ? 1000 : plan.price_cents)
   const payload = defaultPricesPayload(settings)
   assert.equal((await s.request(defaultPricesPath, payload, partner)).status, 401)
@@ -760,7 +760,7 @@ test('default supply prices require an administrator and same-origin writes, and
   }
 })
 
-test('saved defaults are copied into new partners, preserve existing partner and order prices, and keep initial retail above cost', async t => {
+test('unified prices update existing and new partners, preserve order snapshots and keep initial retail above cost', async t => {
   const s = await setup(); t.after(() => s.db.close()); const admin = await s.login(); mockPartnerMail(t, s)
   const existing = await seedPartner(s, admin); const buyer = await s.buyer()
   const existingOrder = await s.request('/api/orders', { email: 'buyer@example.test', plan: 'plus', expectedPrice: 13900, partner: 'corn-shop', key: crypto.randomUUID() }, buyer)
@@ -769,7 +769,7 @@ test('saved defaults are copied into new partners, preserve existing partner and
   const saved = await s.request(defaultPricesPath, defaultPricesPayload(settings), admin)
   assert.equal(saved.status, 200, await saved.clone().text())
   assert.equal((await saved.json()).version, settings.version + 1)
-  assert.equal(s.db.prepare('SELECT cost_cents FROM partner_prices WHERE partner_id=? AND plan=?').get(existing, 'plus')!.cost_cents, 10000)
+  assert.equal(s.db.prepare('SELECT cost_cents FROM partner_prices WHERE partner_id=? AND plan=?').get(existing, 'plus')!.cost_cents, 11300)
   assert.equal(s.db.prepare('SELECT cost_cents FROM orders WHERE id=?').get(orderId)!.cost_cents, 10000)
   const opened = await s.request('/api/admin/partners', { email: 'default-new@example.test' }, admin)
   assert.equal(opened.status, 201); const first = await opened.json()
@@ -779,7 +779,7 @@ test('saved defaults are copied into new partners, preserve existing partner and
   }
   const next = await (await s.request(defaultPricesPath, undefined, admin)).json()
   assert.equal((await s.request(defaultPricesPath, defaultPricesPayload(next, { ...defaultCosts, plus: 10500 }), admin)).status, 200)
-  assert.equal(s.db.prepare('SELECT cost_cents FROM partner_prices WHERE partner_id=? AND plan=?').get(first.id, 'plus')!.cost_cents, 11300)
+  assert.equal(s.db.prepare('SELECT cost_cents FROM partner_prices WHERE partner_id=? AND plan=?').get(first.id, 'plus')!.cost_cents, 10500)
   s.db.prepare('UPDATE catalog_plans SET price_cents=9900,version=version+1 WHERE id=?').run('plus')
   const later = await s.request('/api/admin/partners', { email: 'default-later@example.test' }, admin)
   assert.equal(later.status, 201, await later.clone().text())
@@ -818,13 +818,14 @@ test('invalid, incomplete and stale default price submissions cannot change any 
 })
 
 test('concurrent default saves select one complete set, and catalog races leave all defaults untouched', async t => {
-  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login()
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login(); await seedPartner(s, admin)
   const settings = await (await s.request(defaultPricesPath, undefined, admin)).json()
   const a = defaultPricesPayload(settings); const b = defaultPricesPayload(settings, { plus: 9900, 'pro-5x': 60000, 'pro-20x': 100000, 'pro-25x': 330000, 'codex-sms-once': 300 })
   const results = await Promise.all([s.request(defaultPricesPath, a, admin), s.request(defaultPricesPath, b, admin)])
   assert.deepEqual(results.map(response => response.status).sort(), [200, 409])
   const winner = results[0].status === 200 ? a : b
   for (const row of winner.prices) assert.equal(s.db.prepare('SELECT cost_cents FROM partner_default_prices WHERE plan=?').get(row.plan)!.cost_cents, row.costCents)
+  for (const price of s.db.prepare('SELECT plan,cost_cents FROM partner_prices').all()) assert.equal(price.cost_cents, winner.prices.find(p => p.plan===price.plan)!.costCents)
   const latest = await (await s.request(defaultPricesPath, undefined, admin)).json()
   const before = s.db.prepare('SELECT * FROM partner_default_prices ORDER BY plan').all()
   const batch = s.env.INTEREST_DB.batch.bind(s.env.INTEREST_DB)
@@ -838,13 +839,15 @@ test('concurrent default saves select one complete set, and catalog races leave 
 })
 
 test('a failed default price audit rolls back settings and all prices', async t => {
-  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login()
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login(); await seedPartner(s, admin)
   const settings = await (await s.request(defaultPricesPath, undefined, admin)).json()
+  const partnerBefore = s.db.prepare('SELECT * FROM partner_prices ORDER BY partner_id,plan').all()
   const before = s.db.prepare('SELECT * FROM partner_default_prices ORDER BY plan').all()
   s.db.exec("CREATE TRIGGER fail_default_audit BEFORE INSERT ON admin_audit WHEN NEW.action='partner-default-prices' BEGIN SELECT RAISE(ABORT,'private database detail'); END")
   const result = await s.request(defaultPricesPath, defaultPricesPayload(settings), admin)
   assert.equal(result.status, 503); assert.doesNotMatch(await result.text(), /private database detail/)
   assert.deepEqual(s.db.prepare('SELECT * FROM partner_default_prices ORDER BY plan').all(), before)
+  assert.deepEqual(s.db.prepare('SELECT * FROM partner_prices ORDER BY partner_id,plan').all(), partnerBefore)
   assert.equal(s.db.prepare('SELECT version FROM partner_default_price_settings WHERE id=1').get()!.version, settings.version)
 })
 
@@ -1161,7 +1164,7 @@ test('partner shops enforce prices, ownership, snapshots and idempotency without
   assert.equal((await s.request('/api/orders', { email: 'buyer@example.test', ...payload, partner: 'another-shop' }, buyer)).status, 409)
   assert.equal((await s.request('/api/orders', { email: 'buyer@example.test', ...payload, partner: undefined }, buyer)).status, 409)
   const stored = s.db.prepare('SELECT * FROM orders WHERE id=?').get(order.id)!; assert.equal(stored.partner_id, id); assert.equal(stored.cost_cents, 10000)
-  assert.equal((await s.request(`/api/admin/partners/${id}/prices/plus`, { costCents: 9500, version: 1 }, admin)).status, 200)
+  assert.equal((await s.request(`/api/admin/partners/${id}/prices/plus`, { costCents: 9500, version: 1 }, admin)).status, 409)
   assert.equal(s.db.prepare('SELECT cost_cents FROM orders WHERE id=?').get(order.id)!.cost_cents, 10000)
   const otherCookie = await mail.login('another-shop@example.test')
   assert.equal((await (await s.request('/api/partner/orders', undefined, otherCookie)).json()).total, 0)
@@ -1887,4 +1890,120 @@ test('payout safety: changed amount, items or reservations block transfer before
     assert.equal(stored.transfer_state, 'idle', mutation); assert.equal(stored.transfer_id, null, mutation); assert.equal(stored.version, 1, mutation)
     assert.equal(s.db.prepare("SELECT COUNT(*) n FROM admin_audit WHERE action='payout-transfer-start'").get()!.n, 0, mutation)
   }
+})
+
+test('unified supply: updates all partners including disabled without touching retail or historical finance', async t => {
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login()
+  const first = await seedPartner(s, admin), second = await seedPartner(s, admin, 'another-shop'), buyer = await s.buyer()
+  s.db.prepare('UPDATE partners SET active=0 WHERE id=?').run(second)
+  const r = await s.request('/api/orders', { email: 'buyer@example.test', plan: 'plus', expectedPrice: 13900, partner: 'corn-shop', key: crypto.randomUUID() }, buyer)
+  assert.equal(r.status, 201)
+  const id = (await r.json()).order.id
+  const before = s.db.prepare('SELECT * FROM orders WHERE id=?').get(id)
+  const retail = s.db.prepare('SELECT partner_id,plan,price_cents FROM partner_prices ORDER BY partner_id,plan').all()
+  const settings = await (await s.request(defaultPricesPath, undefined, admin)).json()
+  const save = await s.request(defaultPricesPath, defaultPricesPayload(settings), admin)
+  assert.equal(save.status, 200, await save.clone().text())
+  for (const partner of [first, second]) assert.equal(s.db.prepare("SELECT cost_cents FROM partner_prices WHERE partner_id=? AND plan='plus'").get(partner)!.cost_cents, 11300)
+  assert.deepEqual(s.db.prepare('SELECT partner_id,plan,price_cents FROM partner_prices ORDER BY partner_id,plan').all(), retail)
+  assert.deepEqual(s.db.prepare('SELECT * FROM orders WHERE id=?').get(id), before)
+  assert.equal((await s.request(`/api/admin/partners/${first}/prices/plus`, { costCents: 9000, version: 1 }, admin)).status, 409)
+  const next = await s.request('/api/orders', { email: 'buyer@example.test', plan: 'plus', expectedPrice: 13900, partner: 'corn-shop', key: crypto.randomUUID() }, buyer)
+  assert.equal(next.status, 201)
+  assert.equal(s.db.prepare('SELECT cost_cents FROM orders WHERE id=?').get((await next.json()).order.id)!.cost_cents, 11300)
+})
+
+test('unified supply: raising above an existing retail price rejects the entire update', async t => {
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login(), id = await seedPartner(s, admin)
+  s.db.prepare("UPDATE partner_prices SET price_cents=11000 WHERE partner_id=? AND plan='plus'").run(id)
+  const snapshot = () => ({ defaults: s.db.prepare('SELECT * FROM partner_default_prices ORDER BY plan').all(), settings: s.db.prepare('SELECT * FROM partner_default_price_settings').all(), prices: s.db.prepare('SELECT * FROM partner_prices ORDER BY partner_id,plan').all() })
+  const before = snapshot(), settings = await (await s.request(defaultPricesPath, undefined, admin)).json()
+  const response = await s.request(defaultPricesPath, defaultPricesPayload(settings), admin)
+  assert.equal(response.status, 409)
+  assert.match((await response.json()).error, /代理售价/)
+  assert.deepEqual(snapshot(), before)
+})
+
+test('unified supply: concurrent retail decrease blocks synchronization atomically', async t => {
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login(), id = await seedPartner(s, admin)
+  const settings = await (await s.request(defaultPricesPath, undefined, admin)).json()
+  const before = s.db.prepare('SELECT * FROM partner_default_prices ORDER BY plan').all()
+  const costs = s.db.prepare('SELECT partner_id,plan,cost_cents FROM partner_prices ORDER BY partner_id,plan').all()
+  const batch = s.env.INTEREST_DB.batch.bind(s.env.INTEREST_DB)
+  t.mock.method(s.env.INTEREST_DB, 'batch', async statements => {
+    s.db.prepare("UPDATE partner_prices SET price_cents=11000,version=version+1 WHERE partner_id=? AND plan='plus'").run(id)
+    return batch(statements)
+  })
+  assert.equal((await s.request(defaultPricesPath, defaultPricesPayload(settings), admin)).status, 409)
+  assert.deepEqual(s.db.prepare('SELECT * FROM partner_default_prices ORDER BY plan').all(), before)
+  assert.deepEqual(s.db.prepare('SELECT partner_id,plan,cost_cents FROM partner_prices ORDER BY partner_id,plan').all(), costs)
+  assert.equal(s.db.prepare('SELECT version FROM partner_default_price_settings').get()!.version, settings.version)
+})
+
+test('unified supply: checkout racing synchronization must retry before capturing the new cost', async t => {
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login(); await seedPartner(s, admin)
+  const mail = mockPartnerMail(t, s), partner = await mail.login(), buyer = await s.buyer()
+  const settings = await (await s.request(defaultPricesPath, undefined, admin)).json()
+  const batch = s.env.INTEREST_DB.batch.bind(s.env.INTEREST_DB); let injected = false
+  t.mock.method(s.env.INTEREST_DB, 'batch', async statements => {
+    if (!injected) {
+      injected = true
+      assert.equal((await s.request(defaultPricesPath, defaultPricesPayload(settings), admin)).status, 200)
+    }
+    return batch(statements)
+  })
+  const payload = { email: 'buyer@example.test', plan: 'plus', partner: 'corn-shop', expectedPrice: 13900, key: crypto.randomUUID() }
+  assert.equal((await s.request('/api/orders', payload, buyer)).status, 409)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM orders').get()!.n, 0)
+  assert.equal((await s.request('/api/partner/prices/plus', { priceCents: 12000, version: 0 }, partner)).status, 409)
+  const response = await s.request('/api/orders', payload, buyer); assert.equal(response.status, 201)
+  const order = s.db.prepare('SELECT * FROM orders WHERE id=?').get((await response.json()).order.id)!
+  assert.equal(order.cost_cents, 11300); assert.equal(order.price_cents, 13900)
+})
+
+test('unified supply: migration preserves retail, historical orders, payout snapshots and earnings', async t => {
+  const s = await setup('0063_'); t.after(() => s.db.close()); const admin = await s.login(), id = await seedPartner(s, admin), buyer = await s.buyer()
+  const response = await s.request('/api/orders', { email: 'buyer@example.test', plan: 'plus', expectedPrice: 13900, partner: 'corn-shop', key: crypto.randomUUID() }, buyer)
+  assert.equal(response.status, 201); const order = (await response.json()).order.id
+  s.db.prepare("UPDATE orders SET mode='live',payment_status='paid',status='success' WHERE id=?").run(order)
+  const mail = mockPartnerMail(t, s), partner = await mail.login()
+  assert.equal((await s.request('/api/partner/payouts', { recipient: 'local fixture', key: crypto.randomUUID() }, partner)).status, 201)
+  s.db.prepare("UPDATE partner_default_prices SET cost_cents=11500 WHERE plan='plus'").run()
+  const history = () => ({ orders: s.db.prepare('SELECT * FROM orders ORDER BY id').all(), payouts: s.db.prepare('SELECT * FROM partner_payouts ORDER BY id').all(), items: s.db.prepare('SELECT * FROM partner_payout_items ORDER BY payout_id,order_id').all(), debits: s.db.prepare('SELECT * FROM partner_debits ORDER BY id').all(), retail: s.db.prepare('SELECT partner_id,plan,price_cents FROM partner_prices ORDER BY partner_id,plan').all() })
+  const before = history(), beforeStats = (await (await s.request('/api/partner/dashboard', undefined, partner)).json()).totals
+  s.db.exec('BEGIN')
+  s.db.exec(readFileSync(new URL('../migrations/0063_unified_partner_supply.sql', import.meta.url), 'utf8'))
+  s.db.exec('COMMIT')
+  assert.deepEqual(history(), before)
+  assert.equal(s.db.prepare("SELECT cost_cents FROM partner_prices WHERE partner_id=? AND plan='plus'").get(id)!.cost_cents, 11500)
+  assert.deepEqual((await (await s.request('/api/partner/dashboard', undefined, partner)).json()).totals, beforeStats)
+  assert.equal(beforeStats.pending, 3900)
+})
+
+test('unified supply: incompatible legacy retail aborts migration without partial synchronization', async t => {
+  const s = await setup('0063_'); t.after(() => s.db.close()); const admin = await s.login(), id = await seedPartner(s, admin)
+  s.db.prepare("UPDATE partner_prices SET price_cents=11000 WHERE partner_id=? AND plan='plus'").run(id)
+  s.db.prepare("UPDATE partner_default_prices SET cost_cents=11500 WHERE plan='plus'").run()
+  const snapshot = () => ({ defaults: s.db.prepare('SELECT * FROM partner_default_prices ORDER BY plan').all(), settings: s.db.prepare('SELECT * FROM partner_default_price_settings').all(), prices: s.db.prepare('SELECT * FROM partner_prices ORDER BY partner_id,plan').all() })
+  const before = snapshot()
+  s.db.exec('BEGIN')
+  assert.throws(() => s.db.exec(readFileSync(new URL('../migrations/0063_unified_partner_supply.sql', import.meta.url), 'utf8')), /CHECK constraint/)
+  s.db.exec('ROLLBACK')
+  assert.deepEqual(snapshot(), before)
+})
+
+test('unified supply: large catalog stays within SQL parameter limits', async t => {
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login()
+  for (let i = 0; i < 25; i++) s.db.prepare("INSERT INTO catalog_plans(id,product_id,name,price_cents,updated_at) VALUES (?,'chatgpt',?,13900,0)").run('extra-'+i,'Extra '+i)
+  await seedPartner(s, admin)
+  const settings = await (await s.request(defaultPricesPath, undefined, admin)).json()
+  const prepare = s.env.INTEREST_DB.prepare.bind(s.env.INTEREST_DB)
+  t.mock.method(s.env.INTEREST_DB, 'prepare', sql => {
+    const statement = prepare(sql), bind = statement.bind.bind(statement)
+    statement.bind = (...values) => { assert.ok(values.length <= 100, 'D1 bound parameter limit'); return bind(...values) }
+    return statement
+  })
+  const response = await s.request(defaultPricesPath, defaultPricesPayload(settings), admin)
+  assert.equal(response.status, 200, await response.clone().text())
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_prices p JOIN partner_default_prices d ON d.plan=p.plan WHERE p.cost_cents<>d.cost_cents').get()!.n, 0)
 })
