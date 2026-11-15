@@ -72,6 +72,34 @@ test('hiding a self-owned product removes every plan from the storefront and blo
   assert.equal((await s.create()).status, 201)
 })
 
+test('delisting one spec hides only that spec, blocks its new orders and keeps existing orders', async t => {
+  const s = await setup(t)
+  const existing = await s.order()
+  const sibling = (await (await s.request('/api/admin/inventory/plans', { ...s.spec, name: '年卡' }, s.admin)).json()).id
+  const path = '/api/admin/inventory/plans/visibility'
+  const change = (delisted: boolean, version: number, cookie = s.admin) => s.request(path, { id: s.plan, delisted, version }, cookie)
+  const version = () => (s.db.prepare('SELECT version FROM catalog_plans WHERE id=?').get(s.plan) as { version: number }).version
+  assert.equal((await change(true, version(), s.buyer)).status, 401)
+  assert.equal((await s.request(path, { id: 'plus', delisted: true, version: 0 }, s.admin)).status, 400)
+  const v = version()
+  assert.equal((await change(true, v)).status, 200)
+  assert.equal((await change(false, v)).status, 409)
+  const ids = async () => (await (await s.request('/api/catalog')).json()).plans.map((plan: { id: string }) => plan.id)
+  assert.equal((await ids()).includes(s.plan), false); assert.equal((await ids()).includes(sibling), true)
+  assert.equal((await s.create()).status, 409)
+  assert.equal((await s.read(existing.id)).id, existing.id)
+  const admin = await (await s.request('/api/admin/inventory', undefined, s.admin)).json()
+  assert.equal(admin.plans.find((plan: { id: string }) => plan.id === s.plan).delisted, 1)
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM admin_audit WHERE action='service-plan-visibility'").get()!.n, 1)
+  // An order created before delisting still pays and delivers normally.
+  await s.pay(existing.id); await fulfillService(s.env, existing.id)
+  const delivered = await s.read(existing.id)
+  assert.equal(delivered.status, 'success'); assert.match(delivered.delivery.value, /^PRIVATE-CODE-[12]$/)
+  assert.equal((await change(false, version())).status, 200)
+  assert.equal((await ids()).includes(s.plan), true)
+  assert.equal((await s.create()).status, 201)
+})
+
 test('last unit is reserved atomically, duplicate requests reuse it, unpaid buyers cannot read it', async t => {
   const s = await setup(t, 'stock', ['LAST-PRIVATE-CODE'])
   const key = crypto.randomUUID()

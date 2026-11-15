@@ -54,3 +54,17 @@ Cloudflare Workers 不支持 Node 示例使用的 `redirect:error`；适配器�
 `MUSE_PAYMENT_PROVIDER=mapay` 仅覆盖新 Muse 订单，普通自营商品继续使用 `SERVICE_PAYMENT_PROVIDER`，历史订单始终按 payments 中冻结的 provider/account 核对。参见 [码支付接入](mapay-integration.md)。
 
 恢复队列只扫描当前已配置 Key 的任务，避免 10 条旧 Key 未完成意图堵塞新 Key 的已付款恢复。旧 Key 任务不迁移、不删除、不换 Key 重购；需恢复原 Key 后核对或联系供货平台处理，原不确定采购的退款冻结仍保留。
+
+## 其他 GPTibo 成品号货源（接码 / ChatGPT 成品号）
+
+2026-11-14 起，同一原生 /v1 适配器还接入两个非 Muse 的 `account_delivery` 商品：`codex-sms-once`（codex 单次接码，当时渠道价 200 分）和 `gpt-plus-account`（ChatGPT Plus 成品号-日区，当时渠道价 5500 分）。目录里的其他商品（Grok、Gemini 等）仍不可见、不可采购。允许列表写在 `worker/muse/client.ts` 的 `GPTIBO_EXTRA_PRODUCTS`。
+
+- 开关：`GPTIBO_SUPPLY_ENABLED` 按精确代码逗号分隔开放，例如 `codex-sms-once,gpt-plus-account`。不受 `MUSE_CHECKOUT_ENABLED` 影响；Muse 开关也不会开放这两个商品。移除代码只停止新采购，已提交的原单继续恢复与交付。
+- 收款：走 `SERVICE_PAYMENT_PROVIDER`（当前 ZPAY），不走 `MUSE_PAYMENT_PROVIDER`。
+- 后台：在「自有商品与库存」新建规格，交付方式选「GPTibo 原生 API 自动采购」，供货商品代码填上述代码，采购上限低于售价。下单、付款前检查渠道余额，余额不足时不能付款。
+- 交付内容按供货平台原文加密保存，订单页原样展示，同时发邮件。接码与 ChatGPT 成品号的具体字段格式在首单验收时核对，并据此补充购买说明与交付说明。
+- 旧的 `codex-sms-once` 本地演示规格（测试号码流程）不接入供货，保持关闭。
+
+### Codex 接码前台
+
+`/product/codex-sms` 保留原商品页设计，文案改为「CDK 自动交付，前往 sms.llvi.de 兑换接码」。公开目录为绑定 `codex-sms-once` 的自营规格返回 `supply_kind: "codex-sms"`（不公开供货代码与采购上限）。商品页和首页卡片读取该规格的价格与销售状态，「立即购买」走自营下单与 GPTibo 自动采购；该规格不再单独生成首页商品卡。没有绑定规格时，页面保持原「暂停售卖」。兑换站地址集中在 `src/lib/products.ts` 的 `SMS_REDEEM_HOST`。

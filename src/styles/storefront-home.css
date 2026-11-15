@@ -132,3 +132,19 @@
 }
 
 .store-intro h1,.store-intro p{overflow-wrap:anywhere}
+
+/* Codex 接码 card: a tilted SMS notice whose code settles into place. Fits any card width. */
+.store-sms-art { position:relative; height:185px; margin-top:6px; display:grid; place-items:center; transition:transform .3s cubic-bezier(.2,.8,.2,1); }
+.store-sms-card { width:min(100%, 216px); box-sizing:border-box; padding:14px 14px 16px; border-radius:16px; background:var(--card); border:1px solid var(--border); box-shadow:0 18px 34px -18px #0f1b3340, 0 4px 10px #0000000a; transform:rotate(-4deg); animation:store-sms-float 5s ease-in-out infinite; }
+.store-sms-head { display:flex; align-items:center; gap:7px; font-size:11px; }
+.store-sms-head strong { font-weight:600; letter-spacing:.06em; }
+.store-sms-head small { margin-left:auto; color:var(--muted-foreground); font-size:10px; }
+.store-sms-icon { width:22px; height:22px; display:grid; place-items:center; border-radius:7px; background:#2f6fde; color:#fff; }
+.store-sms-card p { margin:9px 0 10px; font-size:11px; color:var(--muted-foreground); }
+.store-sms-code { display:grid; grid-template-columns:repeat(6, minmax(0, 1fr)); gap:5px; }
+.store-sms-code span { aspect-ratio:3/4; display:grid; place-items:center; border-radius:7px; background:var(--panel-tint); border:1px solid var(--border); font:600 17px/1 ui-monospace, SFMono-Regular, Menlo, monospace; animation:store-sms-digit 4.8s ease-in-out infinite; }
+@keyframes store-sms-digit { 0%, 12% { opacity:.25; transform:translateY(4px); } 22%, 88% { opacity:1; transform:none; } 100% { opacity:.25; transform:translateY(4px); } }
+@keyframes store-sms-float { 0%, 100% { translate:0 0; } 50% { translate:0 -5px; } }
+@media (hover:hover) { .store-product:hover .store-sms-art { transform:translateY(-3px) scale(1.04); } }
+.store-product:focus-within .store-sms-art { transform:translateY(-3px) scale(1.04); }
+@media (prefers-reduced-motion:reduce) { .store-sms-code span,.store-sms-card { animation:none; } .store-sms-art { transition:none; } .store-product:hover .store-sms-art,.store-product:focus-within .store-sms-art { transform:none; } }

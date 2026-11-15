@@ -13,14 +13,14 @@ import { museWebhook } from '../worker/muse/webhook.ts'
 
 type Context = Parameters<Parameters<typeof test>[1]>[0]
 const content = 'private-muse@example.test----PRIVATE-PASSWORD----https://code.example.test/secret'
-async function setup(t: Context, paymentProvider = 'zpay') {
+async function setup(t: Context, paymentProvider = 'zpay', options: { productCode?: string } = {}) {
   const s = await customerFixture(); t.after(() => s.db.close())
   Object.assign(s.env, { ORDER_TESTING_ENABLED: 'false', SERVICE_CHECKOUT_ENABLED: 'true', SERVICE_PAYMENT_PROVIDER: paymentProvider,
     MAPAY_PID: '10101', MAPAY_KEY: 'private-mapay-test-secret', ZPAY_PID: '2026110800000000', ZPAY_KEY: 'fixture-payment-secret', CDK_ENCRYPTION_KEY: Buffer.alloc(32, 37).toString('base64'),
     MAIL_PUBLIC_ORIGIN: 'https://shop.example.test', RESEND_API_KEY: 'mail-test-key', RESEND_FROM: 'Store <delivery@example.test>', PAYMENT_NOTIFY_ORIGIN: 'https://shop.example.invalid',
     MUSE_KEY_ID: 'fixture-key', MUSE_API_SECRET: 'fixture-muse-secret', MUSE_CHECKOUT_ENABLED: 'true', MUSE_ACCOUNT_PAYMENT_APPROVED: 'true' })
   const sale = paymentProvider === 'mapay' ? 6900 : 3500, cost = paymentProvider === 'mapay' ? 4900 : 800
-  const productCode = paymentProvider === 'mapay' ? 'muse-account-31b' : 'muse_1b_pro'
+  const productCode = options.productCode ?? (paymentProvider === 'mapay' ? 'muse-account-31b' : 'muse_1b_pro')
   const products = [{ code: productCode, name: 'Muse 供应商品', supply_minor: cost, enabled: true, available: true, fulfillment_type: 'account_delivery' }]
   const calls: { path: string; raw: string; headers: Headers }[] = []
   let remote: Record<string, unknown> | null = null
@@ -311,4 +311,41 @@ test('Mapay verified callbacks purchase and deliver Muse once; unpaid and forged
   const current=s.db.prepare('SELECT * FROM orders WHERE id=?').get(o.id) as any
   current.refund_hold=1
   assert.equal(await refundThroughProvider(s.env,current,'fixture-refund',6900),null)
+})
+
+test('extra GPTibo SKUs (接码 / ChatGPT 成品号) open only by exact code and never by the Muse gate', async t => {
+  const s = await setup(t, 'zpay', { productCode: 'gpt-plus-account' })
+  s.products.push({ code: 'grok-us-plus-monthly', name: '未开放', supply_minor: 1, enabled: true, available: true, fulfillment_type: 'account_delivery' },
+    { code: 'codex-sms-once', name: '接码', supply_minor: 200, enabled: true, available: true, fulfillment_type: 'account_delivery' })
+  assert.deepEqual((await museProducts(s.env)).map(p => p.code), ['gpt-plus-account', 'codex-sms-once'])
+  const catalogEnabled = async () => (await (await s.request('/api/catalog')).json()).plans.find((p: { id: string }) => p.id === s.plan)?.enabled
+  // Muse switches alone do not open a non-Muse SKU.
+  assert.equal((await s.create()).status, 409); assert.equal(await catalogEnabled(), 0)
+  s.env.GPTIBO_SUPPLY_ENABLED = 'codex-sms-once'; assert.equal((await s.create()).status, 409)
+  s.env.GPTIBO_SUPPLY_ENABLED = 'codex-sms-once, gpt-plus-account'; s.env.MUSE_CHECKOUT_ENABLED = 'false'
+  assert.equal(await catalogEnabled(), 1)
+  const listed = (await (await s.request('/api/catalog')).json()).plans.find((p: { id: string }) => p.id === s.plan)
+  assert.equal(listed.supply_kind, 'gpt-account'); assert.equal(listed.muse_product_code, undefined); assert.equal(listed.muse_max_cost_cents, undefined)
+  const o = await s.order()
+  // Uses the normal service payment route, not the Muse route (whose credentials are missing here).
+  Object.assign(s.env, { MUSE_PAYMENT_PROVIDER: 'mapay', MAPAY_KEY: undefined })
+  const options = await (await s.request(`/api/orders/${o.id}/payment`, { action: 'options' }, s.buyer)).json()
+  assert.ok(options.methods.length > 0)
+  await s.pay(o.id)
+  const result = await s.read(o.id)
+  assert.equal(result.status, 'success'); assert.equal(result.delivery.value, content); assert.equal(s.posted, 1)
+  assert.equal(JSON.parse(s.calls.find(c => c.path === '/orders')!.raw).product_code, 'gpt-plus-account')
+  // Closing the SKU stops new purchases without touching delivered orders.
+  s.env.GPTIBO_SUPPLY_ENABLED = 'codex-sms-once'; assert.equal((await s.create()).status, 409)
+  assert.equal((await s.read(o.id)).delivery.value, content)
+})
+
+test('admin refuses supplier codes outside Muse and the explicit GPTibo allow-list', async t => {
+  const s = await setup(t)
+  for (const supplierCode of ['grok-us-plus-monthly', 'gpt-plus', 'codex-sms-once-x', '']) {
+    const r = await s.request('/api/admin/inventory/plans', { ...s.spec, supplierCode }, s.admin)
+    assert.equal(r.status, 400, supplierCode)
+  }
+  const ok = await s.request('/api/admin/inventory/plans', { ...s.spec, supplierCode: 'codex-sms-once', maxCostCents: 300 }, s.admin)
+  assert.equal(ok.status, 200, await ok.clone().text())
 })

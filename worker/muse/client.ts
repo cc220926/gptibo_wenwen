@@ -48,12 +48,19 @@ export async function museRequest<T>(env: Env, path: string, raw = '', idempoten
     throw new MuseError(error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name) ? 'timeout' : 'transport_error')
   }
 }
+// Muse-branded SKUs plus explicitly allowed non-Muse native account_delivery SKUs.
+// Anything else in the supplier catalogue stays invisible and unpurchasable.
+export const GPTIBO_EXTRA_PRODUCTS: readonly string[] = ['codex-sms-once', 'gpt-plus-account']
+export const isMuseCode = (code: string) => /^muse(?:[-_]|$)/i.test(code)
+export const gptiboSupplyCode = (code: string) => /^[A-Za-z0-9_.:-]{1,100}$/.test(code) && (isMuseCode(code) || GPTIBO_EXTRA_PRODUCTS.includes(code))
+/** Public, non-sensitive presentation hint for storefront pages (never the supplier code itself). */
+export const supplyKind = (code: string | null) => code === 'codex-sms-once' ? 'codex-sms' as const : code === 'gpt-plus-account' ? 'gpt-account' as const : null
 export type MuseProduct = { code: string; name: string; supply_minor: number; enabled: boolean; available: boolean; fulfillment_type: string }
 export const minor = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 10000000
 export async function museProducts(env: Env) {
   const rows = await museRequest<MuseProduct[]>(env, '/products')
   if (!Array.isArray(rows)) throw new MuseError('products_invalid')
-  const products = rows.filter(p => /^muse(?:[-_]|$)/i.test(p.code) && p.fulfillment_type === 'account_delivery')
+  const products = rows.filter(p => typeof p?.code === 'string' && gptiboSupplyCode(p.code) && p.fulfillment_type === 'account_delivery')
   if (new Set(products.map(p => p.code)).size !== products.length || products.some(p => !/^[A-Za-z0-9_.:-]{1,100}$/.test(p.code) || typeof p.name !== 'string' || !minor(p.supply_minor) || typeof p.enabled !== 'boolean' || typeof p.available !== 'boolean')) throw new MuseError('products_invalid')
   return products.map(p => ({ code: p.code, name: p.name.slice(0, 150), supply_minor: p.supply_minor, enabled: p.enabled, available: p.available, fulfillment_type: p.fulfillment_type }))
 }

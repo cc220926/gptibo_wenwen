@@ -1,4 +1,5 @@
-import { museCheckoutEnabled } from './muse/service.ts'
+import { supplyCheckoutEnabled } from './muse/service.ts'
+import { isMuseCode, supplyKind } from './muse/client.ts'
 import { platformBranding, platformAnnouncement, platformBrandingRoute, platformAnnouncementRoute } from './platform-store-settings.ts'
 import { verificationConfig, verifyOrderChallenge } from './turnstile.ts'
 import { inventoryAdmin } from './fulfillment/admin.ts'
@@ -120,13 +121,16 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
         partner ? null : platformBranding(env),
       ])
       // Storefront prices are configured retail prices, independent of supplier latency.
-      const customOffers = partner ? [] : await serviceCatalog(env) as (Plan & { stock_available: number; delivery_type: string; hidden: number; delivery_provider: string | null; muse_product_code: string | null; muse_max_cost_cents: number | null })[]
-      const customOpen = await serviceCheckoutEnabled(env), museOpen = await serviceCheckoutEnabled(env, true) && museCheckoutEnabled(env)
+      const customOffers = partner ? [] : await serviceCatalog(env) as (Plan & { stock_available: number; delivery_type: string; hidden: number; delisted: number; delivery_provider: string | null; muse_product_code: string | null; muse_max_cost_cents: number | null })[]
+      const customOpen = await serviceCheckoutEnabled(env), museRoute = await serviceCheckoutEnabled(env, true)
+      // Each supplier SKU opens on its own gate; Muse-branded SKUs also need the Muse payment route.
+      const supplyOpen = (code: string | null) => Boolean(code) && (isMuseCode(code!) ? museRoute : customOpen) && supplyCheckoutEnabled(env, code!)
+      const museOpen = customOffers.some(plan => plan.delivery_provider === 'muse' && !plan.hidden && !plan.delisted && supplyOpen(plan.muse_product_code))
       const offers = (catalog.plans as Plan[]).filter(plan => !isServicePlan(plan.id)).map(plan => ({ ...plan, enabled: plan.enabled && (
         isXGiftPlan(plan.id) ? xgiftCheckoutEnabled(env) : plan.id === 'gmail-account' ? gmail : isDeliverySupplierPlan(plan.id) ? delivery_supplier : emailProduct(plan.id) ? email : testing || (live && Boolean(mapped[plan.id]))
       ) ? 1 : 0 }))
       const hiddenProductIds: readonly string[] = platformVisibility?.hiddenProductIds ?? ('hiddenProductIds' in catalog ? catalog.hiddenProductIds : [])
-      return json({ ...catalog, platformBranding: branding, hiddenProductIds, marketingMetric: marketingMetric && { enabled: marketingMetric.enabled, displayText: marketingMetric.displayText, displayCount: marketingMetric.displayCount }, supportContacts: support.contacts, announcement, plans: [...offers, ...customOffers.filter(plan => !plan.hidden).map(({ muse_product_code: _code, muse_max_cost_cents: _cost, ...plan }) => ({ ...plan, enabled: plan.enabled && (plan.delivery_provider === 'muse' ? museOpen : customOpen) && (plan.delivery_type !== 'stock' || plan.stock_available > 0) ? 1 : 0 }))].filter(plan => !hiddenProductIds.includes(plan.product_id)), mode: live ? 'live' : 'demo', checkoutEnabled: testing || live || email || xgiftCheckoutEnabled(env) || customOpen || museOpen, testingEnabled: testing }, 200, { 'Server-Timing': `catalog;dur=${(performance.now() - started).toFixed(1)}` })
+      return json({ ...catalog, platformBranding: branding, hiddenProductIds, marketingMetric: marketingMetric && { enabled: marketingMetric.enabled, displayText: marketingMetric.displayText, displayCount: marketingMetric.displayCount }, supportContacts: support.contacts, announcement, plans: [...offers, ...customOffers.filter(plan => !plan.hidden && !plan.delisted).map(({ muse_product_code: code, muse_max_cost_cents: _cost, ...plan }) => ({ ...plan, supply_kind: supplyKind(code), enabled: plan.enabled && (plan.delivery_provider === 'muse' ? supplyOpen(code) : customOpen) && (plan.delivery_type !== 'stock' || plan.stock_available > 0) ? 1 : 0 }))].filter(plan => !hiddenProductIds.includes(plan.product_id)), mode: live ? 'live' : 'demo', checkoutEnabled: testing || live || email || xgiftCheckoutEnabled(env) || customOpen || museOpen, testingEnabled: testing }, 200, { 'Server-Timing': `catalog;dur=${(performance.now() - started).toFixed(1)}` })
     }
     if (path === '/api/orders/client' && method === 'POST') {
       await body(request)

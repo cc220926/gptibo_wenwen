@@ -4,7 +4,7 @@ import { emailProduct } from '../../shared/email-products.ts'
 import { confirmedRefundLabel, type PlatformOrderStatus } from '../../shared/platform-order-status.ts'
 
 export const PLANS = [
-  ...Object.entries(CODEX_CREDITS).map(([id, pack]) => ({ id: id as keyof typeof CODEX_CREDITS, productId: 'codex-credits', name: `${pack.points} 点`, price: pack.priceCents / 100, renewalOnly: false, subtitle: '继续你的下一次构建。', description: `${pack.points} 点 · 一次性点数包`, features: ['为自己的账号充值', '付款后提交 Session', '订单进度可查'] })),
+  ...Object.entries(CODEX_CREDITS).map(([id, pack]) => ({ id: id as keyof typeof CODEX_CREDITS, productId: 'codex-credits', name: `${pack.points} 点`, price: pack.priceCents / 100, renewalOnly: false, subtitle: '选择需要的点数', description: `${pack.points} 点 · 一次性点数包`, features: ['账号点数直充', '订单内查看进度', '付款后提交 Session'] })),
   { id: 'x-premium-3m', productId: 'x-premium', name: 'Premium · 3 个月', price: 35, renewalOnly: false, subtitle: '三个月，探索更多。', description: '轻松开始，体验 Premium', features: ['无需账号密码', '付款前验证账号', '订单进度可查'] },
   { id: 'x-premium-6m', productId: 'x-premium', name: 'Premium · 6 个月', price: 55, renewalOnly: false, subtitle: '六个月，继续精彩。', description: '更长时间，持续探索', features: ['无需账号密码', '付款前验证账号', '订单进度可查'] },
   { id: 'plus', productId: 'chatgpt', name: 'Plus', price: 139, renewalOnly: false, subtitle: '日常灵感，持续在线。', description: '适合日常问答、写作与学习', features: ['写作、学习与灵感探索', '图片理解与创意表达', '个人账号使用体验'] },
@@ -12,7 +12,7 @@ export const PLANS = [
   // Keep the existing ID for supplier mappings and historical orders.
   { id: 'pro-20x', productId: 'chatgpt', name: 'Pro 10×', price: 1400, renewalOnly: false, subtitle: '更多额度，继续你的探索。', description: 'Pro 10× 档位，支持新开与续费', features: ['Pro 10× 订阅', '支持新开与续费', '订单进度可查'] },
   { id: 'pro-25x', productId: 'chatgpt', name: 'Pro 25×', price: 4500, renewalOnly: false, subtitle: '更高额度，继续你的探索。', description: 'Pro 25× 档位，支持新开与自动充值', features: ['Pro 25× 订阅', '支持新开 · 自动充值', '订单进度可查'] },
-  { id: 'codex-sms-once', productId: 'codex-sms', name: '单次接码', price: 10, renewalOnly: false, subtitle: '一次接码，清楚明了。', description: '接收一次短信验证码', features: ['按次购买', '订单内查看验证码', '无需提交 Session'] },
+  { id: 'codex-sms-once', productId: 'codex-sms', name: '单次接码', price: 10, renewalOnly: false, subtitle: '一次接码，清楚明了。', description: 'CDK 兑换单次接码', features: ['CDK 自动交付', '前往 sms.llvi.de 兑换', '无需提交 Session'] },
   { id: 'gemini-pro-18m', productId: 'gemini', name: '18 个月会员', price: 19.9, renewalOnly: false, subtitle: '让灵感，多一点时间。', description: '18 个月会员 · 领取链接邮件交付', features: ['18 个月会员', '邮件领取链接', '自动发货 · 订单页可领取'] },
   { id: 'duolingo-12m', productId: 'duolingo', name: '1 年会员', price: 19.9, renewalOnly: false, subtitle: '和 Duo 一起，把学习继续。', description: '1 年会员 · 兑换 CDK 邮件交付', features: ['1 年会员', '邮件兑换 CDK', '自动发货 · 订单页可领取'] },
   { id: 'gmail-account', productId: 'gmail', name: '美国长效白号 · 带 2FA', price: 18.8, renewalOnly: false, subtitle: '一个邮箱，让连接开始。', description: '个人 Gmail 白号 · 账号资料自动邮件交付', features: ['美国个人白号 · 带 2FA', '付款后自动邮件发货', '购买当天首次登录质保'] },

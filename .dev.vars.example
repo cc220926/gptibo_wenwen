@@ -82,5 +82,8 @@ TURNSTILE_HOSTNAMES=localhost,127.0.0.1
 
 # Muse may use a separate cashier; leave checkout flags off until verified.
 MUSE_PAYMENT_PROVIDER="mapay"
+# Non-Muse GPTibo SKUs allowed for automatic purchase (exact codes, comma-separated).
+# Allow-list in code: codex-sms-once, gpt-plus-account. They use SERVICE_PAYMENT_PROVIDER.
+GPTIBO_SUPPLY_ENABLED=""
 MAPAY_PID=""
 MAPAY_KEY=""

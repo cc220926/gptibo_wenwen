@@ -1,24 +1,28 @@
 import { ApiError, type Env } from '../platform.ts'
 import { seal } from '../fulfillment/vault.ts'
-import { museBalance, museConfigured, MuseError, museProducts, museRequest } from './client.ts'
+import { gptiboSupplyCode, isMuseCode, museBalance, museConfigured, MuseError, museProducts, museRequest } from './client.ts'
 
 export type MuseMapping = { product_code: string; max_cost_cents: number }
 type Purchase = { order_id: string; key_id: string; product_code: string; expected_cost_cents: number; raw_body: string; idempotency_key: string; remote_id: string | null; state: string; attempted: number; lease_token: string | null; lease_until: number; next_attempt_at: number; failure_count: number }
 const eligible = "mode='live' AND is_test=0 AND payment_status='paid' AND refund_hold=0 AND refunded_cents=0 AND redemption_blocked=0"
 export const museCheckoutEnabled = (env: Env) => museConfigured(env) && env.MUSE_CHECKOUT_ENABLED === 'true' && env.MUSE_ACCOUNT_PAYMENT_APPROVED === 'true'
+/** Muse keeps its own gates; each extra GPTibo SKU opens only when listed by exact code. */
+export const supplyCheckoutEnabled = (env: Env, code: string) => gptiboSupplyCode(code) && (isMuseCode(code)
+  ? museCheckoutEnabled(env)
+  : museConfigured(env) && (env.GPTIBO_SUPPLY_ENABLED ?? '').split(',').map(v => v.trim()).includes(code))
 export const museMapping = (env: Env, plan: string) => env.INTEREST_DB.prepare('SELECT product_code,max_cost_cents FROM muse_plans WHERE plan=?').bind(plan).first<MuseMapping>()
 export const musePurchase = (env: Env, id: string) => env.INTEREST_DB.prepare('SELECT * FROM muse_orders WHERE order_id=?').bind(id).first<Purchase>()
 
 // No wallet freeze or purchase here. Price is pinned before the buyer pays.
 export async function prepareMuse(env: Env, mapping: MuseMapping, sale: number) {
-  if (!museCheckoutEnabled(env)) throw new ApiError('Muse 自动交付暂未开放。', 409)
+  if (!supplyCheckoutEnabled(env, mapping.product_code)) throw new ApiError('该商品自动交付暂未开放。', 409)
   const products = await museProducts(env), product = products.find(p => p.code === mapping.product_code)
-  if (!product?.enabled || !product.available) throw new ApiError('Muse 供货暂不可用，请稍后再试。', 409)
-  if (product.supply_minor > mapping.max_cost_cents || product.supply_minor >= sale) throw new ApiError('Muse 供货价格已变化，请联系商家核对。', 409)
+  if (!product?.enabled || !product.available) throw new ApiError('供货暂不可用，请稍后再试。', 409)
+  if (product.supply_minor > mapping.max_cost_cents || product.supply_minor >= sale) throw new ApiError('供货价格已变化，请联系商家核对。', 409)
   const balance = await museBalance(env)
-  if (balance.available_minor < product.supply_minor) throw new ApiError('Muse 暂时无法供货，请联系商家。', 409)
+  if (balance.available_minor < product.supply_minor) throw new ApiError('暂时无法供货，请联系商家。', 409)
   const check = await museRequest<{ ready: boolean; fulfillment_type: string; quantity: number }>(env, '/preflight', JSON.stringify({ product_code: product.code }))
-  if (check?.ready !== true || check.fulfillment_type !== 'account_delivery' || check.quantity !== 1) throw new ApiError('Muse 暂未通过供货检查。', 409)
+  if (check?.ready !== true || check.fulfillment_type !== 'account_delivery' || check.quantity !== 1) throw new ApiError('暂未通过供货检查，请稍后再试。', 409)
   return product.supply_minor
 }
 export function museSnapshot(env: Env, id: string, mapping: MuseMapping, cost: number) {
@@ -30,9 +34,9 @@ export function museSnapshot(env: Env, id: string, mapping: MuseMapping, cost: n
 export async function musePaymentReady(env: Env, id: string) {
   const p = await musePurchase(env, id)
   if (!p) return
-  if (!museCheckoutEnabled(env) || p.key_id !== env.MUSE_KEY_ID) throw new ApiError('Muse 收款暂未开放，请联系商家。', 409)
+  if (!supplyCheckoutEnabled(env, p.product_code) || p.key_id !== env.MUSE_KEY_ID) throw new ApiError('该商品收款暂未开放，请联系商家。', 409)
   const product = (await museProducts(env)).find(row => row.code === p.product_code)
-  if (!product?.enabled || !product.available || product.supply_minor !== p.expected_cost_cents || (await museBalance(env)).available_minor < p.expected_cost_cents) throw new ApiError('Muse 供货已变化，当前不能付款，请联系商家或重新确认商品。', 409)
+  if (!product?.enabled || !product.available || product.supply_minor !== p.expected_cost_cents || (await museBalance(env)).available_minor < p.expected_cost_cents) throw new ApiError('供货已变化，当前不能付款，请联系商家或重新确认商品。', 409)
 }
 type Remote = { id: string; merchant_order_no: string; product_code: string; supply_minor: number; status: string; fulfillment_type?: string }
 function validate(remote: Remote, p: Purchase) {
@@ -69,7 +73,7 @@ export async function fulfillMuse(env: Env, id: string) {
   if (p.lease_token !== lease) return
   let delay = 20000
   try {
-    if (!p.attempted && !museCheckoutEnabled(env)) return // New dispatch kill switch; recovery continues.
+    if (!p.attempted && !supplyCheckoutEnabled(env, p.product_code)) return // New dispatch kill switch; recovery continues.
     let remote: Remote | null = null
     if (p.attempted || p.remote_id) {
       try { remote = validate(await museRequest<Remote>(env, p.remote_id ? '/orders/' + p.remote_id : '/orders/by-merchant/' + id), p) }
@@ -103,7 +107,7 @@ export async function fulfillMuse(env: Env, id: string) {
       db.prepare(`UPDATE fulfillment_tasks SET encrypted_value=?,state='delivered',delivered_at=?,updated_at=? WHERE order_id=? AND state IN ('reserved','queued','running') AND EXISTS(SELECT 1 FROM muse_orders m JOIN orders o ON o.id=m.order_id WHERE m.order_id=fulfillment_tasks.order_id AND m.lease_token=? AND ${eligible})`).bind(encrypted, done, done, id, lease),
       db.prepare("UPDATE muse_orders SET state='succeeded',failure_code='',updated_at=? WHERE order_id=? AND lease_token=? AND EXISTS(SELECT 1 FROM fulfillment_tasks WHERE order_id=? AND state='delivered')").bind(done, id, lease, id),
       db.prepare(`UPDATE orders SET status='success',version=version+1,updated_at=?,last_event_id=? WHERE id=? AND ${eligible} AND EXISTS(SELECT 1 FROM muse_orders m WHERE m.order_id=orders.id AND m.state='succeeded' AND m.lease_token=?)`).bind(done, event, id, lease),
-      db.prepare("INSERT INTO order_events(id,order_id,actor,action,to_status,note,order_version,created_at) SELECT ?,id,'system','muse-delivered',status,'Muse 原采购单已交付，可在原订单领取',version,? FROM orders WHERE id=? AND last_event_id=?").bind(event, done, id, event),
+      db.prepare("INSERT INTO order_events(id,order_id,actor,action,to_status,note,order_version,created_at) SELECT ?,id,'system','muse-delivered',status,'供货原采购单已交付，可在原订单领取',version,? FROM orders WHERE id=? AND last_event_id=?").bind(event, done, id, event),
     ])
   } catch (error) {
     delay = Math.min(300000, 20000 * 2 ** Math.min(p.failure_count, 4))

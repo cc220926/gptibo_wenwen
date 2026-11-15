@@ -26,6 +26,8 @@ export interface Env {
   MUSE_WEBHOOK_SECRET?: string
   MUSE_CHECKOUT_ENABLED?: string
   MUSE_ACCOUNT_PAYMENT_APPROVED?: string
+  /** Comma-separated exact GPTibo SKU codes (non-Muse) allowed for automatic purchase. */
+  GPTIBO_SUPPLY_ENABLED?: string
   ZPAY_PID?: string
   ZPAY_KEY?: string
   MUSE_PAYMENT_PROVIDER?: string

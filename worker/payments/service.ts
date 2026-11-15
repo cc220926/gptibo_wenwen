@@ -1,4 +1,5 @@
-import { museCheckoutEnabled, musePaymentReady, musePurchase } from '../muse/service.ts'
+import { musePaymentReady, musePurchase, supplyCheckoutEnabled } from '../muse/service.ts'
+import { isMuseCode } from '../muse/client.ts'
 import { isServicePlan } from '../../shared/fulfillment.ts'
 import { fulfillService, serviceCheckoutEnabled, taskFor } from '../fulfillment/service.ts'
 import { isXGiftPlan } from '../../shared/xgift-products.ts'
@@ -100,14 +101,16 @@ export async function paymentAction(request: Request, env: Env, order: Order, ad
   if (order.redemption_blocked && data.action === 'create') throw new ApiError('本订单已禁止再次兑换，请联系支持。', 409)
   if (order.mode !== 'live') throw new ApiError('历史测试记录不能发起收款。', 409)
   const muse = await musePurchase(env, order.id)
-  const canCreate = (isServicePlan(order.plan) ? await serviceCheckoutEnabled(env, Boolean(muse)) : isXGiftPlan(order.plan) ? xgiftCheckoutEnabled(env) : order.plan === 'gmail-account' ? gmailCheckoutEnabled(env) : isDeliverySupplierPlan(order.plan) ? delivery_supplierCheckoutEnabled(env) : emailProduct(order.plan) ? emailCheckoutEnabled(env) : env.PAYMENT_CHECKOUT_ENABLED === 'true') || (adminTest && order.is_test === 1 && order.price_cents === 1 && !order.partner_id && env.PAYMENT_TEST_ENABLED === 'true')
+  // Only Muse-branded SKUs use the Muse payment route; other GPTibo SKUs use the normal service route.
+  const museBrand = Boolean(muse && isMuseCode(muse.product_code))
+  const canCreate = (isServicePlan(order.plan) ? await serviceCheckoutEnabled(env, museBrand) : isXGiftPlan(order.plan) ? xgiftCheckoutEnabled(env) : order.plan === 'gmail-account' ? gmailCheckoutEnabled(env) : isDeliverySupplierPlan(order.plan) ? delivery_supplierCheckoutEnabled(env) : emailProduct(order.plan) ? emailCheckoutEnabled(env) : env.PAYMENT_CHECKOUT_ENABLED === 'true') || (adminTest && order.is_test === 1 && order.price_cents === 1 && !order.partner_id && env.PAYMENT_TEST_ENABLED === 'true')
   if (!(await env.INTEREST_LIMITER.limit({ key: 'payment:' + order.owner_hash })).success) throw new ApiError('操作较频繁，请稍后再试。', 429)
   let payment = await findPayment(env, order.id)
   if (data.action === 'options') return json({ payment: payment ? { provider: payment.provider, status: payment.state, qr: null, expiresAt: payment.expires_at } : null, methods: canCreate ? [{ method: 'alipay', name: '支付宝', feeBps: 0 }] : [] })
-  if (data.action === 'create' && await musePurchase(env, order.id) && !museCheckoutEnabled(env)) throw new ApiError('Muse 收款暂未开放，请联系商家。', 409)
+  if (data.action === 'create' && muse && !supplyCheckoutEnabled(env, muse.product_code)) throw new ApiError('该商品收款暂未开放，请联系商家。', 409)
   if (!payment && data.action === 'create') {
     if (!canCreate) throw new ApiError('真实收款尚未开放。', 503)
-    const provider = paymentProvider(env, isServicePlan(order.plan) ? servicePaymentProviderId(env, Boolean(muse)) : emailProduct(order.plan) || isXGiftPlan(order.plan) ? 'alipay' : env.PAYMENT_PROVIDER ?? '')
+    const provider = paymentProvider(env, isServicePlan(order.plan) ? servicePaymentProviderId(env, museBrand) : emailProduct(order.plan) || isXGiftPlan(order.plan) ? 'alipay' : env.PAYMENT_PROVIDER ?? '')
     if (isEpayProvider(provider.id) && !isServicePlan(order.plan)) throw new ApiError('该支付渠道仅用于自有商品。', 409)
     notifyUrl(env, provider.id)
     const now = Date.now()

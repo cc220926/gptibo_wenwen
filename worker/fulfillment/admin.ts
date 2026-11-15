@@ -1,5 +1,5 @@
-import { museBalance, museConfigured, MuseError, museProducts } from '../muse/client.ts'
-import { fulfillMuse, museCheckoutEnabled, museMapping, musePurchase } from '../muse/service.ts'
+import { gptiboSupplyCode, museBalance, museConfigured, MuseError, museProducts } from '../muse/client.ts'
+import { fulfillMuse, museCheckoutEnabled, museMapping, musePurchase, supplyCheckoutEnabled } from '../muse/service.ts'
 import { ApiError, body, json, type Env } from '../platform.ts'
 import { getOrder } from '../order-state.ts'
 import { isServicePlan } from '../../shared/fulfillment.ts'
@@ -28,9 +28,10 @@ export async function inventoryAdmin(request: Request, env: Env, url: URL) {
   if (path === '/api/admin/inventory/manual/notifications' && request.method === 'GET') return manualDeliveryNotifications(env)
   if (path === '/api/admin/inventory/muse' && request.method === 'GET') {
     if (!museConfigured(env)) return json({ configured: false, checkoutReady: false, products: [] })
-    try { return json({ configured: true, checkoutReady: museCheckoutEnabled(env), products: await museProducts(env), balance: await museBalance(env) }) }
+    try { const products = await museProducts(env)
+    return json({ configured: true, checkoutReady: museCheckoutEnabled(env), products: products.map(p => ({ ...p, checkoutOpen: supplyCheckoutEnabled(env, p.code) })), balance: await museBalance(env) }) }
     catch (error) {
-      if (error instanceof MuseError) return json({ error: `Muse 供货查询未确认（${error.code}；HTTP ${error.status}）。请检查原渠道配置。` }, 503)
+      if (error instanceof MuseError) return json({ error: `GPTibo 供货查询未确认（${error.code}；HTTP ${error.status}）。请检查原渠道配置。` }, 503)
       throw error
     }
   }
@@ -50,6 +51,22 @@ export async function inventoryAdmin(request: Request, env: Env, url: URL) {
     ])
     if (!await db.prepare('SELECT id FROM admin_audit WHERE id=?').bind(event).first()) throw new ApiError('商品已更新，请刷新。', 409)
     return json({ id: current.id, hidden: Number(data.hidden), version: current.version + 1 })
+  }
+  if (path === '/api/admin/inventory/plans/visibility') {
+    const data = await body(request)
+    if (typeof data.id !== 'string' || !isServicePlan(data.id) || typeof data.delisted !== 'boolean' || !Number.isSafeInteger(data.version) || Number(data.version) < 0) throw new ApiError('规格上下架参数无效。')
+    const current = await db.prepare('SELECT id,name,delisted,version FROM catalog_plans WHERE id=?').bind(data.id).first<{ id: string; name: string; delisted: number; version: number }>()
+    if (!current) throw new ApiError('规格不存在。', 404)
+    if (current.version !== data.version) throw new ApiError('规格已更新，请刷新。', 409)
+    if (Boolean(current.delisted) === data.delisted) return json({ id: current.id, delisted: current.delisted, version: current.version })
+    const event = crypto.randomUUID()
+    await db.batch([
+      db.prepare('UPDATE catalog_plans SET delisted=?,version=version+1,updated_at=? WHERE id=? AND version=?').bind(Number(data.delisted), Date.now(), current.id, current.version),
+      db.prepare("INSERT INTO admin_audit(id,action,target_id,note,created_at) SELECT ?,'service-plan-visibility',id,?,? FROM catalog_plans WHERE id=? AND version=? AND delisted=?")
+        .bind(event, `${env.ADMIN_USERNAME}: ${data.delisted ? '下架规格' : '恢复展示规格'} ${current.name}`, Date.now(), current.id, current.version + 1, Number(data.delisted)),
+    ])
+    if (!await db.prepare('SELECT id FROM admin_audit WHERE id=?').bind(event).first()) throw new ApiError('规格已更新，请刷新。', 409)
+    return json({ id: current.id, delisted: Number(data.delisted), version: current.version + 1 })
   }
   if (path === '/api/admin/inventory/products') {
     const data = await body(request, 12000)
@@ -78,7 +95,7 @@ export async function inventoryAdmin(request: Request, env: Env, url: URL) {
     const isMuse = data.kind === 'muse'
     const kind = isMuse ? 'manual' : String(data.kind)
     const supplierCode = isMuse ? text(data.supplierCode, '供货商品代码') : ''
-    if (isMuse && (!/^muse(?:[-_]|$)[A-Za-z0-9_.:-]*$/i.test(supplierCode) || !Number.isSafeInteger(data.maxCostCents) || Number(data.maxCostCents) <= 0 || Number(data.maxCostCents) >= price)) throw new ApiError('供货商品代码或采购上限无效；上限必须低于售价。')
+    if (isMuse && (!gptiboSupplyCode(supplierCode) || !Number.isSafeInteger(data.maxCostCents) || Number(data.maxCostCents) <= 0 || Number(data.maxCostCents) >= price)) throw new ApiError('供货商品代码或采购上限无效；上限必须低于售价。')
     if (typeof data.enabled !== 'boolean') throw new ApiError('销售状态无效。')
     const productId = text(data.productId, '商品编号')
     if (!await db.prepare('SELECT id FROM service_products WHERE id=?').bind(productId).first()) throw new ApiError('商品不存在。', 404)
