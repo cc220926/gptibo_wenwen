@@ -2453,3 +2453,100 @@ test('payout safety: supplier outage on transfer start fails closed and retry re
   s.override(undefined)
   assert.equal((await s.call(path, { action: 'start-transfer', version: 1, note: '重新核验' }, admin)).status, 200)
 })
+
+for (const outcome of ['paid', 'not-sent'] as const) {
+  test(`payout acceptance: unknown -> ${outcome} -> refund reconciles once and preserves control orders`, async t => {
+    // In-memory DB, fake identities, mocked supplier. No production or real transfers.
+    // After fixture setup, all order, payout and refund mutations use Worker APIs.
+    const s = setup(t), partner = auditPartner(s), other = auditPartner(s, '2')
+    const buyer = await s.buyer(), controlBuyer = await s.buyer(), admin = await s.login()
+    const check = async (r: Response, status = 200) => { assert.equal(r.status, status, await r.clone().text()); return r.json() }
+    const control = await s.create(controlBuyer)
+    const snapshot = () => ({
+      order: s.db.prepare('SELECT * FROM orders WHERE id=?').get(control.id),
+      supplier: s.db.prepare('SELECT * FROM recharge_orders WHERE order_id=?').get(control.id),
+      events: s.db.prepare('SELECT * FROM order_events WHERE order_id=? ORDER BY order_version').all(control.id),
+      plans: s.db.prepare('SELECT * FROM catalog_plans ORDER BY id').all(),
+      other: s.db.prepare('SELECT * FROM partner_prices WHERE partner_id=? ORDER BY plan').all(other.id),
+    })
+    const untouched = snapshot()
+    const order = (await check(await s.call('/api/orders', { plan: 'plus', partner: partner.slug, expectedPrice: 15900, email: 'local-acceptance@example.test', key: crypto.randomUUID() }, buyer), 201)).order
+    await check(await s.query(order.id, buyer)); s.setPayment('paid'); await check(await s.query(order.id, buyer))
+    await check(await s.submit(order.id, buyer)); s.setTask('succeeded')
+    assert.equal((await check(await s.query(order.id, buyer))).order.status, 'success')
+    await check(await s.call('/api/partner/payout-account', { phone: '13800000000', name: '模拟收款人', version: 0 }, partner.cookie))
+    const dashboard = async () => check(await s.call('/api/partner/dashboard', undefined, partner.cookie))
+    const request = (key = crypto.randomUUID()) => s.call('/api/partner/payouts', { key, accountVersion: 1 }, partner.cookie)
+    assert.equal((await dashboard()).stats.available, 4900)
+    const key = crypto.randomUUID()
+    const sameKey = await Promise.all(Array.from({ length: 20 }, () => request(key)))
+    // Concurrent supplier verification is itself leased: losing requests may
+    // return 409 rather than an idempotent 200. Retrying after completion must
+    // resolve to the existing payout, never reserve another one.
+    assert.equal(sameKey.filter(r => r.status === 201).length, 1)
+    assert.equal(sameKey.filter(r => r.status === 409).length, 19)
+    for (const r of sameKey.filter(r => r.status === 409)) assert.match((await r.json()).error, /订单正在同步/)
+    await check(await request(key))
+    assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_payouts').get()!.n, 1)
+    const differentKeys = await Promise.all(Array.from({ length: 20 }, () => request()))
+    assert.ok(differentKeys.every(r => r.status === 409))
+    const ps = s.db.prepare('SELECT * FROM partner_payouts').get()!, path = '/api/admin/partner-payouts/' + ps.id
+    assert.equal(ps.amount_cents, 4900)
+    await check(await s.call(path, { action: 'approve', version: 0, note: '本地模拟审核' }, admin))
+    const starts = await Promise.all(Array.from({ length: 20 }, () => s.call(path, { action: 'start-transfer', version: 1, note: '本地领取' }, admin)))
+    assert.equal(starts.filter(r => r.status === 200).length, 1)
+    assert.equal(starts.filter(r => r.status === 409).length, 19)
+    const attemptId = (await starts.find(r => r.status === 200)!.json()).attemptId
+    await check(await s.call(path, { action: 'mark-unknown', version: 2, attemptId, note: '模拟付款结果未知' }, admin))
+    assert.deepEqual(snapshot(), untouched)
+    assert.equal((await dashboard()).totals.pending, 4900)
+    assert.equal((await dashboard()).stats.available, 0)
+    const refund = await approveRefund(s, order.id, buyer, admin, 1000)
+    s.override(p => p === '/v1/orders/ord_test' ? Response.json({ data: { ...s.remoteOrder(), payment_status: 'partially_refunded', refunded_amount: '10.00', merchant_margin: '39.00' } }) : undefined)
+    const reconcile = () => s.call('/api/admin/refunds/' + refund, { action: 'reconcile-platform-refund', version: 1, note: '本地核对上游已退款' }, admin)
+    assert.equal((await reconcile()).status, 409)
+    for (const action of ['rejected', 'start-transfer']) assert.equal((await s.call(path, { action, version: 3, note: '禁止解锁或重打' }, admin)).status, 409)
+    assert.equal((await s.call(path, { action: 'paid', version: 3, attemptId: 'wrong-attempt', transferConfirmed: true, reference: 'SIM-ONLY', note: '错误处理编号' }, admin)).status, 409)
+    // Cooldown reset cannot release an unknown transfer or bypass its pending lock.
+    await check(await s.call(`/api/admin/partners/${partner.id}/payout-cooldown/reset`, { key: crypto.randomUUID(), note: '本地测试冷却豁免不解锁' }, admin))
+    assert.equal((await request()).status, 409)
+    assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order.id)!.payout_id, ps.id)
+    const resolution = { action: outcome === 'paid' ? 'paid' : 'confirm-not-transferred', version: 3, attemptId, note: '本地模拟核对结果', reference: 'SIM-UNKNOWN-PAID', transferConfirmed: true, confirmedNotTransferred: true, evidence: '模拟核对付款账户账单，确认未转出且没有处理中交易' }
+    const resolved = await Promise.all(Array.from({ length: 20 }, () => s.call(path, resolution, admin)))
+    assert.equal(resolved.filter(r => r.status === 200).length, 1)
+    assert.equal(resolved.filter(r => r.status === 409).length, 19)
+    const refunds = await Promise.all([reconcile(), reconcile()])
+    assert.deepEqual(refunds.map(r => r.status).sort(), [200, 409])
+    assert.equal((await getOrder(s.env, order.id)).refunded_cents, 1000)
+    assert.equal(s.db.prepare('SELECT COUNT(*) n FROM refund_cases WHERE status=\'refunded\'').get()!.n, 1)
+    if (outcome === 'paid') {
+      const stats = await dashboard()
+      assert.equal(stats.totals.paid, 4900); assert.equal(stats.totals.pending, 0); assert.equal(stats.stats.available, 0); assert.equal(stats.stats.debt, 1000)
+      assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_debits').get()!.n, 1)
+      assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order.id)!.payout_id, ps.id)
+      assert.equal((await request()).status, 409)
+      t.diagnostic('已转出分支：已提现49元、退款10元、唯一抵扣10元、可提现0元，历史订单持续占用。')
+    } else {
+      assert.equal((await dashboard()).stats.available, 3900)
+      assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_debits').get()!.n, 0)
+      assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order.id)!.payout_id, null)
+      const requests = await Promise.all(Array.from({ length: 20 }, () => request()))
+      assert.equal(requests.filter(r => r.status === 201).length, 1); assert.equal(requests.filter(r => r.status === 409).length, 19)
+      const next = s.db.prepare("SELECT * FROM partner_payouts WHERE status='pending'").get()!, nextPath = '/api/admin/partner-payouts/' + next.id
+      assert.equal(next.amount_cents, 3900)
+      await check(await s.call(nextPath, { action: 'approve', version: 0, note: '核验退款后剩余收益' }, admin))
+      const claim = await check(await s.call(nextPath, { action: 'start-transfer', version: 1, note: '本地领取新申请' }, admin))
+      await check(await s.call(nextPath, { action: 'paid', version: 2, attemptId: claim.attemptId, transferConfirmed: true, reference: 'SIM-NEW-PAYOUT', note: '本地登记39元' }, admin))
+      assert.equal((await s.call(path, resolution, admin)).status, 409)
+      assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order.id)!.payout_id, next.id)
+      const stats = await dashboard()
+      assert.equal(stats.totals.paid, 3900); assert.equal(stats.totals.pending, 0); assert.equal(stats.stats.available, 0); assert.equal(stats.stats.debt, 0)
+      t.diagnostic('未转出分支：旧49元申请退回，退款后仅39元能重新提现；新申请结算后旧请求不能释放新占款。')
+    }
+    assert.deepEqual(snapshot(), untouched)
+    assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_payouts WHERE partner_id=?').get(other.id)!.n, 0)
+    assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 1)
+    assert.equal(s.calls.some(c => c.path.endsWith('/refunds')), false)
+    t.diagnostic('对照订单、事件、商品及其他代理配置逐字段一致；没有真实外部调用，没有二次履约或主动退款。')
+  })
+}
