@@ -1434,11 +1434,14 @@ test('external partial refund reconciles paid partner commission once and blocks
   assert.equal((await s.call('/api/partner/payouts', { key: crypto.randomUUID(), recipient: '支付宝测试账户 / 测试人' }, partner)).status, 201)
   const payout = s.db.prepare('SELECT * FROM partner_payouts').get()!
   assert.equal((await s.call('/api/admin/partner-payouts/' + payout.id, { action: 'approve', version: 0, note: '审核提现' }, admin)).status, 200)
+  const claimResponse = await s.call('/api/admin/partner-payouts/' + payout.id, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, admin)
+  assert.equal(claimResponse.status, 200)
+  const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
   const refund = await approveRefund(s, order.id, buyer, admin, 1000)
   s.override(path => path === '/v1/orders/ord_test' ? Response.json({ data: { ...s.remoteOrder(), payment_status: 'partially_refunded', refunded_amount: '10.00', merchant_margin: '39.00' } }) : undefined)
   const execute = () => s.call('/api/admin/refunds/' + refund, { action: 'reconcile-platform-refund', version: 1, note: '核对部分退款' }, admin)
   assert.equal((await execute()).status, 409)
-  assert.equal((await s.call('/api/admin/partner-payouts/' + payout.id, { action: 'paid', version: 1, note: '核对转账', reference: 'MOCK-TRANSFER-ONLY' }, admin)).status, 200)
+  assert.equal((await s.call('/api/admin/partner-payouts/' + payout.id, { action: 'paid', ...claim, note: '核对转账', reference: 'MOCK-TRANSFER-ONLY' }, admin)).status, 200)
   assert.equal((await execute()).status, 200)
   assert.equal((await getOrder(s.env, order.id)).refunded_cents, 1000)
   assert.equal(s.db.prepare('SELECT amount_cents FROM partner_debits').get()!.amount_cents, 1000)
@@ -1535,7 +1538,10 @@ test('partial Recharge refund caps profit at actual supplier margin and claws ba
   const payout = s.db.prepare('SELECT * FROM partner_payouts').get()!
   assert.equal(payout.amount_cents,4900)
   assert.equal((await s.call('/api/admin/partner-payouts/'+payout.id,{ action: 'approve', version: 0, note: '审核通过' },admin)).status,200)
-  assert.equal((await s.call('/api/admin/partner-payouts/'+payout.id,{ action: 'paid', version: 1, note: '已核对转账', reference: 'MOCK-TRANSFER-ONLY' },admin)).status,200)
+  const claimResponse = await s.call('/api/admin/partner-payouts/'+payout.id, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, admin)
+  assert.equal(claimResponse.status, 200)
+  const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
+  assert.equal((await s.call('/api/admin/partner-payouts/'+payout.id,{ action: 'paid', ...claim, note: '已核对转账', reference: 'MOCK-TRANSFER-ONLY' },admin)).status,200)
   const refund = await approveRefund(s,order.id,buyer,admin,1000)
   assert.equal((await s.call('/api/admin/refunds/'+refund,{ action: 'execute-refund', version: 1, note: '执行部分退款' },admin)).status,409)
   assert.equal((await (await s.call('/api/partner/dashboard',undefined,partner)).json()).stats.withdrawalHeld,true)
@@ -2379,11 +2385,14 @@ test('partner acceptance: isolated 149/139 order completes payment, delivery, 10
   assert.equal(s.db.prepare('SELECT reviewed_at FROM partner_payouts WHERE id=?').get(ps.id)!.reviewed_at, null)
   s.override(undefined)
   await response(await s.call(path, { action: 'approve', version: 0, note: '本地模拟核对收益通过' }, admin))
+  const claimResponse = await s.call(path, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, admin)
+  assert.equal(claimResponse.status, 200)
+  const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
   assert.equal((await s.call(path, { action: 'paid', version: 1, note: '本地模拟', reference: '' }, admin)).status, 400)
   t.diagnostic('提现申请与审核：锁定10元，重复申请不重复占款；越权、未审核和上游查询异常均拦截。')
 
   // This is bookkeeping in an in-memory database, never an actual transfer.
-  const transfer = { action: 'paid', version: 1, note: '仅本地模拟登记，不发生真实转账', reference: 'SIMULATED-NO-TRANSFER' }
+  const transfer = { action: 'paid', ...claim, note: '仅本地模拟登记，不发生真实转账', reference: 'SIMULATED-NO-TRANSFER' }
   await response(await s.call(path, transfer, admin))
   assert.equal((await s.call(path, transfer, admin)).status, 409)
   const final = await dashboard()
@@ -2396,4 +2405,51 @@ test('partner acceptance: isolated 149/139 order completes payment, delivery, 10
   assert.deepEqual(controlSnapshot(), untouched)
   assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_payouts WHERE partner_id=?').get(otherPartner.id)!.n, 0)
   t.diagnostic('模拟转账登记：已提现10元、待付0、可提0；重复登记被拒，正常对照订单及其他分站配置保持不变。')
+})
+
+test('payout safety: start transfer revalidates a previously approved commission', async t => {
+  const s = setup(t), partner = s.partner(), buyer = await s.buyer(), order = await partnerOrder(s, buyer), admin = await s.login()
+  assert.equal((await s.call('/api/partner/payouts', { key: crypto.randomUUID(), recipient: 'LOCAL ONLY' }, partner)).status, 201)
+  const ps = s.db.prepare('SELECT * FROM partner_payouts').get()!, path = '/api/admin/partner-payouts/' + ps.id
+  assert.equal((await s.call(path, { action: 'approve', version: 0, note: '审核' }, admin)).status, 200)
+  s.override(p => p === '/v1/orders/ord_test' ? Response.json({ data: { ...s.remoteOrder(), payment_status: 'refunded', refunded_amount: '159.00', merchant_margin: '-110.00' } }) : undefined)
+  assert.equal((await s.call(path, { action: 'start-transfer', version: 1, note: '转账前重新核对' }, admin)).status, 409)
+  assert.equal((await s.call(path, { action: 'paid', version: 1, note: '旧页面不能跳过转账领取', reference: 'LOCAL-ONLY' }, admin)).status, 409)
+  assert.equal(s.db.prepare('SELECT status FROM partner_payouts').get()!.status, 'pending')
+  assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order.id)!.payout_id, ps.id)
+})
+
+test('payout safety: transfer claim is single use and unknown outcome cannot release earnings', async t => {
+  const s = setup(t), partner = s.partner(), buyer = await s.buyer(), order = await partnerOrder(s, buyer), admin = await s.login()
+  assert.equal((await s.call('/api/partner/payouts', { key: crypto.randomUUID(), recipient: 'LOCAL ONLY' }, partner)).status, 201)
+  const ps = s.db.prepare('SELECT * FROM partner_payouts').get()!, path = '/api/admin/partner-payouts/' + ps.id
+  assert.equal((await s.call(path, { action: 'approve', version: 0, note: '审核' }, admin)).status, 200)
+  const starts = await Promise.all([1, 2].map(() => s.call(path, { action: 'start-transfer', version: 1, note: '本地开始转账' }, admin)))
+  assert.deepEqual(starts.map(r => r.status).sort(), [200, 409])
+  const claimed = s.db.prepare('SELECT * FROM partner_payouts').get()!
+  assert.equal(claimed.transfer_state, 'transferring')
+  assert.equal((await s.call(path, { action: 'rejected', version: 2, note: '结果不明不能退回' }, admin)).status, 409)
+  assert.equal((await s.call(path, { action: 'mark-unknown', version: 2, attemptId: claimed.transfer_id, note: '外部结果未知' }, admin)).status, 200)
+  s.db.exec('UPDATE partner_payouts SET transfer_started_at=1,created_at=1,cooldown_exempt=1')
+  assert.equal((await s.call(path, { action: 'start-transfer', version: 3, note: '不能再次打款' }, admin)).status, 409)
+  assert.equal((await s.call(path, { action: 'confirm-not-transferred', version: 3, attemptId: claimed.transfer_id, note: '未核验不能释放' }, admin)).status, 400)
+  assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order.id)!.payout_id, ps.id)
+  assert.equal((await (await s.call('/api/partner/dashboard', undefined, partner)).json()).stats.available, 0)
+  assert.equal((await s.call(path, { action: 'confirm-not-transferred', version: 3, attemptId: claimed.transfer_id, confirmedNotTransferred: true, evidence: '仅本地模拟：已核对账单，没有发生实际转账。', note: '确认未转账后释放' }, admin)).status, 200)
+  assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order.id)!.payout_id, null)
+  assert.equal(s.db.prepare('SELECT transfer_state FROM partner_payouts').get()!.transfer_state, 'not_sent')
+})
+
+test('payout safety: supplier outage on transfer start fails closed and retry revalidates', async t => {
+  const s = setup(t), partner = s.partner(), buyer = await s.buyer(), order = await partnerOrder(s, buyer), admin = await s.login()
+  assert.equal((await s.call('/api/partner/payouts', { key: crypto.randomUUID(), recipient: 'LOCAL ONLY' }, partner)).status, 201)
+  const ps = s.db.prepare('SELECT * FROM partner_payouts').get()!, path = '/api/admin/partner-payouts/' + ps.id
+  assert.equal((await s.call(path, { action: 'approve', version: 0, note: '审核' }, admin)).status, 200)
+  s.override(p => { if (p === '/v1/orders/ord_test') throw new Error('local simulated outage') })
+  assert.equal((await s.call(path, { action: 'start-transfer', version: 1, note: '领取' }, admin)).status, 503)
+  assert.equal(s.db.prepare('SELECT transfer_state FROM partner_payouts').get()!.transfer_state, 'idle')
+  assert.equal(s.db.prepare('SELECT version FROM partner_payouts').get()!.version, 1)
+  assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order.id)!.payout_id, ps.id)
+  s.override(undefined)
+  assert.equal((await s.call(path, { action: 'start-transfer', version: 1, note: '重新核验' }, admin)).status, 200)
 })

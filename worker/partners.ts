@@ -1,3 +1,4 @@
+import { handlePayout } from './payout-transfer.ts'
 import { checkoutEnabled as supplierCheckoutEnabled } from './recharge/client.ts'
 import { eligibleSql, profitSql, MIN_PAYOUT_CENTS, PAYOUT_COOLDOWN_MS } from './finance.ts'
 import { settleDue, type Order } from './order-state.ts'
@@ -267,32 +268,6 @@ export async function adminPartnerRoutes(request: Request, env: Env, url: URL) {
     const deductions = (await db.prepare('SELECT i.amount_cents,r.order_id FROM partner_payout_debit_items i JOIN partner_debits d ON d.id=i.debit_id JOIN refund_cases r ON r.id=d.refund_id WHERE i.payout_id=?').bind(payout[1]).all()).results
     return json({ items, deductions, payout: payoutRow, total: count?.total ?? 0, page: n })
   }
-  if (payout && method === 'POST') {
-    const data = await body(request); const note = text(data.note, 300, '处理说明')
-    if (!['approve', 'paid', 'rejected'].includes(String(data.action))) throw new ApiError('处理方式无效。')
-    const reference = data.action === 'paid' ? text(data.reference, 100, '线下付款流水号') : ''
-    const ps = await db.prepare('SELECT * FROM partner_payouts WHERE id=?').bind(payout[1]).first<{ id: string; version: number; status: string; reviewed_at: number | null }>()
-    if (!ps || ps.status !== 'pending' || ps.version !== data.version) throw new ApiError('结算申请已处理，请刷新。', 409)
-    if (data.action === 'paid' && !ps.reviewed_at) throw new ApiError('请先审核通过，再登记转账结果。', 409)
-    if (data.action === 'approve') {
-      await verifySupplierPayout(env,'',ps.id)
-      const event = crypto.randomUUID()
-      await db.batch([
-        db.prepare(`UPDATE partner_payouts SET review_token=?,reviewed_at=?,note=?,version=version+1 WHERE id=? AND status='pending' AND reviewed_at IS NULL AND version=? AND NOT EXISTS(SELECT 1 FROM orders o JOIN partner_payout_items i ON i.order_id=o.id AND i.payout_id=partner_payouts.id WHERE NOT (${eligibleSql('o')}) OR i.profit_cents<>${profitSql('o')}) AND NOT EXISTS(SELECT 1 FROM partner_debits WHERE partner_id=partner_payouts.partner_id AND payout_id IS NULL) AND NOT ${paidRefundHoldSql('partner_payouts.partner_id')}`).bind(event,Date.now(),note,ps.id,ps.version),
-        db.prepare("INSERT INTO admin_audit(id,target_id,action,note,created_at) SELECT ?,id,'payout-review',?,? FROM partner_payouts WHERE id=? AND status='pending' AND version=? AND review_token=?").bind(event,note,Date.now(),ps.id,ps.version+1,event),
-      ])
-      if (!await db.prepare('SELECT id FROM admin_audit WHERE id=?').bind(event).first()) throw new ApiError('申请已更新或发生退款抵扣，请先退回申请并重新核算。',409)
-      return json({ok:true})
-    }
-    const event = crypto.randomUUID()
-    await db.batch([
-      db.prepare("INSERT INTO admin_audit(id,target_id,action,note,created_at) SELECT ?,id,'payout-handle',?,? FROM partner_payouts WHERE id=? AND status='pending' AND version=?").bind(event, `${env.ADMIN_USERNAME}: ${data.action}; ${note}`, Date.now(), ps.id, ps.version),
-      db.prepare('UPDATE partner_payouts SET status=?,note=?,reference=?,handled_at=?,version=version+1 WHERE id=? AND status=\'pending\' AND version=?').bind(String(data.action), note, reference, Date.now(), ps.id, ps.version),
-      db.prepare("UPDATE partner_debits SET payout_id=NULL WHERE payout_id=? AND EXISTS(SELECT 1 FROM admin_audit WHERE id=?) AND EXISTS(SELECT 1 FROM partner_payouts WHERE id=? AND status='rejected')").bind(ps.id,event,ps.id),
-      db.prepare("UPDATE orders SET payout_id=NULL WHERE payout_id=? AND EXISTS(SELECT 1 FROM admin_audit WHERE id=?) AND EXISTS(SELECT 1 FROM partner_payouts WHERE id=? AND status='rejected')").bind(ps.id, event, ps.id),
-    ])
-    if (!await db.prepare('SELECT id FROM admin_audit WHERE id=?').bind(event).first()) throw new ApiError('结算申请已处理，请刷新。', 409)
-    return json({ ok: true })
-  }
+  if (payout && method === 'POST') return handlePayout(request, env, payout[1], () => verifySupplierPayout(env, '', payout[1]))
   throw new ApiError('未找到代理管理接口。', 404)
 }

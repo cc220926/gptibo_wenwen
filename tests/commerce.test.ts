@@ -1195,7 +1195,10 @@ test('settlement reserves real completed margins once, rejects demo earnings and
   const ps2 = s.db.prepare("SELECT * FROM partner_payouts WHERE status='pending'").get()!
   assert.equal((await s.request('/api/admin/partner-payouts/' + ps2.id, { action: 'paid', note: '已线下付款', reference: '', version: 0 }, admin)).status, 400)
   assert.equal((await s.request('/api/admin/partner-payouts/' + ps2.id, { action: 'approve', note: '审核通过', version: 0 }, admin)).status, 200)
-  const handled = await Promise.all([s.request('/api/admin/partner-payouts/' + ps2.id, { action: 'paid', note: '已线下付款', reference: 'test-reference', version: 1 }, admin), s.request('/api/admin/partner-payouts/' + ps2.id, { action: 'paid', note: '并发重复登记', reference: 'test-reference', version: 1 }, admin)])
+  const claimResponse = await s.request('/api/admin/partner-payouts/' + ps2.id, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, admin)
+  assert.equal(claimResponse.status, 200)
+  const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
+  const handled = await Promise.all([s.request('/api/admin/partner-payouts/' + ps2.id, { action: 'paid', note: '已线下付款', reference: 'test-reference', ...claim }, admin), s.request('/api/admin/partner-payouts/' + ps2.id, { action: 'paid', note: '并发重复登记', reference: 'test-reference', ...claim }, admin)])
   assert.deepEqual(handled.map(r => r.status).sort(), [200,409])
   assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(live)!.payout_id, ps2.id)
   const adminDetail = await (await s.request('/api/admin/orders/' + live, undefined, admin)).json()
@@ -1247,7 +1250,10 @@ test('concurrent approve and reject preserve exactly one settlement decision and
   assert.equal((await s.request('/api/partner/payouts', { recipient: 'test recipient', key: crypto.randomUUID() }, partner)).status, 201)
   const payout = s.db.prepare('SELECT * FROM partner_payouts').get()!
   assert.equal((await s.request('/api/admin/partner-payouts/' + payout.id, { action: 'approve', note: '审核通过', version: 0 }, admin)).status, 200)
-  const results = await Promise.all(['paid', 'rejected'].map(action => s.request('/api/admin/partner-payouts/' + payout.id, { action, note: 'race test', reference: 'test-only', version: 1 }, admin)))
+  const claimResponse = await s.request('/api/admin/partner-payouts/' + payout.id, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, admin)
+  assert.equal(claimResponse.status, 200)
+  const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
+  const results = await Promise.all(['paid', 'confirm-not-transferred'].map(action => s.request('/api/admin/partner-payouts/' + payout.id, { action, note: 'race test', reference: 'test-only', ...claim, confirmedNotTransferred: true, evidence: '本地模拟已核对账单未发生转账' }, admin)))
   assert.deepEqual(results.map(r => r.status).sort(), [200, 409])
   const stored = s.db.prepare('SELECT * FROM partner_payouts').get()!
   assert.equal(stored.status, results[0].status === 200 ? 'paid' : 'rejected')
@@ -1358,7 +1364,10 @@ test('unmatched refunds on paid commissions still block new payouts and approval
   const paid = s.db.prepare('SELECT * FROM partner_payouts').get()!
   const paidPath = '/api/admin/partner-payouts/' + paid.id
   assert.equal((await s.request(paidPath, { action: 'approve', version: 0, note: '测试审核' }, s.admin)).status, 200)
-  assert.equal((await s.request(paidPath, { action: 'paid', version: 1, note: '测试登记', reference: 'TEST-ONLY' }, s.admin)).status, 200)
+  const claimResponse = await s.request(paidPath, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, s.admin)
+  assert.equal(claimResponse.status, 200)
+  const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
+  assert.equal((await s.request(paidPath, { action: 'paid', ...claim, note: '测试登记', reference: 'TEST-ONLY' }, s.admin)).status, 200)
   s.db.prepare('UPDATE partner_payouts SET cooldown_exempt=1 WHERE id=?').run(paid.id)
   await s.create(); assert.equal((await s.payout()).status, 201)
   const pending = s.db.prepare("SELECT * FROM partner_payouts WHERE status='pending'").get()!
@@ -1424,7 +1433,10 @@ test('an explicit cooldown reset preserves payout history and the next request s
   const payout = s.db.prepare('SELECT * FROM partner_payouts').get()!
   const path = '/api/admin/partner-payouts/' + payout.id
   assert.equal((await s.request(path, { action: 'approve', note: '测试审核', version: 0 }, s.admin)).status, 200)
-  assert.equal((await s.request(path, { action: 'paid', note: '测试记账', reference: 'TEST-RESET', version: 1 }, s.admin)).status, 200)
+  const claimResponse = await s.request(path, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, s.admin)
+  assert.equal(claimResponse.status, 200)
+  const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
+  assert.equal((await s.request(path, { action: 'paid', note: '测试记账', reference: 'TEST-RESET', ...claim }, s.admin)).status, 200)
   await s.create()
   assert.equal((await s.payout()).status, 409)
   const original = s.db.prepare('SELECT * FROM partner_payouts WHERE id=?').get(payout.id)!
@@ -1548,9 +1560,12 @@ test('reviewed transfers must reconcile before refund, paid commissions become a
   const s=await financeFixture(t); const first=await s.create(); await s.payout(); const p=s.db.prepare('SELECT * FROM partner_payouts').get()!
   const path='/api/admin/partner-payouts/'+p.id
   assert.equal((await s.request(path,{action:'approve',note:'通过',version:0},s.admin)).status,200)
+  const claimResponse = await s.request(path, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, s.admin)
+  assert.equal(claimResponse.status, 200)
+  const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
   const c=await s.apply(first); await s.review(c.id,13900)
   assert.equal((await s.complete(c.id)).status,409)
-  assert.equal((await s.request(path,{action:'paid',note:'已转账',reference:'TEST-PAY',version:1},s.admin)).status,200)
+  assert.equal((await s.request(path,{action:'paid',note:'已转账',reference:'TEST-PAY',...claim},s.admin)).status,200)
   s.db.prepare('UPDATE partner_payouts SET created_at=? WHERE id=?').run(Date.now()-PAYOUT_COOLDOWN_MS, p.id)
   await s.create(); await s.create()
   assert.equal((await s.payout()).status,409)
@@ -1615,7 +1630,10 @@ test('cumulative proportional refunds deduct only remaining paid commission and 
   const p=s.db.prepare("SELECT * FROM partner_payouts WHERE status='pending'").get()!; assert.equal(p.amount_cents,5850)
   const path='/api/admin/partner-payouts/'+p.id
   assert.equal((await s.request(path,{action:'approve',note:'测试',version:0},s.admin)).status,200)
-  assert.equal((await s.request(path,{action:'paid',note:'测试',reference:'TEST',version:1},s.admin)).status,200)
+  const claimResponse = await s.request(path, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, s.admin)
+  assert.equal(claimResponse.status, 200)
+  const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
+  assert.equal((await s.request(path,{action:'paid',note:'测试',reference:'TEST',...claim},s.admin)).status,200)
   const second=await s.apply(id); assert.equal(second.requested_cents,6950); await s.review(second.id,6950)
   assert.equal((await s.complete(second.id)).status,200)
   assert.equal(s.db.prepare('SELECT SUM(amount_cents) amount FROM partner_debits').get()!.amount,1950)
@@ -1645,7 +1663,10 @@ test('Duolingo paid commission is deducted once even when further refunds arrive
   const pay = async (p: { id: unknown }) => {
     const path = '/api/admin/partner-payouts/' + p.id
     assert.equal((await s.request(path, { action: 'approve', note: 'fixture', version: 0 }, s.admin)).status, 200)
-    assert.equal((await s.request(path, { action: 'paid', note: 'fixture', reference: 'fixture', version: 1 }, s.admin)).status, 200)
+    const claimResponse = await s.request(path, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, s.admin)
+    assert.equal(claimResponse.status, 200)
+    const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
+    assert.equal((await s.request(path, { action: 'paid', note: 'fixture', reference: 'fixture-' + p.id, ...claim }, s.admin)).status, 200)
     s.db.prepare('UPDATE partner_payouts SET created_at=? WHERE id=?').run(Date.now() - PAYOUT_COOLDOWN_MS, p.id as string)
   }
   await pay(s.db.prepare('SELECT id FROM partner_payouts').get() as { id: string })
@@ -1753,4 +1774,117 @@ test('admin overview reports actual SMS configuration without contacting supply 
   assert.deepEqual(await read(), { configured: true, checkoutReady: false })
   s.env.GPTIBO_SUPPLY_ENABLED = 'codex-sms-once'; s.env.ZPAY_KEY = undefined
   assert.deepEqual(await read(), { configured: true, checkoutReady: false })
+})
+
+test('payout safety: different request keys cannot reserve the same earnings twice', async t => {
+  const s = await financeFixture(t), order = await s.create()
+  const results = await Promise.all(Array.from({ length: 20 }, () => s.payout()))
+  assert.equal(results.filter(r => r.status === 201).length, 1)
+  assert.equal(results.filter(r => r.status === 409).length, 19)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_payouts').get()!.n, 1)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_payout_items WHERE order_id=?').get(order)!.n, 1)
+})
+
+test('payout safety: receipt reuse is blocked across payouts and concurrent registration is single use', async t => {
+  const s = await financeFixture(t)
+  const next = async () => {
+    await s.create(); assert.equal((await s.payout()).status, 201)
+    const p = s.db.prepare("SELECT * FROM partner_payouts WHERE status='pending'").get()!, path = '/api/admin/partner-payouts/' + p.id
+    assert.equal((await s.request(path, { action: 'approve', version: 0, note: '审核' }, s.admin)).status, 200)
+    const start = await s.request(path, { action: 'start-transfer', version: 1, note: '领取' }, s.admin)
+    assert.equal(start.status, 200)
+    return { id: p.id, path, claim: { version: 2, attemptId: (await start.json()).attemptId, transferConfirmed: true } }
+  }
+  const one = await next()
+  const payload = { action: 'paid', note: '模拟记录', reference: 'mock-transfer-01', ...one.claim }
+  const results = await Promise.all(Array.from({ length: 20 }, () => s.request(one.path, payload, s.admin)))
+  assert.equal(results.filter(r => r.status === 200).length, 1)
+  assert.equal(results.filter(r => r.status === 409).length, 19)
+  s.db.prepare('UPDATE partner_payouts SET cooldown_exempt=1 WHERE id=?').run(one.id)
+  const two = await next()
+  assert.equal((await s.request(two.path, { ...payload, ...two.claim, reference: ' MOCK-TRANSFER-01 ' }, s.admin)).status, 409)
+  assert.equal(s.db.prepare('SELECT status FROM partner_payouts WHERE id=?').get(two.id)!.status, 'pending')
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_transfer_receipts').get()!.n, 1)
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM admin_audit WHERE action='payout-handle'").get()!.n, 1)
+  assert.equal((await s.request(two.path, { ...payload, ...two.claim, reference: 'MOCK-TRANSFER-02', transferConfirmed: false }, s.admin)).status, 400)
+  assert.equal((await s.request(two.path, { ...payload, ...two.claim, reference: 'MOCK-TRANSFER-02' }, s.admin)).status, 200)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM orders WHERE payout_id IS NOT NULL').get()!.n, 2)
+})
+
+test('payout safety: batch failure rolls back receipt, audit, status and release of orders', async t => {
+  for (const action of ['paid', 'confirm-not-transferred']) {
+    const s = await financeFixture(t), order = await s.create()
+    await s.payout()
+    const p = s.db.prepare('SELECT * FROM partner_payouts').get()!, path = '/api/admin/partner-payouts/' + p.id
+    assert.equal((await s.request(path, { action: 'approve', version: 0, note: '审核' }, s.admin)).status, 200)
+    const start = await s.request(path, { action: 'start-transfer', version: 1, note: '领取' }, s.admin)
+    assert.equal(start.status, 200)
+    const payload = { action, version: 2, note: '本地模拟', reference: 'MOCK', attemptId: (await start.json()).attemptId, transferConfirmed: true, confirmedNotTransferred: true, evidence: '本地模拟已经核对付款记录没有转账' }
+    s.db.exec("CREATE TRIGGER fail_payout BEFORE UPDATE OF status ON partner_payouts BEGIN SELECT RAISE(FAIL,'test rollback'); END")
+    assert.equal((await s.request(path, payload, s.admin)).status, 503)
+    assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_transfer_receipts').get()!.n, 0)
+    assert.equal(s.db.prepare("SELECT COUNT(*) n FROM admin_audit WHERE action='payout-handle'").get()!.n, 0)
+    assert.equal(s.db.prepare('SELECT version FROM partner_payouts').get()!.version, 2)
+    assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order)!.payout_id, p.id)
+    s.db.exec('DROP TRIGGER fail_payout')
+    assert.equal((await s.request(path, payload, s.admin)).status, 200)
+    assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order)!.payout_id, action === 'paid' ? p.id : null)
+  }
+})
+
+test('payout safety: concurrent refund and transfer claim preserve reservations; unknown does not expire', async t => {
+  const s = await financeFixture(t), order = await s.create()
+  await s.payout()
+  const p = s.db.prepare('SELECT * FROM partner_payouts').get()!, path = '/api/admin/partner-payouts/' + p.id
+  assert.equal((await s.request(path, { action: 'approve', version: 0, note: '审核' }, s.admin)).status, 200)
+  const [start] = await Promise.all([s.request(path, { action: 'start-transfer', version: 1, note: '领取' }, s.admin), s.apply(order)])
+  assert.ok([200, 409].includes(start.status))
+  const state = s.db.prepare('SELECT * FROM partner_payouts').get()!
+  assert.equal(state.status, 'pending')
+  assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order)!.payout_id, p.id)
+  if (start.status === 200) {
+    assert.equal(state.transfer_state, 'transferring')
+    assert.equal((await s.request(path, { action: 'mark-unknown', version: 2, attemptId: state.transfer_id, note: '核对中' }, s.admin)).status, 200)
+    s.db.exec('UPDATE partner_payouts SET transfer_started_at=1,created_at=1,cooldown_exempt=1')
+    assert.equal((await s.request(path, { action: 'start-transfer', version: 3, note: '超时不能重试' }, s.admin)).status, 409)
+    assert.equal((await s.request(path, { action: 'rejected', version: 3, note: '不能解锁' }, s.admin)).status, 409)
+    assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order)!.payout_id, p.id)
+    await s.create()
+    assert.equal((await s.payout()).status, 409)
+  } else assert.equal(state.transfer_state, 'idle')
+})
+
+test('payout safety: upgrade quarantines legacy reviewed payouts and preserves financial snapshots', t => {
+  const db = new DatabaseSync(':memory:'); t.after(() => db.close())
+  for (const file of readdirSync(new URL('../migrations/', import.meta.url)).filter(f => f.endsWith('.sql') && f < '0062_').sort()) db.exec(readFileSync(new URL('../migrations/' + file, import.meta.url), 'utf8'))
+  db.exec("INSERT INTO partners(id,slug,name,email,created_at,updated_at) VALUES ('legacy','LEGACY','local','legacy@example.test',1,1)")
+  for (const [id, status, reviewed, ref] of [['approved', 'pending', 2, ''], ['paid-a', 'paid', 2, 'mock-old'], ['paid-b', 'paid', 2, ' MOCK-OLD '], ['rejected', 'rejected', null, '']]) {
+    db.prepare('INSERT INTO partner_payouts(id,partner_id,amount_cents,gross_cents,deduction_cents,status,recipient,created_at,request_key,reviewed_at,reference) VALUES (?,\'legacy\',3900,4900,1000,?,\'local\',1,?,?,?)').run(id, status, id, reviewed, ref)
+  }
+  const fields = 'id,partner_id,amount_cents,gross_cents,deduction_cents,status,recipient,created_at,request_key,reviewed_at,reference'
+  const before = db.prepare('SELECT ' + fields + ' FROM partner_payouts ORDER BY id').all()
+  db.exec(readFileSync(new URL('../migrations/0062_payout_transfer_guard.sql', import.meta.url), 'utf8'))
+  assert.deepEqual(db.prepare('SELECT ' + fields + ' FROM partner_payouts ORDER BY id').all(), before)
+  const pending = db.prepare("SELECT * FROM partner_payouts WHERE id='approved'").get()!
+  assert.equal(pending.transfer_state, 'unknown'); assert.equal(pending.transfer_id, 'legacy-approved'); assert.equal(pending.version, 1)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM partner_transfer_receipts').get()!.n, 1)
+  assert.equal(db.prepare('SELECT reference FROM partner_transfer_receipts').get()!.reference, 'MOCK-OLD')
+  assert.equal(db.prepare("SELECT transfer_state FROM partner_payouts WHERE id='paid-a'").get()!.transfer_state, 'succeeded')
+})
+
+test('payout safety: changed amount, items or reservations block transfer before any claim', async t => {
+  for (const mutation of ['amount', 'missing-item', 'lost-reservation', 'refund-hold']) {
+    const s = await financeFixture(t), order = await s.create()
+    await s.payout()
+    const p = s.db.prepare('SELECT * FROM partner_payouts').get()!, path = '/api/admin/partner-payouts/' + p.id
+    assert.equal((await s.request(path, { action: 'approve', version: 0, note: '审核' }, s.admin)).status, 200)
+    if (mutation === 'amount') s.db.exec('UPDATE partner_payouts SET amount_cents=amount_cents+1')
+    if (mutation === 'missing-item') s.db.exec('DELETE FROM partner_payout_items')
+    if (mutation === 'lost-reservation') s.db.prepare('UPDATE orders SET payout_id=NULL WHERE id=?').run(order)
+    if (mutation === 'refund-hold') s.db.prepare('UPDATE orders SET refund_hold=1 WHERE id=?').run(order)
+    assert.equal((await s.request(path, { action: 'start-transfer', version: 1, note: '禁止不一致的转账' }, s.admin)).status, 409, mutation)
+    const stored = s.db.prepare('SELECT * FROM partner_payouts').get()!
+    assert.equal(stored.transfer_state, 'idle', mutation); assert.equal(stored.transfer_id, null, mutation); assert.equal(stored.version, 1, mutation)
+    assert.equal(s.db.prepare("SELECT COUNT(*) n FROM admin_audit WHERE action='payout-transfer-start'").get()!.n, 0, mutation)
+  }
 })
