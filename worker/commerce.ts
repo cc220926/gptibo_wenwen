@@ -120,7 +120,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
         supportContactsSettings(env, partner?.id),
         partner ? publicAnnouncement(env, partner.id) : platformAnnouncement(env).then(value => value.enabled ? value : null),
         platformProductVisibility(env),
-        partner ? null : platformMarketingMetric(env),
+        platformMarketingMetric(env).catch(() => null),
         partner ? null : platformBranding(env),
       ])
       // Storefront prices are configured retail prices, independent of supplier latency.
