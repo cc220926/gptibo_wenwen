@@ -37,6 +37,7 @@ import { rechargeReminderPreview } from './recharge-reminders.ts'
 import { opsNotificationsAdmin } from './ops-notifications.ts'
 import { adminGmailOrder, confirmGmailNotPurchased, fulfillGmail, gmailCheckoutEnabled, gmailProductsRoute, gmailSnapshot, gmailSnapshotStatement } from './account_supplier/service.ts'
 import { platformProductHidden, platformProductVisibility, platformProductVisibilityRoute } from './platform-product-visibility.ts'
+import { backfillPartnerPrices } from './partner-price-backfill.ts'
 import { platformMarketingMetric, platformMarketingMetricRoute } from './platform-marketing-metric.ts'
 
 type Plan = { delivery_instructions: string; partner_enabled: number; id: string; product_id: string; name: string; price_cents: number; enabled: number; renewal_only: number; version: number }
@@ -376,6 +377,7 @@ async function admin(request: Request, env: Env, url: URL): Promise<Response> {
     await db.batch([
       db.prepare('INSERT INTO admin_audit(id,action,target_id,note,created_at) SELECT ?,?,?,?,? FROM catalog_plans WHERE id=? AND version=?').bind(eventId, 'plan-update', plan.id, `${env.ADMIN_USERNAME}: ${plan.price_cents}→${data.priceCents}; enabled ${plan.enabled}→${Number(data.enabled)}; ${note}`, Date.now(), plan.id, plan.version),
       db.prepare('UPDATE catalog_plans SET price_cents=?,enabled=?,purchase_note=COALESCE(?,purchase_note),delivery_instructions=COALESCE(?,delivery_instructions),partner_enabled=COALESCE(?,partner_enabled),version=version+1,updated_at=? WHERE id=? AND version=?').bind(Number(data.priceCents), Number(data.enabled), typeof data.purchaseNote === 'string' ? data.purchaseNote.trim() : null, typeof data.deliveryInstructions === 'string' ? data.deliveryInstructions.trim() : null, typeof data.partnerEnabled === 'boolean' ? Number(data.partnerEnabled) : null, Date.now(), plan.id, plan.version),
+      backfillPartnerPrices(env, eventId, plan.id),
     ])
     if (!await db.prepare('SELECT id FROM admin_audit WHERE id=?').bind(eventId).first()) throw new ApiError('套餐已更新，请刷新后重试。', 409)
     return json({ ok: true })

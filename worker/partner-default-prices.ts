@@ -1,6 +1,7 @@
 import { productNameForId } from '../shared/email-products.ts'
 import type { DefaultSupplyPlan, DefaultSupplySettings } from '../shared/partner-default-prices.ts'
 import { ApiError, body, json, type Env } from './platform.ts'
+import { backfillPartnerPrices } from './partner-price-backfill.ts'
 
 export async function defaultSupplySettings(env: Env): Promise<DefaultSupplySettings> {
   const settings = await env.INTEREST_DB.prepare('SELECT version FROM partner_default_price_settings WHERE id=1').first<{ version: number }>()
@@ -50,6 +51,7 @@ export async function defaultSupplyRoute(request: Request, env: Env) {
       WHERE EXISTS(SELECT 1 FROM partner_default_price_settings WHERE id=1 AND change_id=?)
       AND EXISTS(SELECT 1 FROM partner_default_prices d WHERE d.plan=partner_prices.plan AND d.cost_cents<>partner_prices.cost_cents)`).bind(id),
     db.prepare("INSERT INTO admin_audit(id,target_id,action,note,created_at) SELECT ?,'partner-default-prices','partner-default-prices',?,? FROM partner_default_price_settings WHERE id=1 AND change_id=?").bind(id, note, now, id),
+    backfillPartnerPrices(env, id),
   ])
   if (!await db.prepare('SELECT id FROM admin_audit WHERE id=?').bind(id).first()) throw new ApiError('统一供货价、平台或代理售价已更新，请刷新核对后再保存。', 409)
   return json(await defaultSupplySettings(env))

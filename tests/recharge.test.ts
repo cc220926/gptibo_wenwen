@@ -2611,3 +2611,27 @@ for (const [plan, points, price, cost, supply] of [['codex-credits-250', 250, 99
     assert.equal((await check(await s.call('/api/orders',payload,buyer))).order.id,order.id)
   })
 }
+
+for (const paidBefore of [false,true]) {
+ test(`partner sync: disabling a plan and agent sales (${paidBefore?'paid':'pending'}) preserves frozen payment, fulfillment and commission`,async t=>{
+  const s=setup(t),partner=s.partner(),buyer=await s.buyer(),admin=await s.login()
+  const check=async(r:Response,status=200)=>{assert.equal(r.status,status,await r.clone().text());return r.json()}
+  const payload={plan:'plus',partner:'partner-test',expectedPrice:15900,email:'buyer@example.test',key:crypto.randomUUID()}
+  const order=(await check(await s.call('/api/orders',payload,buyer),201)).order
+  await check(await s.query(order.id,buyer));if(paidBefore){s.setPayment('paid');await check(await s.query(order.id,buyer))}
+  const before=s.db.prepare('SELECT * FROM orders WHERE id=?').get(order.id)
+  const plan=s.db.prepare("SELECT version FROM catalog_plans WHERE id='plus'").get()!
+  await check(await s.call('/api/admin/plans/plus',{priceCents:14900,enabled:false,partnerEnabled:false,version:plan.version,note:'暂停新单'},admin))
+  assert.deepEqual(s.db.prepare('SELECT * FROM orders WHERE id=?').get(order.id),before)
+  const catalog=await check(await s.call('/api/catalog?partner=partner-test'))
+  assert.equal(catalog.plans.find((p:{id:string})=>p.id==='plus').enabled,0)
+  assert.equal((await s.call('/api/orders',{...payload,key:crypto.randomUUID()},buyer)).status,409)
+  if(!paidBefore){s.setPayment('paid');await check(await s.query(order.id,buyer))}
+  await check(await s.submit(order.id,buyer));s.setTask('succeeded')
+  assert.equal((await check(await s.query(order.id,buyer))).order.status,'success')
+  assert.equal((await check(await s.call('/api/partner/dashboard',undefined,partner))).stats.available,4900)
+  assert.equal(s.calls.filter(c=>c.path==='/v1/redemptions').length,1)
+  assert.equal((await check(await s.call('/api/orders',payload,buyer))).order.id,order.id)
+})
+
+}
