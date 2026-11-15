@@ -2285,3 +2285,115 @@ test('partner fixes: real-format detail still excludes other partners and preser
   assert.doesNotMatch(detail, /owner_hash|create_body|paymentQr|retryKey|credential_mode/)
   assert.deepEqual(s.db.prepare('SELECT * FROM orders WHERE id=?').get(id), before)
 })
+
+test('partner acceptance: isolated 149/139 order completes payment, delivery, 10-yuan commission and manual payout once', async t => {
+  // Fixture setup only: all databases, identities and upstream responses are local.
+  // From order creation onward, financial state changes only through Worker APIs.
+  const s = setup(t), partner = auditPartner(s), otherPartner = auditPartner(s, '2')
+  const buyer = await s.buyer(), stranger = await s.buyer(), admin = await s.login()
+  s.db.prepare('UPDATE partner_prices SET cost_cents=13900,price_cents=13900 WHERE partner_id=?').run(partner.id)
+  const control = await s.create(stranger)
+  const controlSnapshot = () => ({
+    order: s.db.prepare('SELECT * FROM orders WHERE id=?').get(control.id),
+    supplier: s.db.prepare('SELECT * FROM recharge_orders WHERE order_id=?').get(control.id),
+    events: s.db.prepare('SELECT * FROM order_events WHERE order_id=? ORDER BY order_version').all(control.id),
+    mainPlan: s.db.prepare("SELECT * FROM catalog_plans WHERE id='plus'").get(),
+    otherPrices: s.db.prepare('SELECT * FROM partner_prices WHERE partner_id=?').all(otherPartner.id),
+  })
+  const untouched = controlSnapshot()
+  const response = async (r: Response, status = 200) => { assert.equal(r.status, status, await r.clone().text()); return r.json() }
+  const dashboard = async () => response(await s.call('/api/partner/dashboard', undefined, partner.cookie))
+  const payout = (key = crypto.randomUUID(), accountVersion = 1) => s.call('/api/partner/payouts', { key, accountVersion }, partner.cookie)
+  const notice = (type: string, event: string, valid = true) => {
+    const stamp = String(Math.floor(Date.now() / 1000))
+    const raw = JSON.stringify({ event_id: event, type, data: { order_id: 'ord_test' } })
+    return worker.fetch(new Request('https://shop.example.invalid/api/recharge/webhook', { method: 'POST', headers: {
+      'Content-Type': 'application/json', 'X-Quefa-Event': type, 'X-Quefa-Event-Id': event, 'X-Quefa-Delivery': 'dlv_' + event,
+      'X-Quefa-Timestamp': stamp, 'X-Quefa-Signature': `t=${stamp},v1=${valid ? mac(stamp + '.' + raw, webhookSecret) : '0'.repeat(64)}`,
+    }, body: raw }), s.env)
+  }
+
+  await response(await s.call('/api/partner/prices/plus', { priceCents: 14900, version: 0 }, partner.cookie))
+  const catalog = await response(await s.call('/api/catalog?partner=' + partner.slug))
+  assert.equal(catalog.plans.find((p: { id: string }) => p.id === 'plus').price_cents, 14900)
+  const payload = { plan: 'plus', partner: partner.slug, expectedPrice: 14900, email: 'acceptance-buyer@example.test', key: crypto.randomUUID() }
+  const order = (await response(await s.call('/api/orders', payload, buyer), 201)).order
+  assert.equal((await response(await s.call('/api/orders', payload, buyer))).order.id, order.id)
+  assert.equal(s.db.prepare('SELECT cost_cents FROM orders WHERE id=?').get(order.id)!.cost_cents, 13900)
+  assert.equal((await dashboard()).stats.available, 0)
+  assert.equal((await s.submit(order.id, buyer)).status, 409)
+  assert.equal((await s.call('/api/orders/' + order.id, undefined, stranger)).status, 404)
+  assert.equal((await s.call('/api/partner/orders/' + order.id, undefined, otherPartner.cookie)).status, 404)
+  t.diagnostic('下单：149元，供货价139元，重复请求仍为同一订单；其他买家和分站不能读取。')
+
+  await response(await s.query(order.id, buyer))
+  assert.equal((await notice('order.paid', 'acceptance_bad', false)).status, 400)
+  // Even a valid payment notification cannot invent a successful payment.
+  await response(await notice('order.paid', 'acceptance_early'))
+  await response(await s.query(order.id, buyer))
+  assert.equal((await getOrder(s.env, order.id)).payment_status, 'unpaid')
+  s.setPayment('paid')
+  await response(await notice('order.paid', 'acceptance_paid'))
+  await response(await notice('order.paid', 'acceptance_paid'))
+  const paid = (await response(await s.query(order.id, buyer))).order
+  assert.equal(paid.paymentStatus, 'paid'); assert.equal(paid.status, 'session')
+  assert.equal((await dashboard()).stats.available, 0)
+  await response(await s.call('/api/partner/payout-account', { phone: '13800000000', name: '本地模拟收款人', version: 0 }, partner.cookie))
+  assert.equal((await payout()).status, 409)
+  t.diagnostic('支付：验签及主动查单通过后确认已付；尚未履约时收益为0，禁止提现。')
+
+  const submitKey = crypto.randomUUID()
+  await response(await s.submit(order.id, buyer, submitKey))
+  assert.equal((await s.submit(order.id, buyer)).status, 409)
+  assert.equal((await getOrder(s.env, order.id)).status, 'processing')
+  assert.equal((await dashboard()).stats.available, 0)
+  s.setTask('succeeded')
+  await response(await notice('fulfillment.updated', 'acceptance_delivered'))
+  await response(await notice('fulfillment.updated', 'acceptance_delivered'))
+  const delivered = (await response(await s.query(order.id, buyer))).order
+  assert.equal(delivered.status, 'success')
+  assert.equal((await dashboard()).stats.available, 1000)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 1)
+  assert.equal(s.calls.filter(c => c.path === '/v1/orders').length, 1)
+  const details = await response(await s.call('/api/partner/orders/' + order.id, undefined, partner.cookie))
+  assert.equal(details.order.profit_cents, 1000)
+  assert.doesNotMatch(JSON.stringify(details), /PRIVATE-TOKEN|retryKey|paymentUrl/)
+  t.diagnostic('履约与收益：模拟开通成功，产生10元可提现收益，重复通知和重复提交没有二次充值。')
+
+  assert.equal((await payout(crypto.randomUUID(), 0)).status, 409)
+  const payoutKey = crypto.randomUUID()
+  await response(await payout(payoutKey), 201)
+  await response(await payout(payoutKey))
+  const ps = s.db.prepare('SELECT * FROM partner_payouts WHERE partner_id=?').get(partner.id)!
+  assert.equal(ps.amount_cents, 1000)
+  assert.equal(ps.recipient, '13800000000 / 本地模拟收款人')
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_payouts').get()!.n, 1)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_payout_items WHERE payout_id=? AND order_id=? AND profit_cents=1000').get(ps.id, order.id)!.n, 1)
+  assert.equal((await dashboard()).stats.available, 0)
+  assert.equal((await dashboard()).totals.pending, 1000)
+  const path = '/api/admin/partner-payouts/' + ps.id
+  assert.equal((await s.call(path, { action: 'approve', version: 0, note: '仅本地模拟' }, partner.cookie)).status, 401)
+  assert.equal((await s.call(path, { action: 'paid', version: 0, note: '仅本地模拟', reference: 'SIMULATED-NO-TRANSFER' }, admin)).status, 409)
+  s.override(path => { if (path === '/v1/orders/ord_test') throw new Error('simulated supplier outage') })
+  assert.equal((await s.call(path, { action: 'approve', version: 0, note: '仅本地模拟' }, admin)).status, 503)
+  assert.equal(s.db.prepare('SELECT reviewed_at FROM partner_payouts WHERE id=?').get(ps.id)!.reviewed_at, null)
+  s.override(undefined)
+  await response(await s.call(path, { action: 'approve', version: 0, note: '本地模拟核对收益通过' }, admin))
+  assert.equal((await s.call(path, { action: 'paid', version: 1, note: '本地模拟', reference: '' }, admin)).status, 400)
+  t.diagnostic('提现申请与审核：锁定10元，重复申请不重复占款；越权、未审核和上游查询异常均拦截。')
+
+  // This is bookkeeping in an in-memory database, never an actual transfer.
+  const transfer = { action: 'paid', version: 1, note: '仅本地模拟登记，不发生真实转账', reference: 'SIMULATED-NO-TRANSFER' }
+  await response(await s.call(path, transfer, admin))
+  assert.equal((await s.call(path, transfer, admin)).status, 409)
+  const final = await dashboard()
+  assert.equal(final.stats.available, 0); assert.equal(final.totals.pending, 0); assert.equal(final.totals.paid, 1000)
+  assert.equal(final.stats.payoutCoolingDown, true)
+  assert.equal((await payout()).status, 409)
+  assert.equal((await response(await s.call('/api/partner/orders/' + order.id, undefined, partner.cookie))).order.payout_status, 'paid')
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM order_events WHERE order_id=? AND action=\'payment-confirmed\'').get(order.id)!.n, 1)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_redemptions WHERE order_id=?').get(order.id)!.n, 1)
+  assert.deepEqual(controlSnapshot(), untouched)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_payouts WHERE partner_id=?').get(otherPartner.id)!.n, 0)
+  t.diagnostic('模拟转账登记：已提现10元、待付0、可提0；重复登记被拒，正常对照订单及其他分站配置保持不变。')
+})
