@@ -334,6 +334,7 @@ test('extra GPTibo SKUs (接码 / ChatGPT 成品号) open only by exact code and
   await s.pay(o.id)
   const result = await s.read(o.id)
   assert.equal(result.status, 'success'); assert.equal(result.delivery.value, content); assert.equal(s.posted, 1)
+  assert.equal(s.db.prepare("SELECT note FROM order_events WHERE order_id=? AND action='service-dispatch'").get(o.id)!.note, '付款已确认，等待原订单自动采购')
   assert.equal(JSON.parse(s.calls.find(c => c.path === '/orders')!.raw).product_code, 'gpt-plus-account')
   // Closing the SKU stops new purchases without touching delivered orders.
   s.env.GPTIBO_SUPPLY_ENABLED = 'codex-sms-once'; assert.equal((await s.create()).status, 409)

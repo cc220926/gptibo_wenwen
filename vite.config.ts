@@ -6,6 +6,10 @@ import { fileURLToPath, URL } from 'node:url'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Vite 8's default CSS target rewrites authored `max-width` queries into
+  // range syntax (`width<=760px`), which iOS Safari before 16.4 ignores, so
+  // phones fell back to the desktop layout. Keep classic media queries.
+  build: { cssTarget: ['chrome87', 'edge88', 'firefox78', 'safari14'] },
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   server: {
     host: '127.0.0.1', port: 5173,

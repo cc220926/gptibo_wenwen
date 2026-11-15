@@ -89,7 +89,7 @@ export async function fulfillService(env: Env, id: string) {
     env.INTEREST_DB.prepare(`UPDATE orders SET status=CASE WHEN t.state='delivered' THEN 'success' WHEN t.state='review' THEN 'failed' ELSE 'processing' END,
       started_at=COALESCE(started_at,?),updated_at=?,version=version+1,last_event_id=? FROM fulfillment_tasks t
       WHERE orders.id=? AND t.order_id=orders.id AND ${eligible} AND orders.status IN ('session','pending','cancelled') AND t.state IN ('delivered','queued','review')`).bind(now, now, event, id),
-    env.INTEREST_DB.prepare("INSERT INTO order_events(id,order_id,actor,action,from_status,to_status,note,order_version,created_at) SELECT ?,id,'system','service-dispatch','session',status,CASE status WHEN 'success' THEN '自有库存已交付，可在原订单领取' WHEN 'failed' THEN '到期后确认收款，请人工核对原订单，未重复分配库存' WHEN EXISTS(SELECT 1 FROM muse_orders m WHERE m.order_id=orders.id) THEN '付款已确认，等待原订单自动采购' ELSE '付款已确认，等待人工交付' END,version,? FROM orders WHERE id=? AND last_event_id=?").bind(event, now, id, event),
+    env.INTEREST_DB.prepare("INSERT INTO order_events(id,order_id,actor,action,from_status,to_status,note,order_version,created_at) SELECT ?,id,'system','service-dispatch','session',status,CASE WHEN status='success' THEN '自有库存已交付，可在原订单领取' WHEN status='failed' THEN '到期后确认收款，请人工核对原订单，未重复分配库存' WHEN EXISTS(SELECT 1 FROM muse_orders m WHERE m.order_id=orders.id) THEN '付款已确认，等待原订单自动采购' ELSE '付款已确认，等待人工交付' END,version,? FROM orders WHERE id=? AND last_event_id=?").bind(event, now, id, event),
   ])
   if (await musePurchase(env, id)) await fulfillMuse(env, id)
 }
