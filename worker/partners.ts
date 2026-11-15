@@ -1,6 +1,7 @@
+import { checkoutEnabled as supplierCheckoutEnabled } from './recharge/client.ts'
 import { eligibleSql, profitSql, MIN_PAYOUT_CENTS, PAYOUT_COOLDOWN_MS } from './finance.ts'
 import { settleDue, type Order } from './order-state.ts'
-import { rechargeSummary, syncRechargeOrder } from './recharge/service.ts'
+import { rechargeSummary, syncRechargeOrder, supplierCatalog } from './recharge/service.ts'
 import { ApiError, body, json, type Env } from './platform.ts'
 import { emailValue, mailConfigured, partnerLimit, requirePartner, sendPartnerInvitation, type Partner } from './partner-auth.ts'
 import { referralCodePattern } from '../shared/partner-link.ts'
@@ -52,7 +53,8 @@ async function verifySupplierPayout(env: Env, partnerId: string, payoutId?: stri
 }
 export async function partnerDashboard(env: Env, p: Partner) {
   await settleDue(env, p.id)
-  const plans = (await env.INTEREST_DB.prepare('SELECT c.id,c.product_id,c.name,CASE WHEN c.partner_enabled=1 THEN c.enabled ELSE 0 END enabled,c.renewal_only,pp.cost_cents,pp.price_cents,pp.version FROM catalog_plans c JOIN partner_prices pp ON pp.plan=c.id WHERE pp.partner_id=? ORDER BY c.rowid').bind(p.id).all()).results
+  let plans = (await env.INTEREST_DB.prepare('SELECT c.id,c.product_id,c.name,CASE WHEN c.partner_enabled=1 THEN c.enabled ELSE 0 END enabled,c.renewal_only,pp.cost_cents,pp.price_cents,pp.version FROM catalog_plans c JOIN partner_prices pp ON pp.plan=c.id WHERE pp.partner_id=? ORDER BY c.rowid').bind(p.id).all<{ id: string; product_id: string; name: string; enabled: number; renewal_only: number; cost_cents: number; price_cents: number; version: number }>()).results
+  if (supplierCheckoutEnabled(env)) plans = await supplierCatalog(env, plans, p.id)
   const stats = await env.INTEREST_DB.prepare(`SELECT COUNT(*) total, COALESCE(SUM(CASE WHEN mode='demo' AND status='success' THEN ${profit} ELSE 0 END),0) demo_profit, COALESCE(SUM(CASE WHEN ${eligible} AND payout_id IS NULL THEN ${profit} ELSE 0 END),0) available FROM orders WHERE partner_id=?`).bind(p.id).first<{total:number;demo_profit:number;available:number}>()
   const debts = await env.INTEREST_DB.prepare('SELECT COALESCE(SUM(amount_cents),0) amount FROM partner_debits WHERE partner_id=? AND payout_id IS NULL').bind(p.id).first<{amount:number}>()
   const held = await env.INTEREST_DB.prepare(`SELECT ${paidRefundHoldSql('?')} n`).bind(p.id).first<{n:number}>()
@@ -111,7 +113,7 @@ export async function partnerRoutes(request: Request, env: Env, url: URL) {
   if (path === '/api/partner/product-order') return productOrderRoute(request, env, p)
   if (path === '/api/partner/dashboard' && request.method === 'GET') return json(await partnerDashboard(env, p))
   if (path === '/api/partner/orders' && request.method === 'GET') return orders(env, p.id, url)
-  const orderDetail = path.match(/^\/api\/partner\/orders\/([a-f0-9-]{36})$/)
+  const orderDetail = path.match(/^\/api\/partner\/orders\/(YMX-[A-F0-9]{32}|[a-f0-9-]{36})$/)
   if (orderDetail && request.method === 'GET') return orders(env, p.id, url, orderDetail[1])
   if (path === '/api/partner/order-summary' && request.method === 'GET') {
     await settleDue(env, p.id)
@@ -187,7 +189,7 @@ export async function adminPartnerRoutes(request: Request, env: Env, url: URL) {
     try { await sendPartnerInvitation(env, p!); invitationSent = true } catch { /* Keep the account and link; the administrator can resend the invitation. */ }
     return json({ ok: true, id, slug, invitationSent, message: invitationSent ? '代理已开通，邀请邮件已发送。代理可通过邮件中的工作台入口自行获取登录验证码。' : '代理已开通，但邀请邮件发送失败。请在代理详情中重发。' }, 201)
   }
-  const orderDetail = path.match(/^\/api\/admin\/partners\/([a-f0-9-]{36})\/orders\/([a-f0-9-]{36})$/)
+  const orderDetail = path.match(/^\/api\/admin\/partners\/([a-f0-9-]{36})\/orders\/(YMX-[A-F0-9]{32}|[a-f0-9-]{36})$/)
   if (orderDetail && method === 'GET') return orders(env, orderDetail[1], url, orderDetail[2])
   const match = path.match(/^\/api\/admin\/partners\/([a-f0-9-]{36})(?:\/(prices\/([a-z0-9-]+)|orders|order-summary|preview|invitation|support-contacts|announcement|product-order))?$/)
   if (match) {

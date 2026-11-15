@@ -1565,10 +1565,10 @@ test('a payout reserved at an old supplier margin cannot be approved after the c
   assert.equal((await (await s.call('/api/partner/dashboard',undefined,partner)).json()).stats.available,4000)
 })
 
-test('partner configured price remains visible while unsafe upstream supply rejects order creation', async t => {
+test('partner configured price remains visible but unsafe supply disables sales and rejects creation', async t => {
   const s = setup(t); s.partner(); const buyer = await s.buyer()
   s.db.prepare("UPDATE partner_prices SET cost_cents=10000 WHERE partner_id='partner-test'").run()
-  assert.equal((await (await s.call('/api/catalog?partner=partner-test')).json()).plans[0].enabled,1)
+  assert.equal((await (await s.call('/api/catalog?partner=partner-test')).json()).plans[0].enabled,0)
   assert.equal((await s.call('/api/orders',{ partner: 'partner-test', plan: 'plus', expectedPrice: 15900, email: 'buyer@example.test', key: crypto.randomUUID() },buyer)).status,409)
   assert.equal(s.db.prepare('SELECT COUNT(*) n FROM orders').get()!.n,0)
 })
@@ -2193,4 +2193,95 @@ test('security fix: active recharge lease blocks refund before an attempt exists
   assert.equal(s.db.prepare('SELECT refund_hold FROM orders WHERE id=?').get(order.id)!.refund_hold, 0)
   s.db.prepare('UPDATE recharge_orders SET lease_until=? WHERE order_id=?').run(Date.now() - 1, order.id)
   assert.equal((await refund()).status, 201)
+})
+
+
+function auditPartner(s: ReturnType<typeof setup>, suffix = '1') {
+  s.env.PARTNER_AUTH_SECRET = 'audit-only-partner-auth-secret-at-least-32'
+  const id = crypto.randomUUID(), slug = 'AUDIT' + suffix, token = (suffix === '1' ? 'b' : 'c').repeat(64), now = Date.now()
+  s.db.prepare('INSERT INTO partners(id,slug,name,email,created_at,updated_at) VALUES(?,?,?,?,?,?)').run(id,slug,'Audit shop',`partner${suffix}@example.test`,now,now)
+  s.db.prepare('INSERT INTO partner_prices(partner_id,plan,cost_cents,price_cents) VALUES(?,?,?,?)').run(id,'plus',11000,15900)
+  s.db.prepare('INSERT INTO partner_sessions(token_hash,partner_id,auth_version,credential_version,expires_at) VALUES(?,?,0,?,?)').run(digest(token),id,digest(s.env.PARTNER_AUTH_SECRET),now+3600000)
+  return { id, slug, cookie: '__Host-ymx_partner='+token }
+}
+
+test('partner fixes: real API order details work for its partner and admin', async t => {
+  const s=setup(t), p=auditPartner(s), buyer=await s.buyer(), admin=await s.login()
+  const r=await s.call('/api/orders',{plan:'plus',partner:p.slug,expectedPrice:15900,email:'buyer@example.test',key:crypto.randomUUID()},buyer)
+  assert.equal(r.status,201,await r.clone().text())
+  const order=(await r.json()).order
+  assert.match(order.id,/^YMX-[A-Z0-9]+$/)
+  const listed=await (await s.call('/api/partner/orders',undefined,p.cookie)).json()
+  assert.equal(listed.rows[0].id,order.id)
+  assert.equal((await s.call('/api/partner/orders/'+order.id,undefined,p.cookie)).status,200)
+  assert.equal((await s.call(`/api/admin/partners/${p.id}/orders/${order.id}`,undefined,admin)).status,200)
+  assert.equal((await s.call('/api/orders/'+order.id,undefined,buyer)).status,200)
+})
+
+test('partner fixes: unsafe partner prices are disabled before checkout', async t => {
+  const s=setup(t), p=auditPartner(s), buyer=await s.buyer()
+  s.db.prepare('UPDATE partner_prices SET cost_cents=10000 WHERE partner_id=?').run(p.id)
+  const catalog=await (await s.call('/api/catalog?partner='+p.slug)).json()
+  assert.equal(catalog.plans.find((x:{id:string})=>x.id==='plus').enabled,0)
+  const r=await s.call('/api/orders',{plan:'plus',partner:p.slug,expectedPrice:15900,email:'buyer@example.test',key:crypto.randomUUID()},buyer)
+  assert.equal(r.status,409)
+  assert.match((await r.json()).error,/供货价需重新核对/)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM orders').get()!.n,0)
+})
+
+test('partner fixes: cached catalog shares supplier reads but checks current partner prices and expires', async t => {
+  const s = setup(t), p = auditPartner(s), buyer = await s.buyer()
+  let now = Date.now(); t.mock.method(Date, 'now', () => now)
+  const catalog = async () => (await (await s.call('/api/catalog?partner=' + p.slug)).json()).plans.find((p: { id: string }) => p.id === 'plus')
+  const productsRead = () => s.calls.filter(c => c.path === '/v1/products').length
+  const first = await Promise.all([catalog(), catalog(), catalog()])
+  assert.ok(first.every(plan => plan.enabled === 1)); assert.equal(productsRead(), 1)
+  s.db.prepare('UPDATE partner_prices SET cost_cents=10000 WHERE partner_id=?').run(p.id)
+  assert.equal((await catalog()).enabled, 0); assert.equal(productsRead(), 1)
+  const dashboard = await (await s.call('/api/partner/dashboard', undefined, p.cookie)).json()
+  assert.equal(dashboard.plans[0].enabled, 0); assert.match(dashboard.plans[0].saleIssue, /供货价/)
+  s.db.prepare('UPDATE partner_prices SET cost_cents=11000 WHERE partner_id=?').run(p.id)
+  assert.equal((await catalog()).enabled, 1)
+  s.products[0].supply_price = '111.00'
+  // Cache is display-only: fresh checkout validation rejects the now-unsafe cost.
+  const r = await s.call('/api/orders', { plan: 'plus', partner: p.slug, expectedPrice: 15900, email: 'buyer@example.test', key: crypto.randomUUID() }, buyer)
+  assert.equal(r.status, 409); assert.equal(s.db.prepare('SELECT COUNT(*) n FROM orders').get()!.n, 0)
+  now += 60001
+  assert.equal((await catalog()).enabled, 0); assert.equal(productsRead(), 3)
+})
+
+test('partner fixes: catalog provider failure is contained and does not block paid fulfillment', async t => {
+  const s = setup(t), p = auditPartner(s), buyer = await s.buyer()
+  let now = Date.now(); t.mock.method(Date, 'now', () => now)
+  const created = await s.call('/api/orders', { plan: 'plus', partner: p.slug, expectedPrice: 15900, email: 'buyer@example.test', key: crypto.randomUUID() }, buyer)
+  assert.equal(created.status, 201); const order = (await created.json()).order
+  await s.query(order.id, buyer); s.setPayment('paid'); await s.query(order.id, buyer)
+  s.override(path => path === '/v1/products' ? new Response('unavailable', { status: 503 }) : undefined)
+  const before = s.calls.filter(c => c.path === '/v1/products').length
+  for (let i = 0; i < 3; i++) {
+    const response = await s.call('/api/catalog?partner=' + p.slug); assert.equal(response.status, 200)
+    const plan = (await response.json()).plans.find((p: { id: string }) => p.id === 'plus')
+    assert.equal(plan.enabled, 0); assert.match(plan.saleIssue, /暂时无法核对/)
+  }
+  assert.equal(s.calls.filter(c => c.path === '/v1/products').length, before + 1)
+  assert.equal((await s.submit(order.id, buyer)).status, 200)
+  s.setTask('succeeded'); const done = await s.query(order.id, buyer)
+  assert.equal(done.status, 200); assert.equal((await done.json()).order.status, 'success')
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 1)
+  s.override(() => undefined); now += 5001
+  const recovered = await (await s.call('/api/catalog?partner=' + p.slug)).json()
+  assert.equal(recovered.plans.find((p: { id: string }) => p.id === 'plus').enabled, 1)
+})
+
+test('partner fixes: real-format detail still excludes other partners and preserves order state', async t => {
+  const s = setup(t), p = auditPartner(s), other = auditPartner(s, '2').cookie, buyer = await s.buyer(), admin = await s.login()
+  const r = await s.call('/api/orders', { plan: 'plus', partner: p.slug, expectedPrice: 15900, email: 'buyer@example.test', key: crypto.randomUUID() }, buyer)
+  const id = (await r.json()).order.id, before = s.db.prepare('SELECT * FROM orders WHERE id=?').get(id)
+  assert.equal((await s.call('/api/partner/orders/' + id, undefined, other)).status, 404)
+  assert.equal((await s.call(`/api/admin/partners/${crypto.randomUUID()}/orders/${id}`, undefined, admin)).status, 404)
+  assert.equal((await s.call('/api/partner/orders/' + id)).status, 401)
+  const response = await s.call('/api/partner/orders/' + id, undefined, p.cookie)
+  assert.equal(response.status, 200); const detail = await response.text()
+  assert.doesNotMatch(detail, /owner_hash|create_body|paymentQr|retryKey|credential_mode/)
+  assert.deepEqual(s.db.prepare('SELECT * FROM orders WHERE id=?').get(id), before)
 })

@@ -38,12 +38,36 @@ function eligible(product: Product | undefined, price: number): product is Produ
   // max_sale_price is a historical compatibility field, not a retail ceiling.
   return !!product && product.available === true && product.quote_required !== true && product.currency === 'CNY' && product.max_quantity >= 1 && Array.isArray(product.delivery_modes) && product.delivery_modes.includes('auto_recharge') && amountCents(product.supply_price) > 0 && price >= amountCents(product.supply_price)
 }
-export async function supplierCatalog<T extends { id: string; price_cents: number; enabled: number }>(env: Env, plans: T[], partnerId?: string) {
-  const products = await supplierProducts(env); const map = productMap(env)
+// Catalog checks never authorize a payment: checkout still reads live supplier
+// prices. Share one short-lived request per environment/isolate, and briefly
+// cache failures to avoid turning a provider outage into a request storm.
+const catalogProducts = new WeakMap<Env, { identity: string; expiresAt: number; result: Promise<Product[]> }>()
+function cachedCatalogProducts(env: Env) {
+  const c = config(env), identity = JSON.stringify([c.account, c.key, c.secret])
+  const cached = catalogProducts.get(env)
+  if (cached && cached.identity === identity && cached.expiresAt > Date.now()) return cached.result
+  const entry = { identity, expiresAt: Date.now() + 60000, result: Promise.resolve([] as Product[]) }
+  entry.result = supplierProducts(env).catch(error => { entry.expiresAt = Date.now() + 5000; throw error })
+  catalogProducts.set(env, entry)
+  return entry.result
+}
+export async function supplierCatalog<T extends { id: string; price_cents: number; enabled: number }>(env: Env, plans: T[], partnerId?: string): Promise<(T & { saleIssue?: string })[]> {
+  const map = productMap(env)
+  if (!plans.some(plan => plan.enabled && map[plan.id])) return plans
   const costs = partnerId ? (await env.INTEREST_DB.prepare('SELECT plan,cost_cents FROM partner_prices WHERE partner_id=?').bind(partnerId).all<{ plan: string; cost_cents: number }>()).results : []
+  let products: Product[] | null
+  try { products = await cachedCatalogProducts(env) } catch { products = null }
   return plans.map(plan => {
-    const product = products.find(p => p.product_code === map[plan.id]); const cost = costs.find(c => c.plan === plan.id)?.cost_cents
-    return { ...plan, enabled: plan.enabled && eligible(product, plan.price_cents) && (!partnerId || (cost !== undefined && cost >= amountCents(product.supply_price))) ? 1 : 0 }
+    if (!map[plan.id] || !plan.enabled) return plan
+    let saleIssue: string | undefined
+    try {
+      const product = products?.find(p => p?.product_code === map[plan.id])
+      const cost = costs.find(c => c.plan === plan.id)?.cost_cents
+      if (!products) saleIssue = '供货状态暂时无法核对，请稍后刷新；已有订单仍可处理。'
+      else if (!eligible(product, plan.price_cents)) saleIssue = '套餐供货状态或售价需核对，暂停售卖。'
+      else if (partnerId && (cost === undefined || cost < amountCents(product.supply_price))) saleIssue = '代理供货价低于上游成本，请联系平台核对，暂停售卖。'
+    } catch { saleIssue = '供货信息暂时无法核对，请联系平台。' }
+    return { ...plan, enabled: saleIssue ? 0 : plan.enabled, ...(saleIssue ? { saleIssue } : {}) }
   })
 }
 // Only authorized, live orders get this immutable snapshot. No network write here.

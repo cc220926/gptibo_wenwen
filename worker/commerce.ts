@@ -24,7 +24,7 @@ import { alipayConfigured } from './payments/providers.ts'
 import { paymentTesting } from './payments/testing.ts'
 import { supportContactsRoute, supportContactsSettings } from './support-contacts.ts'
 import { checkoutEnabled as supplierCheckoutEnabled, configured as supplierConfigured, productMap, RechargeError } from './recharge/client.ts'
-import { supplierSnapshot, snapshotStatement, syncRechargeOrder, rechargeAction, rechargeSummary, findRechargeOrder, reconcileRecharge, expireRechargeOrder, queryPlatformOrder, platformOrderStatus } from './recharge/service.ts'
+import { supplierCatalog, supplierSnapshot, snapshotStatement, syncRechargeOrder, rechargeAction, rechargeSummary, findRechargeOrder, reconcileRecharge, expireRechargeOrder, queryPlatformOrder, platformOrderStatus } from './recharge/service.ts'
 import type { SupportContactsSettings } from '../shared/support-contacts.ts'
 import { setRedemptionBlocked } from './order-redemption.ts'
 import { adminVisitorSummary } from './visitors.ts'
@@ -126,9 +126,10 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
       // Each supplier SKU opens on its own gate; Muse-branded SKUs also need the Muse payment route.
       const supplyOpen = (code: string | null) => Boolean(code) && (isMuseCode(code!) ? museRoute : customOpen) && supplyCheckoutEnabled(env, code!)
       const museOpen = customOffers.some(plan => plan.delivery_provider === 'muse' && !plan.hidden && !plan.delisted && supplyOpen(plan.muse_product_code))
-      const offers = (catalog.plans as Plan[]).filter(plan => !isServicePlan(plan.id)).map(plan => ({ ...plan, enabled: plan.enabled && (
+      let offers = (catalog.plans as Plan[]).filter(plan => !isServicePlan(plan.id)).map(plan => ({ ...plan, enabled: plan.enabled && (
         isXGiftPlan(plan.id) ? xgiftCheckoutEnabled(env) : plan.id === 'gmail-account' ? gmail : isDeliverySupplierPlan(plan.id) ? delivery_supplier : emailProduct(plan.id) ? email : testing || (live && Boolean(mapped[plan.id]))
       ) ? 1 : 0 }))
+      if (partner && live) offers = await supplierCatalog(env, offers, partner.id)
       const hiddenProductIds: readonly string[] = platformVisibility?.hiddenProductIds ?? ('hiddenProductIds' in catalog ? catalog.hiddenProductIds : [])
       return json({ ...catalog, platformBranding: branding, hiddenProductIds, marketingMetric: marketingMetric && { enabled: marketingMetric.enabled, displayText: marketingMetric.displayText, displayCount: marketingMetric.displayCount }, supportContacts: support.contacts, announcement, plans: [...offers, ...customOffers.filter(plan => !plan.hidden && !plan.delisted).map(({ muse_product_code: code, muse_max_cost_cents: _cost, ...plan }) => ({ ...plan, supply_kind: supplyKind(code), enabled: plan.enabled && (plan.delivery_provider === 'muse' ? supplyOpen(code) : customOpen) && (plan.delivery_type !== 'stock' || plan.stock_available > 0) ? 1 : 0 }))].filter(plan => !hiddenProductIds.includes(plan.product_id)), mode: live ? 'live' : 'demo', checkoutEnabled: testing || live || email || xgiftCheckoutEnabled(env) || customOpen || museOpen, testingEnabled: testing }, 200, { 'Server-Timing': `catalog;dur=${(performance.now() - started).toFixed(1)}` })
     }
