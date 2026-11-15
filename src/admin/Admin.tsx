@@ -166,7 +166,7 @@ function IntegrationsPage({ revision }: { revision: number }) {
   return <div className="integration-workspace"><PaymentChannelsPanel revision={revision} /><div className="integration-services"><RechargeIntegrationsPage revision={revision} /><XGiftPanel revision={revision} /></div></div>
 }
 function RechargeIntegrationsPage({ revision }: { revision: number }) {
-  const { data, error, loading } = useResource<{ integrations: { resend: boolean; alipay: boolean; supplier: boolean; supplierCheckout: boolean } }>('/api/admin/overview', revision)
+  const { data, error, loading } = useResource<{ integrations: { resend: boolean; alipay: boolean; supplier: boolean; supplierCheckout: boolean; codexSms?: { configured: boolean; checkoutReady: boolean } } }>('/api/admin/overview', revision)
   const [reconciling, setReconciling] = useState(false); const [result, setResult] = useState(''); const [syncError, setSyncError] = useState('')
   const running = useRef(false)
   const reconcile = async () => {
@@ -180,13 +180,13 @@ function RechargeIntegrationsPage({ revision }: { revision: number }) {
   const services = [
     { name: 'Recharge 平台代收 / 充值', detail: 'ChatGPT 收款与自动充值', state: data?.integrations.supplierCheckout ? '已开放' : status(data?.integrations.supplier), icon: Package },
     { name: 'Resend 邮件', detail: '登录验证码与订单邮件', state: status(data?.integrations.resend), icon: Mail },
-    { name: 'Codex 接码', detail: '接码供应商尚未接入', state: '待接入', icon: MessageCircle },
+    { name: 'Codex 接码', detail: 'GPTibo CDK 自动交付；实时供货与余额请在自有商品与库存中查看。', state: !data ? status(undefined) : data.integrations.codexSms?.checkoutReady ? '下单配置就绪' : data.integrations.codexSms?.configured ? '已配置 · 未开放' : '待配置', icon: MessageCircle },
   ]
   return <section className="integration-service-section">
     <div className="integration-section-title"><div><h2>业务服务</h2><p>充值、交付与通知服务的接入状态。</p></div><Button variant="outline" disabled={reconciling || !data?.integrations.supplier} onClick={() => void reconcile()}><RefreshCw size={14} className={reconciling ? 'integration-spinning' : undefined} />{reconciling ? '核对中…' : '核对充值订单'}</Button></div>
     <Feedback error={error || syncError} loading={loading} data={data} shape="compact" />
     {result && <p className="admin-success" role="status">{result}</p>}
-    <div className="integration-service-rows">{services.map(({name, detail, state, icon: Icon}) => <div key={name}><div className="integration-service-icon"><Icon size={19} /></div><div><h3>{name}</h3><p>{detail}</p></div><span className={`connection-state ${['已配置', '已开放'].includes(state) ? 'is-ready' : ''}`}>{state}</span></div>)}</div>
+    <div className="integration-service-rows">{services.map(({name, detail, state, icon: Icon}) => <div key={name}><div className="integration-service-icon"><Icon size={19} /></div><div><h3>{name}</h3><p>{detail}</p></div><span className={`connection-state ${['已配置', '已开放', '下单配置就绪'].includes(state) ? 'is-ready' : ''}`}>{state}</span></div>)}</div>
   </section>
 }
 export default function Admin() {

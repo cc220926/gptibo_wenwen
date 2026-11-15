@@ -1714,3 +1714,43 @@ test('partner fixes: another sender cannot invalidate an existing login code', a
   assert.equal((await s.request('/api/partner/auth/verify', first)).status, 401)
   assert.equal((await s.request('/api/partner/auth/verify', second)).status, 401)
 })
+
+test('historical SMS test-price labels are presentation-only and preserve real test-order labels', async t => {
+  const s = await setup(); t.after(() => s.db.close())
+  const buyer = await s.buyer(), admin = await s.login(), order = await s.create(buyer)
+  s.db.prepare("UPDATE orders SET mode='live',payment_status='paid',status='success',plan_name='单次接码（测试价）' WHERE id=?").run(order.id)
+  const before = s.db.prepare('SELECT * FROM orders WHERE id=?').get(order.id)
+  for (const [path, cookie] of [[`/api/orders/${order.id}`, buyer], [`/api/admin/orders/${order.id}`, admin]]) {
+    const response = await s.request(path, undefined, cookie)
+    assert.equal(response.status, 200)
+    const shown = (await response.json()).order
+    assert.equal(shown.planName, '单次接码')
+    assert.equal(shown.price, order.price)
+    assert.equal(shown.paymentStatus, 'paid')
+    assert.equal(shown.status, 'success')
+  }
+  assert.deepEqual(s.db.prepare('SELECT * FROM orders WHERE id=?').get(order.id), before)
+  s.db.prepare('UPDATE orders SET is_test=1 WHERE id=?').run(order.id)
+  assert.equal((await (await s.request(`/api/admin/orders/${order.id}`, undefined, admin)).json()).order.planName, '单次接码（测试价）')
+  s.db.prepare("UPDATE orders SET is_test=0,plan_name='1元测试' WHERE id=?").run(order.id)
+  assert.equal((await (await s.request(`/api/orders/${order.id}`, undefined, buyer)).json()).order.planName, '1元测试')
+})
+
+test('admin overview reports actual SMS configuration without contacting supply or payment providers', async t => {
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login()
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('overview must not call suppliers') })
+  const read = async () => {
+    const r = await s.request('/api/admin/overview', undefined, admin)
+    assert.equal(r.status, 200)
+    return (await r.json()).integrations.codexSms
+  }
+  assert.deepEqual(await read(), { configured: false, checkoutReady: false })
+  Object.assign(s.env, { MUSE_KEY_ID: 'fixture-key', MUSE_API_SECRET: 'fixture-secret' })
+  assert.deepEqual(await read(), { configured: true, checkoutReady: false })
+  Object.assign(s.env, { GPTIBO_SUPPLY_ENABLED: 'codex-sms-once', SERVICE_CHECKOUT_ENABLED: 'true', ORDER_TESTING_ENABLED: 'false', SERVICE_PAYMENT_PROVIDER: 'zpay', ZPAY_PID: '10101', ZPAY_KEY: 'fixture-payment-secret', CDK_ENCRYPTION_KEY: Buffer.alloc(32, 37).toString('base64'), MAIL_PUBLIC_ORIGIN: 'https://shop.example.test', RESEND_API_KEY: 'fixture-mail', RESEND_FROM: 'Store <delivery@example.test>', PAYMENT_NOTIFY_ORIGIN: 'https://shop.example.invalid' })
+  assert.deepEqual(await read(), { configured: true, checkoutReady: true })
+  s.env.GPTIBO_SUPPLY_ENABLED = 'gpt-plus-account'
+  assert.deepEqual(await read(), { configured: true, checkoutReady: false })
+  s.env.GPTIBO_SUPPLY_ENABLED = 'codex-sms-once'; s.env.ZPAY_KEY = undefined
+  assert.deepEqual(await read(), { configured: true, checkoutReady: false })
+})

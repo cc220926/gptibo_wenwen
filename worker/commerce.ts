@@ -1,5 +1,5 @@
 import { supplyCheckoutEnabled } from './muse/service.ts'
-import { isMuseCode, supplyKind } from './muse/client.ts'
+import { isMuseCode, museConfigured, supplyKind } from './muse/client.ts'
 import { platformBranding, platformAnnouncement, platformBrandingRoute, platformAnnouncementRoute } from './platform-store-settings.ts'
 import { verificationConfig, verifyOrderChallenge } from './turnstile.ts'
 import { inventoryAdmin } from './fulfillment/admin.ts'
@@ -42,7 +42,9 @@ import { platformMarketingMetric, platformMarketingMetricRoute } from './platfor
 type Plan = { delivery_instructions: string; partner_enabled: number; id: string; product_id: string; name: string; price_cents: number; enabled: number; renewal_only: number; version: number }
 type OrderPartnerSource = { id: string; slug: string; name: string; email: string; wechat: string; qq: string }
 const statuses: Status[] = ['pending', 'session', 'processing', 'success', 'failed', 'cancelled']
-const publicOrder = (o: Order) => ({ purchaseNote: o.purchase_note ?? '', isTest: Boolean(o.is_test), customerEmail: o.customer_email, refundedCents: o.refunded_cents, refundHold: Boolean(o.refund_hold), redemptionBlocked: Boolean(o.redemption_blocked), id: o.id, plan: o.plan, planName: o.plan_name, partnerName: o.partner_name ?? undefined, price: o.price_cents / 100, mode: o.mode, paymentStatus: o.payment_status, status: o.status, createdAt: o.created_at, updatedAt: o.updated_at, startedAt: o.started_at ?? undefined, smsPhone: o.sms_phone ?? undefined, version: o.version })
+// Normalize this legacy retail label only in responses; immutable payment snapshots stay intact.
+const orderPlanName = (o: Order) => o.mode === 'live' && !o.is_test && o.plan_name === '单次接码（测试价）' ? '单次接码' : o.plan_name
+const publicOrder = (o: Order) => ({ purchaseNote: o.purchase_note ?? '', isTest: Boolean(o.is_test), customerEmail: o.customer_email, refundedCents: o.refunded_cents, refundHold: Boolean(o.refund_hold), redemptionBlocked: Boolean(o.redemption_blocked), id: o.id, plan: o.plan, planName: orderPlanName(o), partnerName: o.partner_name ?? undefined, price: o.price_cents / 100, mode: o.mode, paymentStatus: o.payment_status, status: o.status, createdAt: o.created_at, updatedAt: o.updated_at, startedAt: o.started_at ?? undefined, smsPhone: o.sms_phone ?? undefined, version: o.version })
 type AdminOrder = Order & { settlement_status: 'pending' | 'paid' | null }
 const adminOrder = async (env: Env, o: AdminOrder) => ({ ...(await customerOrder(env, o, undefined, false, false)), platformStatus: await platformOrderStatus(env, o), settlementStatus: o.settlement_status })
 const plans = async (env: Env) => (await env.INTEREST_DB.prepare('SELECT * FROM catalog_plans ORDER BY rowid').all<Plan>()).results
@@ -278,7 +280,7 @@ async function admin(request: Request, env: Env, url: URL): Promise<Response> {
     const stats = await db.prepare("SELECT COUNT(*) total, SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) pending, SUM(CASE WHEN status IN ('session','processing','failed') AND refunded_cents<price_cents THEN 1 ELSE 0 END) active, SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) completed, COALESCE(SUM(CASE WHEN mode='demo' AND payment_status='simulated' THEN price_cents ELSE 0 END),0) demo_amount, COALESCE(SUM(CASE WHEN mode='live' AND payment_status='paid' THEN price_cents-MAX(refunded_cents,COALESCE((SELECT t.refunded_cents FROM recharge_orders t WHERE t.order_id=orders.id),0)) ELSE 0 END),0) paid_amount, COALESCE(SUM(CASE WHEN mode='live' THEN MAX(refunded_cents,COALESCE((SELECT t.refunded_cents FROM recharge_orders t WHERE t.order_id=orders.id),0)) ELSE 0 END),0) refund_amount FROM orders WHERE is_test=0").first()
     const interest = await db.prepare('SELECT COUNT(*) total FROM launch_interest').first()
     const recent = (await db.prepare('SELECT orders.*, (SELECT status FROM partner_payouts WHERE id=orders.payout_id) settlement_status FROM orders WHERE is_test=0 ORDER BY created_at DESC LIMIT 6').all<AdminOrder>()).results
-    return json({ stats, interest, recent: await Promise.all(recent.map(o => adminOrder(env, o))), integrations: { alipay: alipayConfigured(env), supplier: supplierConfigured(env), supplierCheckout: supplierCheckoutEnabled(env), resend: mailConfigured(env) }, mode: supplierCheckoutEnabled(env) ? 'live' : 'demo' })
+    return json({ stats, interest, recent: await Promise.all(recent.map(o => adminOrder(env, o))), integrations: { alipay: alipayConfigured(env), supplier: supplierConfigured(env), supplierCheckout: supplierCheckoutEnabled(env), resend: mailConfigured(env), codexSms: { configured: museConfigured(env), checkoutReady: supplyCheckoutEnabled(env, 'codex-sms-once') && await serviceCheckoutEnabled(env) } }, mode: supplierCheckoutEnabled(env) ? 'live' : 'demo' })
   }
   if (path === '/api/admin/orders' && method === 'GET') {
     await settleDue(env)
