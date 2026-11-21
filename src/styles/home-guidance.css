@@ -1,0 +1,74 @@
+/* Homepage only: informational previews never share checkout selectors. */
+.home-guide { --guide-tint:#edf7fc; margin-bottom:32px; padding:24px; border:1px solid #dcecf5; border-radius:22px; background:linear-gradient(115deg,var(--guide-tint),#f6faff); }
+.dark .home-guide { --guide-tint:#111e26; border-color:#24323e; background:linear-gradient(115deg,var(--guide-tint),#151e29); }
+.home-guide-header { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-bottom:20px; }
+.home-guide-header h2 { font-size:19px; font-weight:600; line-height:1.4; letter-spacing:-.4px; }
+.home-guide-current-label { color:var(--primary); font-size:12px; }
+.home-guide-demo-panel { display:grid; grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr); align-items:center; gap:32px; }
+.home-guide-preview { display:block; width:100%; min-width:0; border:0; padding:0; border-radius:16px; text-align:left; cursor:pointer; }
+.home-guide-preview:focus-visible,.home-guide-step-picker button:focus-visible { outline:3px solid var(--ring); outline-offset:4px; }
+.home-guide-scene { position:relative; display:grid; place-items:center; padding:22px; border:1px solid #cee6e8; border-radius:16px; background:linear-gradient(135deg,#c5e9e8,#e2effc); min-width:0; }
+.dark .home-guide-scene { border-color:#304a53; background:linear-gradient(135deg,#254148,#263a54); }
+.home-guide-window { width:100%; overflow:hidden; border:1px solid var(--border); border-radius:13px; background:var(--card); box-shadow:0 12px 28px -16px #24455344; }
+.home-guide-window-bar { display:flex; align-items:center; justify-content:space-between; padding:9px 12px; border-bottom:1px solid var(--border); }
+.home-guide-window-bar>span { display:flex; gap:4px; }
+.home-guide-window-bar i { width:5px; height:5px; border-radius:50%; background:var(--input); }
+.home-guide-window-bar small { color:var(--muted-foreground); font-size:9px; }
+.home-guide-window-body { padding:16px; }
+.home-guide-mini-progress { display:flex; justify-content:space-between; gap:8px; margin-bottom:17px; }
+.home-guide-mini-progress>span { display:flex; flex-direction:column; align-items:center; gap:5px; font-size:9px; color:var(--muted-foreground); }
+.home-guide-mini-progress i { display:grid; place-items:center; width:19px; height:19px; background:var(--secondary); color:var(--muted-foreground); border-radius:50%; font-style:normal; font-size:9px; }
+.home-guide-mini-progress .current i { background:#0071e3; color:#fff; }
+.home-guide-mini-order { display:flex; align-items:center; gap:10px; padding:12px; border:1px solid var(--border); border-radius:10px; background:var(--panel-tint); }
+.home-guide-scene-icon { color:#0071e3; flex-shrink:0; }
+.home-guide-mini-order>div { min-width:0; }
+.home-guide-mini-order strong { display:block; font-size:11px; font-weight:500; }
+.home-guide-mini-order small { display:block; color:var(--muted-foreground); font-size:9px; margin-top:4px; }
+.home-guide-mini-lines { display:flex; flex-direction:column; gap:5px; margin-left:auto; width:36px; flex-shrink:0; }
+.home-guide-mini-lines i { height:4px; background:var(--input); border-radius:4px; }
+.home-guide-mini-lines i:last-child { width:70%; }
+.home-guide-play { position:absolute; left:50%; top:50%; translate:-50% -50%; display:grid; place-items:center; width:50px; height:50px; border-radius:50%; background:#0071e3; color:white; box-shadow:0 5px 18px #0071e348; transition:transform .2s; }
+.home-guide-play svg { margin-left:3px; }
+@media(hover:hover) { .home-guide-preview:hover .home-guide-play { transform:scale(1.08); } }
+.home-guide-copy h3 { font-size:24px; font-weight:600; letter-spacing:-.7px; line-height:1.4; }
+.home-guide-short-steps { display:flex; flex-wrap:wrap; align-items:center; gap:8px; list-style:none; margin:19px 0 16px; }
+.home-guide-short-steps li { display:flex; align-items:center; gap:7px; font-size:12px; }
+.home-guide-short-steps li>span { color:#0071e3; font-size:10px; font-weight:600; }
+.home-guide-short-steps svg { margin-inline:3px; color:var(--muted-foreground); }
+.home-guide-copy p { color:var(--muted-foreground); font-size:12px; line-height:1.7; }
+.home-guide-link { padding-inline:0; margin-top:9px; min-height:36px; font-size:13px; }
+.home-guide-dialog { width:calc(100% - 32px); max-width:640px; padding:28px; gap:20px; max-height:calc(100dvh - 32px); overflow-y:auto; }
+.home-guide-dialog [data-slot=dialog-title] { font-size:23px; font-weight:600; line-height:1.4; letter-spacing:-.5px; }
+.home-guide-dialog [data-slot=dialog-header] { padding-right:22px; }
+.home-guide-dialog [data-slot=dialog-description] { font-size:12px; line-height:1.7; }
+.home-guide-step-picker { display:flex; justify-content:space-between; gap:10px; list-style:none; }
+.home-guide-step-picker button { display:flex; align-items:center; gap:7px; padding:5px; min-height:36px; font-size:12px; color:var(--muted-foreground); border-radius:8px; text-align:left; }
+.home-guide-step-picker button>span { display:grid; place-items:center; width:23px; height:23px; flex-shrink:0; background:var(--secondary); border-radius:50%; font-size:11px; }
+.home-guide-step-picker button[aria-current=step] { color:var(--foreground); }
+.home-guide-step-picker button[aria-current=step]>span { background:#0071e3; color:white; }
+.home-guide-step-copy { min-height:126px; }
+.home-guide-step-copy>small { color:var(--muted-foreground); font-size:11px; }
+.home-guide-step-copy h3 { font-size:18px; font-weight:600; line-height:1.5; margin:7px 0; }
+.home-guide-step-copy p { font-size:13px; color:var(--muted-foreground); line-height:1.85; }
+.home-guide-dialog-actions { display:flex; justify-content:space-between; gap:12px; padding-top:3px; }
+.home-guide-dialog-actions button { height:40px; padding-inline:16px; font-size:12px; }
+@media(max-width:900px) { .home-guide-demo-panel { gap:22px; } .home-guide-copy h3 { font-size:21px; } .home-guide-short-steps { gap:6px; } .home-guide-short-steps li { font-size:11px; } .home-guide-mini-lines { display:none; } }
+@media(max-width:600px) {
+  .home-guide { padding:18px; margin-bottom:26px; border-radius:18px; }
+  .home-guide-header { gap:12px; margin-bottom:16px; }
+  .home-guide-header h2 { font-size:17px; }
+  .home-guide-current-label { display:none; }
+  .home-guide-demo-panel { grid-template-columns:1fr; gap:18px; }
+  .home-guide-preview .home-guide-scene { padding:14px; }
+  .home-guide-preview .home-guide-window-body { padding:12px; }
+  .home-guide-preview .home-guide-mini-progress { margin-bottom:12px; }
+  .home-guide-copy h3 { font-size:20px; }
+  .home-guide-short-steps { margin:13px 0 10px; }
+  .home-guide-dialog { padding:22px; gap:17px; }
+  .home-guide-dialog [data-slot=dialog-title] { font-size:20px; }
+  .home-guide-dialog .home-guide-scene { padding:14px; }
+  .home-guide-step-picker { gap:4px; }
+  .home-guide-step-picker button { font-size:10px; gap:4px; }
+  .home-guide-step-picker button>span { width:20px; height:20px; }
+}
+@media(prefers-reduced-motion:reduce) { .home-guide-play { transition:none; } }
