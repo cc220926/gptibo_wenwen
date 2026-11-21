@@ -35,6 +35,17 @@ node scripts/verify-homepage-scope.mjs d7df5ef63ba99577048baf2ab28512ee4d51c2df
 
 额外核对了英文、深浅色、手机端教程尺寸及页面横向溢出。商品页购买区域文字与改造前基线一致。真实付款和供应商调用没有执行。
 
+### 远程 CI 的既有失败
+
+本次代码提交的 GitHub `source` 作业通过，包含 Node 24 测试、构建及凭据扫描；`backend` 作业仍失败，不能称为全仓库 CI 全绿。
+
+已读取并对比同一基线 `d7df5ef` 的历史失败日志和本次日志：失败测试名称、全部缺失路由诊断 JSON、D1 表结构校验错误数量均相同。前者是 Go 后端尚未覆盖已有前端接口的契约缺口，后者是既有 D1 导入表结构支持缺口。本次没有修改这些前端调用、Go 路由、导入器或迁移文件。
+
+- [基线运行](https://github.com/cc220926/gptibo_wenwen/actions/runs/43732257561)
+- [本次代码运行](https://github.com/cc220926/gptibo_wenwen/actions/runs/44862099961)
+
+原始日志及机器对照结果保存在本地验收目录的 `baseline-go-ci.log`、`final-go-ci.log` 和 `ci-regression-comparison.json`。本次按“不改履约链路”的边界保留这些既有问题，没有为使 CI 变绿修改业务代码或弱化测试。
+
 ## 本次本地预览
 
 验收使用 `artifacts/homepage-guidance/vite.config.ts` 中的本地示例数据，预览服务仅监听 `127.0.0.1:5179`。交易请求统一拒绝，不连接真实支付、供应商或生产数据库。截图、原始测试日志、范围审计和验收矩阵保存在同目录；`artifacts/` 被 Git 忽略，临时验收材料不随源码提交。
