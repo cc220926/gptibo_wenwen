@@ -1,3 +1,4 @@
+import { serializePublicBootstrap } from '../shared/public-bootstrap.ts'
 import { commerce } from './commerce.ts'
 import { secureResponse } from './security.ts'
 import type { Database, Env, Statement } from './platform.ts'
@@ -123,7 +124,7 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
     const body = article ? `<nav aria-label="当前位置"><a href="/help/">购买指南</a></nav><h1>${escape(article.title)}</h1><p class="public-answer">${escape(article.answer)}</p><p class="public-date">内容核对日期：<time datetime="${publicHelpUpdated}">${publicHelpUpdated}</time> · ${escape(brand)} 服务说明</p>${article.sections.map(s => `<section><h2>${escape(s.title)}</h2>${s.paragraphs.map(p => `<p>${escape(p)}</p>`).join('')}</section>`).join('')}${article.related && products.some(p => p.path === article.related) ? `<p><a href="${article.related}">查看对应商品与现有教程</a></p>` : ''}<p><a href="/orders">查看或找回订单</a></p><aside><h2>其他购买问题</h2><ul>${helpLinks()}</ul></aside>` : `<h1>购买指南</h1><p class="public-answer">先确认商品和交付方式，再按原订单继续操作。</p><ul class="public-help-list">${publicArticles.map(a => `<li><h2><a href="/help/${a.slug}">${escape(a.title)}</a></h2><p>${escape(a.answer)}</p></li>`).join('')}</ul>`
     return htmlResponse(request, document(article ? article.title + ' · ' + brand : '购买指南 · ' + brand, article?.answer ?? '商品选择、付款后操作、订单找回及售后说明。', origin + canonicalPath, body, brand))
   }
-  const { catalog } = await publicCatalog(env, origin)
+  const { catalog, fetchedAt, fresh } = await publicCatalog(env, origin)
   const branding = catalog.platformBranding!, products = publicProducts(catalog)
   const brand = branding.name || '商店'
   const product = products.find(p => p.path === normalized)
@@ -138,6 +139,7 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   const title = product ? product.name + ' · ' + brand : branding.pageTitle || brand
   const description = product?.description ?? branding.description
   const body = product ? `<nav><a href="/">全部商品</a></nav><h1>${escape(product.name)}</h1><p>${escape(product.description)}</p>${productBlock(product)}<p>实际可购状态和最终金额以订单确认为准。请先查看购买须知。</p><p><a href="/help/">购买指南</a> · <a href="/orders">我的订单</a></p>` : `<h1>${escape(branding.headline || brand)}</h1><p>${escape(description)}</p>${products.map(productBlock).join('')}<nav aria-label="购买帮助"><a href="/help/">购买指南</a> · <a href="/orders">我的订单</a></nav>`
+  const bootstrap = fresh ? `<script id="storefront-public-catalog" type="application/json">${serializePublicBootstrap(catalog, origin, fetchedAt)}</script>` : ''
   const asset = await env.ASSETS.fetch(new Request(origin + '/', { method: 'GET' }))
   if (!asset.ok) throw new Error('Storefront asset unavailable')
   let html = await asset.text()
@@ -146,7 +148,7 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
     .replace(/<title>[^]*?<\/title>/, () => `<title>${escape(title)}</title>`)
     .replace(/<meta name="description"[^>]*>/, () => `<meta name="description" content="${escape(description)}">`)
     .replace(/<meta name="robots"[^>]*>/, '<meta name="robots" content="index, follow">')
-    .replace('</head>', () => `<link rel="canonical" href="${escape(origin + canonicalPath)}"><link rel="stylesheet" href="/public-content.css"></head>`)
+    .replace('</head>', () => `<link rel="canonical" href="${escape(origin + canonicalPath)}"><link rel="stylesheet" href="/public-content.css">${bootstrap}</head>`)
     .replace('<div id="root"></div>', () => `<div id="root"><main class="public-seo-fallback">${body}</main></div>`)
   return htmlResponse(request, html)
 }
