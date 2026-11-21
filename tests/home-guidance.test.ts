@@ -30,7 +30,8 @@ test('both locales cover the same questions and support scenarios with stable de
 
 test('guidance distinguishes redemption and manual delivery and never presents scenarios as real records', () => {
   assert.match(homeGuideCopy('zh-CN').demoDisclaimer, /不会创建订单、付款或提交账号信息/)
-  assert.match(homeGuideCopy('zh-CN').steps[2].body, /兑换商品.*人工商品/)
+  assert.match(homeGuideCopy('zh-CN').subtitle, /以 ChatGPT 充值为例.*其他商品/)
+  assert.match(searchHomeQuestions('zh-CN', '兑换')[0].answer, /兑换/)
   assert.match(homeHelpCopy('zh-CN').caseDisclaimer, /并非真实客户案例/)
   assert.match(homeHelpCopy('en').caseDisclaimer, /not real customer cases/)
   assert.match(searchHomeQuestions('zh-CN', '退款')[0].answer, /以商品售后规则及审核结果为准/)

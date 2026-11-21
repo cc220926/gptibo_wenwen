@@ -1,28 +1,29 @@
 import { useId, useRef, useState, type KeyboardEvent } from 'react'
-import { ArrowLeft, ArrowRight, Check, ChevronRight, CircleHelp, ClipboardList, CreditCard, Package, Play, Search, X } from 'lucide-react'
+import { ArrowRight, Check, ChevronRight, CircleHelp, ClipboardList, Play, Search, X } from 'lucide-react'
 import { useStorefrontI18n } from '@/lib/storefront-i18n'
+import type { CatalogPlan } from '@/lib/api'
+import { RechargeGuide } from './recharge-guide'
 import { homeGuideCopy, homeHelpCopy, searchHomeQuestions } from '@/lib/home-guidance'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog'
 
-function GuideScene({ step, preview = false }: { step: number; preview?: boolean }) {
+function GuideScene() {
   const { locale } = useStorefrontI18n()
   const copy = homeGuideCopy(locale)
-  const Icon = [Package, CreditCard, ClipboardList][step]
-  return <div className={'home-guide-scene' + (preview ? ' home-guide-scene-preview' : '')} aria-hidden="true">
+  return <div className="home-guide-scene home-guide-scene-preview" aria-hidden="true">
     <div className="home-guide-window">
       <div className="home-guide-window-bar"><span><i /><i /><i /></span><small>{copy.preview}</small></div>
       <div className="home-guide-window-body">
-        <div className="home-guide-mini-progress">{copy.shortSteps.map((label, index) => <span className={index <= step ? 'current' : ''} key={label}><i>{index < step ? <Check size={10} /> : index + 1}</i>{label}</span>)}</div>
-        <div className="home-guide-mini-order"><span className="home-guide-scene-icon"><Icon size={24} strokeWidth={1.5} /></span><div><strong>{copy.steps[step].scene}</strong><small>{copy.steps[step].note}</small></div><span className="home-guide-mini-lines"><i /><i /></span></div>
+        <div className="home-guide-mini-progress">{copy.shortSteps.map((label, index) => <span className={index <= 1 ? 'current' : ''} key={label}><i>{index === 0 ? <Check size={10} /> : index + 1}</i>{label}</span>)}</div>
+        <div className="home-guide-mini-order"><span className="home-guide-scene-icon"><ClipboardList size={24} strokeWidth={1.5} /></span><div><strong>{copy.previewTitle}</strong><small>{copy.previewNote}</small></div><span className="home-guide-mini-lines"><i /><i /></span></div>
       </div>
     </div>
-    {preview && <span className="home-guide-play"><Play size={23} fill="currentColor" /></span>}
+    <span className="home-guide-play"><Play size={23} fill="currentColor" /></span>
   </div>
 }
 
-export function HomeGuidance({ onOrders, onSupport }: { onOrders: () => void; onSupport: () => void }) {
+export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogPlan[]; onOrders: () => void; onSupport: () => void }) {
   const { locale } = useStorefrontI18n()
   const copy = homeGuideCopy(locale)
   const helpCopy = homeHelpCopy(locale)
@@ -30,7 +31,6 @@ export function HomeGuidance({ onOrders, onSupport }: { onOrders: () => void; on
   const [tab, setTab] = useState(0)
   const [scenario, setScenario] = useState(0)
   const [demoOpen, setDemoOpen] = useState(false)
-  const [step, setStep] = useState(0)
   const [helpOpen, setHelpOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -38,7 +38,7 @@ export function HomeGuidance({ onOrders, onSupport }: { onOrders: () => void; on
   const searchInput = useRef<HTMLInputElement>(null)
   const questions = searchHomeQuestions(locale, query)
   const featured = searchHomeQuestions(locale).slice(0, 3)
-  const openDemo = () => { setStep(0); setDemoOpen(true) }
+  const openDemo = () => setDemoOpen(true)
   const openHelp = (question?: string) => { setQuery(''); setExpanded(question ?? null); setHelpOpen(true) }
   const leaveGuide = (destination: 'orders' | 'support') => {
     setHelpOpen(false)
@@ -51,16 +51,12 @@ export function HomeGuidance({ onOrders, onSupport }: { onOrders: () => void; on
     event.preventDefault(); setTab(next)
     document.getElementById(`${id}-tab-${next}`)?.focus()
   }
-  const finish = () => {
-    setDemoOpen(false)
-    document.getElementById('catalog-products')?.scrollIntoView({ behavior: 'auto', block: 'start' })
-  }
   return <>
     <section className="home-guide page-width" aria-label={copy.region}>
       <header className="home-guide-header"><h2>{copy.title}</h2><div className="home-guide-tabs" role="tablist" aria-label={copy.region}>{[copy.demo, helpCopy.help, helpCopy.cases].map((label, index) => <button type="button" key={label} id={`${id}-tab-${index}`} role="tab" aria-selected={tab === index} aria-controls={`${id}-panel-${index}`} tabIndex={tab === index ? 0 : -1} onClick={() => setTab(index)} onKeyDown={event => moveTab(event, index)}>{label}</button>)}</div></header>
       <div role="tabpanel" id={`${id}-panel-0`} aria-labelledby={`${id}-tab-0`} hidden={tab !== 0}>
       <div className="home-guide-demo-panel">
-        <button className="home-guide-preview" type="button" onClick={openDemo} aria-label={copy.openDemo}><GuideScene step={1} preview /></button>
+        <button className="home-guide-preview" type="button" onClick={openDemo} aria-label={copy.openDemo}><GuideScene /></button>
         <div className="home-guide-copy"><h3>{copy.intro}</h3><ol className="home-guide-short-steps">{copy.shortSteps.map((label, index) => <li key={label}><span>{String(index + 1).padStart(2, '0')}</span>{label}{index < 2 && <ArrowRight size={13} aria-hidden="true" />}</li>)}</ol><p>{copy.subtitle}</p><Button variant="link" className="home-guide-link" onClick={openDemo}>{copy.openDemo}<ArrowRight size={15} /></Button></div>
       </div>
       </div>
@@ -78,12 +74,9 @@ export function HomeGuidance({ onOrders, onSupport }: { onOrders: () => void; on
       </div>
     </section>
     <Dialog open={demoOpen} onOpenChange={setDemoOpen}>
-      <DialogContent className="home-guide-dialog" initialFocus={title}>
-        <DialogHeader><DialogTitle ref={title} tabIndex={-1}>{copy.demoTitle}</DialogTitle><DialogDescription>{copy.demoDisclaimer}</DialogDescription></DialogHeader>
-        <ol className="home-guide-step-picker" aria-label={copy.stepLabel}>{copy.shortSteps.map((label, index) => <li key={label}><button type="button" aria-current={step === index ? 'step' : undefined} onClick={() => setStep(index)}><span>{index + 1}</span>{label}</button></li>)}</ol>
-        <GuideScene step={step} />
-        <div className="home-guide-step-copy" aria-live="polite" aria-atomic="true"><small>{String(step + 1).padStart(2, '0')} / 03</small><h3>{copy.steps[step].title}</h3><p>{copy.steps[step].body}</p></div>
-        <footer className="home-guide-dialog-actions"><Button variant="outline" disabled={step === 0} onClick={() => setStep(value => Math.max(0, value - 1))}><ArrowLeft size={15} />{copy.previous}</Button><Button onClick={step === 2 ? finish : () => setStep(value => Math.min(2, value + 1))}>{step === 2 ? copy.done : copy.next}<ArrowRight size={15} /></Button></footer>
+      <DialogContent className="home-guide-dialog home-guide-recharge-dialog" initialFocus={title}>
+        <DialogHeader><DialogTitle ref={title} tabIndex={-1}>{copy.demoTitle}</DialogTitle><DialogDescription>{copy.demoDisclaimer} {copy.tutorialLanguage}</DialogDescription></DialogHeader>
+        {demoOpen && <div className="home-guide-recharge-content" lang="zh-CN"><RechargeGuide offers={offers} /></div>}
       </DialogContent>
     </Dialog>
     <Dialog open={helpOpen} onOpenChange={setHelpOpen}>

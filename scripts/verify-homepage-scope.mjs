@@ -52,6 +52,6 @@ function catalogComputation(text) {
 }
 assert.equal(catalogComputation(readFileSync('src/components/product-catalog.tsx', 'utf8')), catalogComputation(git('show', `${base}:src/components/product-catalog.tsx`)), 'Catalog prices, visibility, order and destinations must stay unchanged')
 const guideSource = parse('home-guidance.tsx', readFileSync('src/components/home-guidance.tsx', 'utf8'))
-const permittedImports = new Set(['react', 'lucide-react', '@/lib/storefront-i18n', '@/lib/home-guidance', './ui/button', './ui/dialog', './ui/input', './ui/accordion'])
+const permittedImports = new Set(['react', 'lucide-react', '@/lib/storefront-i18n', '@/lib/home-guidance', './ui/button', './ui/dialog', './ui/input', './ui/accordion', '@/lib/api', './recharge-guide'])
 for (const node of guideSource.statements) if (ts.isImportDeclaration(node)) assert.ok(permittedImports.has(node.moduleSpecifier.text), `Unexpected guide dependency: ${node.moduleSpecifier.text}`)
 console.log(`PASS: ${changed.length} files in homepage scope; App outside store JSX and all catalog computations unchanged; no backend, API, payment or fulfillment changes.`)
