@@ -1,4 +1,5 @@
 import commerceWorker from './index.ts'
+import { secureResponse } from './security.ts'
 import { publicStorefront, privateNavigationShell, type SeoEnv } from './public-seo.ts'
 
 // API requests and scheduled work retain the original handler and Env identity.
@@ -15,7 +16,7 @@ export function withPublicStorefront(worker: typeof commerceWorker) {
       } catch {
         // SEO must fail closed for indexing, without blocking the original app.
         if (['/sitemap.xml', '/robots.txt'].includes(new URL(request.url).pathname)) {
-          return new Response(request.method === 'HEAD' ? null : 'Public discovery temporarily unavailable', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow', 'Retry-After': '120' } })
+          return secureResponse(request, new Response(request.method === 'HEAD' ? null : 'Public discovery temporarily unavailable', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow', 'Retry-After': '120' } }))
         }
         const response = await worker.fetch(request, env)
         const headers = new Headers(response.headers)

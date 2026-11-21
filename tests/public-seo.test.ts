@@ -139,6 +139,7 @@ test('discovery failures are retryable errors, never a successful HTML sitemap',
   s.env.INTEREST_DB = { prepare() { throw new Error('PRIVATE FAILURE') }, batch() { throw new Error('write') } }
   const r = await s.get('/sitemap.xml')
   assert.equal(r.status, 503); assert.equal(r.headers.get('Retry-After'), '120')
+  assert.equal(r.headers.get('X-Content-Type-Options'), 'nosniff')
   assert.doesNotMatch(await r.text(), /<html|PRIVATE FAILURE/)
 })
 
@@ -148,4 +149,20 @@ test('public GETs never call external suppliers, payment services or mail provid
   t.mock.method(globalThis, 'fetch', async () => { calls++; throw new Error('External network forbidden in SEO') })
   for (const path of ['/', '/product/chatgpt', '/help/', '/help/after-sales', '/sitemap.xml']) assert.equal((await s.get(path)).status, 200)
   assert.equal(calls, 0)
+})
+
+test('a stalled public catalog falls back within its deadline while buyer initialization still works', { timeout: 4500 }, async t => {
+  const s = await fixture(); t.after(() => s.db.close())
+  s.env.INTEREST_DB = {
+    prepare() { return { bind() { return this }, first: async () => new Promise<never>(() => {}), all: async () => new Promise<never>(() => {}), run: async () => { throw new Error('write forbidden') } } },
+    batch: async () => { throw new Error('batch forbidden') },
+  }
+  const pending = s.get('/')
+  const client = await worker.fetch(new Request(origin + '/api/orders/client', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: '{}' }), s.env)
+  assert.equal(client.status, 200)
+  assert.match(client.headers.get('Set-Cookie')!, /HttpOnly/)
+  const response = await pending
+  assert.equal(response.status, 200)
+  assert.match(response.headers.get('X-Robots-Tag')!, /noindex/)
+  assert.equal(await response.text(), template)
 })

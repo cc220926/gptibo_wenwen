@@ -27,13 +27,14 @@ test('API forwarding preserves the exact request, environment, response and orig
 })
 
 test('readonly catalog adapter refuses writes, batches, PRAGMAs and multi-statements', async () => {
-  let calls = 0
-  const db = readOnlyDatabase({ prepare() { calls++; return { bind() { return this }, first: async <T>() => ({ value: 1 } as T), all: async <T>() => ({ results: [{ value: 1 } as T] }), run: async () => { throw new Error('real write reached') } } }, batch: async () => { throw new Error('real batch reached') } })
+  let calls = 0, writes = 0
+  const db = readOnlyDatabase({ prepare() { calls++; return { bind() { return this }, first: async <T>() => ({ value: 1 } as T), all: async <T>() => ({ results: [{ value: 1 } as T] }), run: async () => { writes++; return { changes: 1 } } } }, batch: async () => { writes++; return [] } })
   for (const sql of ['UPDATE orders SET status=1', 'DELETE FROM orders', 'INSERT INTO orders VALUES(1)', 'PRAGMA user_version=1', 'SELECT 1; DELETE FROM orders', 'WITH t AS (SELECT 1) DELETE FROM orders']) assert.throws(() => db.prepare(sql))
   assert.equal(calls, 0)
   await assert.rejects(db.batch([]))
   await assert.rejects(db.prepare('SELECT ?').bind(1).run())
   assert.deepEqual(await db.prepare('SELECT ?').bind(1).first(), { value: 1 })
+  assert.equal(writes, 0, 'No underlying write or batch may be invoked')
 })
 
 test('SEO origin is explicit and never inferred from an inbound Host or forwarding header', () => {
