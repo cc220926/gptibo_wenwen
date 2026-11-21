@@ -15,6 +15,8 @@ const allowed = new Set([
   'scripts/preprod/verify-config.mjs', 'scripts/preprod/http-smoke.mjs',
   'scripts/preprod/asset-audit.mjs', 'scripts/preprod/live-rollback.test.ts',
   'docs/seo-preproduction-rehearsal.md',
+  'scripts/release/monitor-queries.mjs', 'scripts/release/monitor-tail.mjs',
+  'tests/release-monitor-tail.test.ts', 'docs/seo-production-release.md',
 ])
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' })
 const changed = [...new Set([...git('diff', '--name-only', base).trim().split('\n'), ...git('ls-files', '--others', '--exclude-standard').trim().split('\n')])].filter(Boolean)
