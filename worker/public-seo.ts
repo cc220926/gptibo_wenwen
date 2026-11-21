@@ -33,7 +33,11 @@ export function readOnlyDatabase(database: Database): Database {
 async function publicCatalog(env: SeoEnv, origin: string): Promise<PublicCatalog> {
   // No inbound cookies, buyer token, query string, partner or forwarded headers.
   // Reuse the existing public retail catalog; don't duplicate pricing or supply logic.
-  const response = await commerce(new Request(origin + '/api/catalog'), { ...env, INTEREST_DB: readOnlyDatabase(env.INTEREST_DB) })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const response = await Promise.race([
+    commerce(new Request(origin + '/api/catalog'), { ...env, INTEREST_DB: readOnlyDatabase(env.INTEREST_DB) }),
+    new Promise<Response>((_, reject) => { timer = setTimeout(() => reject(new Error('Public catalog deadline')), 1500) }),
+  ]).finally(() => clearTimeout(timer))
   if (!response.ok) throw new Error('Public catalog unavailable')
   const catalog = await response.json() as PublicCatalog
   if (!Array.isArray(catalog.plans) || !catalog.platformBranding) throw new Error('Public catalog incomplete')
@@ -63,7 +67,7 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   if (!origin || url.origin !== origin || !['GET', 'HEAD'].includes(request.method) || privatePath(url.pathname)) return null
   const path = url.pathname
   if (path === '/robots.txt') {
-    const body = `User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /admin\nDisallow: /orders\nDisallow: /partner\nDisallow: /join\nDisallow: /r/\nDisallow: /s/\nDisallow: /__preview/\n\nSitemap: ${origin}/sitemap.xml\n`
+    const body = `User-agent: GPTBot\nDisallow: /\n\nUser-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /admin\nDisallow: /orders\nDisallow: /partner\nDisallow: /join\nDisallow: /r/\nDisallow: /s/\nDisallow: /__preview/\n\nSitemap: ${origin}/sitemap.xml\n`
     return secureResponse(request, new Response(request.method === 'HEAD' ? null : body, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } }))
   }
   if (path !== '/sitemap.xml' && path !== '/index.html' && assetPath(path)) return null
@@ -102,4 +106,17 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
     .replace('</head>', () => `<link rel="canonical" href="${escape(origin + canonicalPath)}"><link rel="stylesheet" href="/public-content.css"></head>`)
     .replace('<div id="root"></div>', () => `<div id="root"><main class="public-seo-fallback">${body}</main></div>`)
   return htmlResponse(request, html)
+}
+
+// A direct visit to orders must stay noindex. The public-origin marker contains
+// no buyer data and lets the existing SPA restore metadata when returning home.
+export async function privateNavigationShell(request: Request, env: SeoEnv, response: Response) {
+  const url = new URL(request.url)
+  if (request.method !== 'GET' || !['/orders', '/orders/'].includes(url.pathname) || url.origin !== seoOrigin(env.STOREFRONT_SEO_ORIGIN) || response.status !== 200 || !response.headers.get('Content-Type')?.includes('text/html')) return response
+  const html = (await response.text()).replace(/<html\b/, `<html data-public-seo="true" data-public-origin="${escape(url.origin)}"`)
+  const headers = new Headers(response.headers)
+  for (const key of ['ETag', 'Content-Length', 'Last-Modified', 'Content-Encoding']) headers.delete(key)
+  headers.set('Cache-Control', 'no-store')
+  headers.set('X-Robots-Tag', 'noindex, nofollow')
+  return new Response(html, { status: response.status, statusText: response.statusText, headers })
 }

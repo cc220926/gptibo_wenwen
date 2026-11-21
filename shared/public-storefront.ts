@@ -39,3 +39,10 @@ export function publicProducts(catalog: PublicCatalog): PublicProduct[] {
   return [...groups.values()]
 }
 export function publicPrice(cents: number) { return (cents / 100).toFixed(cents % 100 ? 2 : 0) }
+
+export function publicPageMetadata(page: string, catalog: PublicCatalog, homeTitle: string, homeDescription: string) {
+  const brand = catalog.platformBranding?.name || '商店'
+  if (page === 'store') return { title: homeTitle, description: homeDescription, path: '/' }
+  const product = publicProducts(catalog).find(p => 'product/' + p.path.slice('/product/'.length) === page)
+  return product ? { title: product.name + ' · ' + brand, description: product.description, path: product.path } : null
+}
