@@ -62,3 +62,13 @@ test('metadata is page specific; orders, hidden products and unknown routes cann
   for (const page of ['orders', 'product/missing', 'admin', 'partner']) assert.equal(publicPageMetadata(page, catalog, '', ''), null)
   assert.equal(publicPageMetadata('product/chatgpt', { ...catalog, hiddenProductIds: ['chatgpt'] }, '', ''), null)
 })
+
+test('SEO cache maintenance failure cannot alter a successful pricing settings response',async()=>{
+ let forwarded=0,lookups=0
+ const response=new Response('original admin result',{status:200,headers:{'X-Original':'yes'}})
+ const env=new Proxy({}, {get(){lookups++;throw new Error('cache binding unavailable')}}) as Env
+ const entry=withPublicStorefront({...original,fetch:async()=>{forwarded++;return response}})
+ const request=new Request('https://shop.example.invalid/api/admin/plans/plus',{method:'POST',body:'original signed body'})
+ const actual=await entry.fetch(request,env)
+ assert.equal(actual,response);assert.equal(forwarded,1);assert.equal(lookups,1);assert.equal(request.bodyUsed,false)
+})

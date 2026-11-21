@@ -3,11 +3,13 @@
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 function pick(value: unknown, keys: readonly string[]) {
   if (!record(value)) return value === null ? null : undefined
-  return Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]))
+  return Object.fromEntries(keys.filter(key => Object.hasOwn(value, key) && (value[key] === null || ['string', 'number', 'boolean'].includes(typeof value[key]))).map(key => [key, value[key]]))
 }
 export function publicBootstrapCatalog(value: unknown) {
   if (!record(value) || !Array.isArray(value.plans)) throw new Error('Invalid public catalog')
-  const result = pick(value, ['hiddenProductIds', 'productOrder', 'completedOrdersByProduct', 'checkoutEnabled', 'testingEnabled', 'mode'])!
+  const result = pick(value, ['checkoutEnabled', 'testingEnabled', 'mode'])!
+  for (const key of ['hiddenProductIds', 'productOrder']) if (Array.isArray(value[key])) result[key] = value[key].filter((id: unknown) => typeof id === 'string' && /^[a-z0-9_-]{1,96}$/i.test(id))
+  if (record(value.completedOrdersByProduct)) result.completedOrdersByProduct = Object.fromEntries(Object.entries(value.completedOrdersByProduct).filter(([id, count]) => /^[a-z0-9_-]{1,96}$/i.test(id) && Number.isSafeInteger(count) && Number(count) >= 0))
   result.plans = value.plans.map(plan => pick(plan, ['id', 'product_id', 'name', 'price_cents', 'enabled', 'renewal_only', 'version', 'delisted', 'supply_kind', 'delivery_provider', 'delivery_type', 'product_name', 'category', 'description', 'stock_available', 'has_coupons', 'supports_warranty', 'partner_enabled', 'purchase_note', 'delivery_instructions']))
   result.platformBranding = pick(value.platformBranding, ['name', 'logo', 'pageTitle', 'headline', 'description', 'version'])
   result.supportContacts = pick(value.supportContacts, ['wechat', 'qq', 'email'])

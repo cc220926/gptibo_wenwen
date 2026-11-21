@@ -27,8 +27,46 @@ test('all guides remain standalone without a catalog, limiter or database',async
  const s=await setup();t.after(()=>s.db.close())
  s.env.INTEREST_DB={prepare(){throw new Error('D1 unavailable')},batch:async()=>{throw new Error('write')}}
  s.env.SEO_CATALOG_LIMITER.limit=async()=>{throw new Error('limit unavailable')}
- for(const path of ['/help/','/help/order-recovery','/help/after-payment','/help/after-sales']){
+ for(const path of ['/help/','/help/order-recovery','/help/after-payment','/help/after-sales','/help/recharge-or-account','/help/codex-credits']){
   const r=await s.get(path);const html=await r.text();assert.equal(r.status,200);assert.match(html,/<h1/);assert.doesNotMatch(html,/<script[^>]+src=/)
   if(path.endsWith('order-recovery'))assert.match(html,/关闭页面后如何找回订单/)
  }
+})
+
+test('missing SEO binding and denied refreshes never borrow buyer API quota or start D1 work',async t=>{
+ const s=await setup();t.after(()=>s.db.close());Reflect.deleteProperty(s.env,'SEO_CATALOG_LIMITER')
+ let api=0;s.env.API_LIMITER={limit:async()=>{api++;return{success:true}}}
+ for(let i=0;i<5;i++)assert.equal((await s.get('/?source='+i)).status,200)
+ assert.equal(s.stats().reads,0);assert.equal(api,0)
+ const client=await worker.fetch(new Request(origin+'/api/orders/client',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:'{}'}),s.env)
+ assert.equal(client.status,200);assert.equal(api,1)
+})
+
+test('expired cache obeys denied refresh budget with backoff instead of repeating reads',async t=>{
+ const s=await setup();t.after(()=>s.db.close());await s.get('/')
+ const before=s.stats().reads;let clock=Date.now(),denied=0;t.mock.method(Date,'now',()=>clock)
+ clock+=15001;s.env.SEO_CATALOG_LIMITER.limit=async()=>{denied++;return{success:false}}
+ for(let i=0;i<10;i++)assert.equal((await s.get('/product/chatgpt?source='+i)).status,200)
+ assert.equal(s.stats().reads,before);assert.equal(denied,1)
+})
+
+test('timed-out catalog reads remain coalesced until the actual database work settles', {timeout:6000},async t=>{
+ const s=await setup();t.after(()=>s.db.close());let release!:()=>void
+ const gate=new Promise<void>(resolve=>{release=resolve}),db=s.env.INTEREST_DB
+ s.env.INTEREST_DB={...db,prepare(sql){const q=db.prepare(sql);const wrap=(x:typeof q):typeof q=>({bind(...v){return wrap(x.bind(...v))},async first<T>(){await gate;return x.first<T>()},async all<T>(){await gate;return x.all<T>()},run:()=>x.run()});return wrap(q)}}
+ await s.get('/');const first=s.stats()
+ await Promise.all(Array.from({length:8},()=>s.get('/product/chatgpt')))
+ assert.deepEqual(s.stats(),first,'Response deadlines must not release the underlying in-flight read')
+ release();await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve))
+ assert.equal((await s.get('/')).status,200)
+})
+
+test('successful price edits invalidate only the SEO cache and preserve current purchase pricing',async t=>{
+ const s=await setup();t.after(()=>s.db.close());await s.get('/')
+ const plus=s.db.prepare("SELECT version FROM catalog_plans WHERE id='plus'").get()!
+ const r=await worker.fetch(new Request(origin+'/api/admin/plans/plus',{method:'POST',headers:{Origin:origin,Cookie:s.admin,'Content-Type':'application/json'},body:JSON.stringify({priceCents:14100,enabled:true,version:plus.version,note:'本地价格变动回归'})}),s.env)
+ assert.equal(r.status,200,await r.clone().text())
+ const html=await (await s.get('/product/chatgpt')).text();assert.match(html,/¥141<\/td>/);assert.match(html,/id="storefront-public-catalog"/)
+ const current=await (await worker.fetch(new Request(origin+'/api/catalog'),s.env)).json()
+ assert.equal(current.plans.find((p:{id:string})=>p.id==='plus').price_cents,14100)
 })

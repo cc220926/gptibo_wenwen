@@ -20,13 +20,13 @@ test('only a freshly read main catalog is emitted as one-time client bootstrap',
 import { publicBootstrapCatalog, serializePublicBootstrap, parsePublicBootstrap } from '../shared/public-bootstrap.ts'
 import { consumePublicCatalogBootstrap, readPublicCatalog } from '../src/lib/public-catalog-bootstrap.ts'
 import { readStoreResources } from '../src/lib/store-reads.ts'
-const sample = () => ({plans:[{id:'plus',product_id:'chatgpt',name:'Plus',price_cents:13800,enabled:1,renewal_only:0,version:2,supports_warranty:false,has_coupons:true,purchase_note:'购买须知',delivery_instructions:'公开指引'}],checkoutEnabled:true,testingEnabled:false,platformBranding:{name:'商店',logo:'',pageTitle:'标题',headline:'介绍',description:'说明',version:1},supportContacts:{wechat:'客服',qq:'',email:''},paymentMethods:[{method:'alipay',name:'支付宝',feeBps:30}],announcement:{enabled:true,placement:'home',title:'公告',content:'内容',version:1},marketingMetric:{enabled:true,displayText:'示例',displayCount:3},hiddenProductIds:[],productOrder:['chatgpt']})
+const sample = () => ({plans:[{id:'plus',product_id:'chatgpt',name:'Plus',price_cents:13800,enabled:1,renewal_only:0,version:2,supports_warranty:false,has_coupons:true,purchase_note:'购买须知',delivery_instructions:'公开指引'}],checkoutEnabled:true,testingEnabled:false,platformBranding:{name:'商店',logo:'',pageTitle:'标题',headline:'介绍',description:'说明',version:1},supportContacts:{wechat:'客服',qq:'',email:''},paymentMethods:[{method:'alipay',name:'支付宝',feeBps:30}],announcement:{enabled:true,placement:'home',title:'公告',content:'内容',version:1},marketingMetric:{enabled:true,displayText:'示例',displayCount:3},hiddenProductIds:[],productOrder:['chatgpt'],completedOrdersByProduct:{chatgpt:1}})
 
 test('bootstrap retains public checkout settings and escapes active markup without copying secrets',()=>{
  const data=sample();data.plans[0].purchase_note='</script><script>alert(1)</script>&'
- const raw={...data,orders:['private-order'],session:'private-session',cost_cents:123,plans:[{...data.plans[0],encrypted_value:'PRIVATE_CDK',cost_cents:999}]}
+ const raw={...data,orders:['private-order'],session:'private-session',cost_cents:123,completedOrdersByProduct:{chatgpt:1,secret:{token:'PRIVATE_NESTED'}},plans:[{...data.plans[0],encrypted_value:'PRIVATE_CDK',cost_cents:999,description:{token:'PRIVATE_NESTED'}}]}
  const text=serializePublicBootstrap(raw,'https://shop.example.invalid',1000)
- assert.doesNotMatch(text,/<script|<\/script|PRIVATE_CDK|private-order|private-session|cost_cents/)
+ assert.doesNotMatch(text,/<script|<\/script|PRIVATE_CDK|PRIVATE_NESTED|private-order|private-session|cost_cents/)
  const parsed=parsePublicBootstrap<ReturnType<typeof sample>>(text,'https://shop.example.invalid',1001)!
  assert.deepEqual(parsed,publicBootstrapCatalog(data));assert.equal(parsed.plans[0].supports_warranty,false);assert.equal(parsed.paymentMethods[0].feeBps,30)
 })
