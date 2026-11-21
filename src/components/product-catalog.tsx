@@ -8,7 +8,7 @@ import { XPremiumScene } from './x-premium'
 import { MembershipScene } from './membership-scene'
 import { EMAIL_PRODUCTS } from '../../shared/email-products'
 import { useState, type MouseEvent, type ReactNode } from 'react'
-import { ChevronRight, CircleHelp, Clock3, LayoutGrid, MessageSquare, Package, Mail, ReceiptText, Search, Sparkles, Terminal } from 'lucide-react'
+import { ChevronRight, CircleHelp, LayoutGrid, MessageSquare, Package, Mail, ReceiptText, Search, Sparkles, Terminal } from 'lucide-react'
 import { LaunchInterestDialog, type InterestProduct } from './launch-interest-dialog'
 import { ProductMark } from './brand'
 import { SubscriptionDeck } from './subscription-deck'
@@ -30,7 +30,7 @@ const categories = [
 
 function CatalogSkeleton() {
   return <div className="store-featured store-catalog-skeleton" aria-hidden="true">
-    {[0, 1, 2, 3].map(index => <div key={index} className="store-product store-skeleton-card">
+    {[0, 1, 2, 3, 4, 5].map(index => <div key={index} className="store-product store-skeleton-card">
       <span className="store-skeleton-title" /><span className="store-skeleton-spec" />
       <div className="store-skeleton-art"><span /></div>
       <div className="store-product-bottom"><span className="store-skeleton-price" /><span className="store-skeleton-action" /></div>
@@ -95,14 +95,13 @@ export function ProductCatalog({ onHelp, onOrders, onNavigate, offers, catalogRe
     else groups.push([card])
   }
   const visibleCards = groups.flat()
-  return <section id="catalog-products" className="store-home page-width" aria-label={t('商品目录')}>
-    <aside className="store-sidebar" aria-label={t('商品分类')}>
-      <span className="store-sidebar-label">{t('浏览商品')}</span>
-      <div className="store-categories" role="group" aria-label={t('按品类筛选')}>{categoryOptions.map(({ id, name, icon: Icon }) => <Button key={id} variant="ghost" aria-pressed={category === id} onClick={() => setCategory(id)}><Icon size={16} />{t(name)}</Button>)}</div>
-      <div className="store-sidebar-links"><Button variant="ghost" onClick={onOrders}><Clock3 size={16} />{t('继续我的订单')}</Button><Button variant="ghost" onClick={onHelp}><CircleHelp size={16} />{t('购买帮助')}</Button></div>
-    </aside>
+  return <section id="catalog-products" className="store-home page-width" tabIndex={-1} aria-label={t('商品目录')}>
     <div className="store-content" aria-busy={!catalogReady && !error}>
       <div className="store-toolbar"><h2>{t(query ? '搜索结果' : category === 'all' ? '为你精选。' : categoryOptions.find(c => c.id === category)?.name ?? '商品')}</h2><label className="store-search"><Search size={15} /><Input aria-label={t('搜索商品')} placeholder={t('搜索商品')} value={query} onChange={e => setQuery(e.target.value)} /></label></div>
+      <div className="store-category-bar">
+        <div className="store-categories" role="group" aria-label={t('按品类筛选')}>{categoryOptions.map(({ id, name, icon: Icon }) => <Button key={id} variant="ghost" aria-pressed={category === id} onClick={() => setCategory(id)}><Icon size={16} />{t(name)}</Button>)}</div>
+        <Button variant="ghost" className="store-help-link" onClick={onHelp}><CircleHelp size={15} />{t('购买帮助')}</Button>
+      </div>
       {!catalogReady ? error ? <p className="store-empty" role="status">{t('商品暂时加载失败，请点击上方重试。')}</p> : <>
         <span className="sr-only" role="status">{t('正在加载商品')}</span><CatalogSkeleton />
       </> : <>
@@ -111,7 +110,7 @@ export function ProductCatalog({ onHelp, onOrders, onNavigate, offers, catalogRe
             {card.node}
           </div>)}
         </div>)}
-        {!groups.length && <p className="store-empty" role="status">{t('没有找到相关商品，试试其他名称。')}</p>}
+        {!groups.length && <div className="store-empty" role="status"><p>{t('没有找到相关商品，试试其他名称。')}</p><Button variant="outline" onClick={() => { setQuery(''); setCategory('all') }}>{t('全部商品')}</Button></div>}
       </>}
       <p className="store-order-note"><ReceiptText size={15} />{t('付款、交付与售后，都可以在')}<button onClick={onOrders}>{t('「我的订单」')}</button>{t('中继续。')}</p>
     </div>
