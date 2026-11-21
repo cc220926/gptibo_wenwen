@@ -1,0 +1,28 @@
+.storefront-startup {
+  box-sizing: border-box;
+  width: min(100%, 1120px);
+  min-height: 72vh;
+  margin: 0 auto;
+  padding: clamp(28px, 5vw, 64px) 24px;
+  color: #242427;
+  font: 15px/1.7 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.storefront-startup .storefront-startup-brand { margin: 0 0 32px; font-size: 15px; font-weight: 600; }
+.storefront-startup .storefront-startup-title { margin: 0 0 28px; font-size: clamp(23px, 4vw, 32px); font-weight: 600; letter-spacing: -.025em; }
+.storefront-startup-skeleton > span { display: block; width: min(65%, 420px); height: 12px; margin-bottom: 36px; border-radius: 6px; background: #e9e9ed; }
+.storefront-startup-skeleton > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.storefront-startup-skeleton i { display: block; height: 160px; border: 1px solid #e7e7eb; border-radius: 20px; background: #f1f1f4; }
+.storefront-startup .storefront-startup-recovery { margin: 28px 0 0; color: #686870; font-size: 13px; }
+.storefront-startup a { color: #5a3dd8; text-decoration: underline; text-underline-offset: 3px; }
+.storefront-startup a:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; border-radius: 2px; }
+.storefront-startup noscript p { margin: 16px 0; font-size: 13px; }
+@media (max-width: 540px) {
+  .storefront-startup { padding-inline: 20px; }
+  .storefront-startup-skeleton > div { grid-template-columns: 1fr; gap: 12px; }
+  .storefront-startup-skeleton i { height: 96px; }
+}
+.dark .storefront-startup { color: #eeeef2; }
+.dark .storefront-startup-skeleton > span { background: #36363c; }
+.dark .storefront-startup-skeleton i { border-color: #38383f; background: #29292e; }
+.dark .storefront-startup .storefront-startup-recovery { color: #aaaab5; }
+.dark .storefront-startup a { color: #b7a7ff; }

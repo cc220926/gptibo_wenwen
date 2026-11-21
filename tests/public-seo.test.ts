@@ -16,7 +16,13 @@ async function fixture() {
   return { ...s, env, get: (path: string, method = 'GET') => worker.fetch(new Request(origin + path, { method }), env) }
 }
 
-test('configured public homepage is readable without JavaScript and uses live catalog prices', async t => {
+function bootstrap(html: string) {
+  const json = html.match(/<script id="storefront-public-catalog" type="application\/json">([^]*?)<\/script>/)?.[1]
+  assert.ok(json, 'Fresh public catalog must be available to the real application')
+  return JSON.parse(json).catalog
+}
+
+test('configured public homepage keeps metadata and supplies fresh prices to the real storefront', async t => {
   const s = await fixture(); t.after(() => s.db.close())
   s.db.prepare("UPDATE platform_branding SET name='测试充电站',page_title='测试充电站',headline='AI 服务',description='服务说明' WHERE id=1").run()
   s.db.prepare("UPDATE catalog_plans SET price_cents=12345 WHERE id='plus'").run()
@@ -25,8 +31,9 @@ test('configured public homepage is readable without JavaScript and uses live ca
   assert.doesNotMatch(response.headers.get('X-Robots-Tag') ?? '', /noindex/)
   const html = await response.text()
   assert.match(html, /<title>测试充电站<\/title>/)
-  assert.match(html, /<h1[^>]*>AI 服务<\/h1>/)
-  assert.match(html, /123\.45/)
+  const catalog = bootstrap(html)
+  assert.equal(catalog.platformBranding.headline, 'AI 服务')
+  assert.equal(catalog.plans.find((plan: { id: string }) => plan.id === 'plus').price_cents, 12345)
   assert.match(html, /rel="canonical" href="https:\/\/shop.example.invalid\/"/)
   assert.match(html, /href="\/help\/"/)
   assert.doesNotMatch(html, /name="robots" content="noindex/)
@@ -99,21 +106,22 @@ test('canonical addresses normalize variants without forwarding tracking paramet
   assert.equal(head.status, 200); assert.equal(await head.text(), '')
 })
 
-test('current price, paused state, visibility and removal update in HTML and sitemap', async t => {
+test('current price and paused state reach bootstrap; visibility changes invalidate public routes and sitemap', async t => {
   const s = await fixture(); t.after(() => s.db.close())
   s.db.prepare("UPDATE catalog_plans SET price_cents=33333,enabled=0 WHERE product_id='chatgpt'").run()
   const paused = await (await s.get('/product/chatgpt')).text()
-  assert.match(paused, /333\.33/); assert.match(paused, /暂停售卖/)
-  assert.doesNotMatch(paused, />可选购</)
+  const plans = bootstrap(paused).plans.filter((plan: { product_id: string }) => plan.product_id === 'chatgpt')
+  assert.ok(plans.length > 0)
+  for (const plan of plans) { assert.equal(plan.price_cents, 33333); assert.equal(plan.enabled, 0) }
   // Use the actual public visibility API so the fixture follows real storage rules.
   const settings = await (await s.request('/api/admin/product-visibility', undefined, s.admin)).json()
   assert.ok(settings.hiddenProductIds)
   const saved = await worker.fetch(new Request(origin + '/api/admin/product-visibility', { method: 'POST', headers: { Origin: origin, Cookie: s.admin, 'Content-Type': 'application/json' }, body: JSON.stringify({ hiddenProductIds: ['chatgpt'], version: settings.version, note: '本地 SEO 验收下架测试' }) }), s.env)
   assert.equal(saved.status, 200, await saved.clone().text())
+  assert.ok(bootstrap(await (await s.get('/')).text()).hiddenProductIds.includes('chatgpt'))
   assert.equal((await s.get('/product/chatgpt')).status, 404)
   const sitemap = await (await s.get('/sitemap.xml')).text()
   assert.doesNotMatch(sitemap, /\/product\/chatgpt</)
-  assert.doesNotMatch(await (await s.get('/')).text(), /href="\/product\/chatgpt"/)
 })
 
 test('SEO errors do not prevent the legacy app and do not expose internal failures', async t => {

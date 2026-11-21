@@ -17,6 +17,7 @@ import { SupportContactsDialog } from '@/components/support-contacts'
 import { StoreAnnouncement } from '@/components/announcement-dialog'
 import { PurchaseFlow } from '@/components/purchase-flow'
 import { ProductCatalog } from '@/components/product-catalog'
+import { HomeGuidance } from '@/components/home-guidance'
 import { PurchaseWorkspace } from '@/components/purchase-workspace'
 import { RechargeGuide } from '@/components/recharge-guide'
 import { PRODUCTS, SMS_REDEEM_HOST, SMS_STEPS, productPlans, productForPlan, readPage } from '@/lib/products'
@@ -34,6 +35,7 @@ import './App.css'
 import './styles/motion.css'
 import './styles/catalog-conversion.css'
 import './styles/storefront-i18n.css'
+import './styles/home-guidance.css'
 
 const faq = [
   ['Pro 10× 可以新开吗？', '可以。Pro 10× 支持新开与续费，Pro 25× 也支持新开和自动充值。'],
@@ -165,9 +167,9 @@ function App() {
     <main id="main-content" tabIndex={-1}>
       {store.error && <div className="storage-warning" role="alert">{t(store.error)} <Button variant="ghost" onClick={() => void store.refresh()}>{t('重试')}</Button></div>}
       {page === 'store' ? <><section className="store-intro page-width reveal-in">
-        <div><h1>{branding?.headline || <>{t('商店。')}<span>{t('找到适合你的服务。')}</span></>}</h1><p>{description}</p></div>
-        <div className="store-intro-support"><span>{t('选购遇到问题？')}</span><Button variant="ghost" onClick={openSupport}>{t('联系支持')}<ArrowRight size={14} /></Button></div>
-        </section><ProductCatalog catalogReady={store.catalogReady} error={store.error} hiddenProductIds={store.hiddenProductIds} productOrder={store.productOrder} offers={store.catalog} onHelp={help} onOrders={() => navigate('orders')} onNavigate={navigate} /></> : serviceProductId ? <ServiceProductPage key={serviceProductId} productId={serviceProductId} offers={store.catalog} ready={store.catalogReady} busy={store.busy} checkoutEnabled={store.checkoutEnabled} onBuy={beginServicePurchase} onNavigate={navigate} onSupport={openSupport} /> : isDetail && productHidden ? <section className="empty-orders page-width"><h1>{t('该商品已下架')}</h1><p>{t('商店暂不销售此商品，已有订单可在「我的订单」中继续处理。')}</p><Button onClick={() => navigate('store')}>{t('返回商店')}</Button></section> : isDetail ? <>
+        <div><h1>{branding?.headline || t('找到适合你的服务。')}</h1><p>{description}</p></div>
+        <div className="store-intro-support"><Button variant="ghost" onClick={() => navigate('orders')}><Clock3 size={15} />{t('继续我的订单')}<ArrowRight size={14} /></Button></div>
+        </section><HomeGuidance offers={store.catalog} onOrders={() => navigate('orders')} onSupport={openSupport} /><ProductCatalog catalogReady={store.catalogReady} error={store.error} hiddenProductIds={store.hiddenProductIds} productOrder={store.productOrder} offers={store.catalog} onHelp={help} onOrders={() => navigate('orders')} onNavigate={navigate} /></> : serviceProductId ? <ServiceProductPage key={serviceProductId} productId={serviceProductId} offers={store.catalog} ready={store.catalogReady} busy={store.busy} checkoutEnabled={store.checkoutEnabled} onBuy={beginServicePurchase} onNavigate={navigate} onSupport={openSupport} /> : isDetail && productHidden ? <section className="empty-orders page-width"><h1>{t('该商品已下架')}</h1><p>{t('商店暂不销售此商品，已有订单可在「我的订单」中继续处理。')}</p><Button onClick={() => navigate('store')}>{t('返回商店')}</Button></section> : isDetail ? <>
         <section className="detail-intro page-width reveal-in"><nav className="product-breadcrumb" aria-label="当前位置"><a href={storefrontHref('store')} onClick={event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigate('store') }}>全部商品</a><ChevronRight size={13} /><span aria-current="page">{product.name}</span></nav><h1>{product.name}</h1><p>{product.tagline}</p></section>
         {product.id === 'chatgpt' && showChatGPTActivity && <CustomerHistory key={partnerSlug} partner={partnerSlug} />}
         <PurchaseWorkspace marketingMetric={product.id === 'chatgpt' ? marketingMetric : null} presenceOthers={product.id === 'chatgpt' ? presenceOthers : null} product={product} plans={plans} plan={plan} selected={selected} store={store} setSelected={setSelected} beginPurchase={beginPurchase} help={help} onGuide={() => document.getElementById('how-it-works')?.scrollIntoView({ behavior: 'auto' })} />

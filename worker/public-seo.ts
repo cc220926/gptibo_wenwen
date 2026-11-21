@@ -2,7 +2,7 @@ import { serializePublicBootstrap } from '../shared/public-bootstrap.ts'
 import { commerce } from './commerce.ts'
 import { secureResponse } from './security.ts'
 import type { Database, Env, Statement } from './platform.ts'
-import { publicProducts, publicPrice, type PublicCatalog, type PublicProduct } from '../shared/public-storefront.ts'
+import { publicProducts, type PublicCatalog } from '../shared/public-storefront.ts'
 import { publicArticles, publicHelpUpdated } from '../shared/public-help.ts'
 
 export type SeoEnv = Env & { STOREFRONT_SEO_ORIGIN?: string; SEO_CATALOG_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> } }
@@ -84,8 +84,10 @@ async function publicCatalog(env: SeoEnv, origin: string): Promise<{ catalog: Pu
 }
 const privatePath = (path: string) => /^\/(?:api|admin|orders|partner|join|r|s)(?:\/|$)/.test(path) || path.startsWith('/__preview/')
 const assetPath = (path: string) => /^\/(?:assets|brands|fonts|images)\//.test(path) || /\.[a-z\d]{1,8}$/i.test(path)
-const offerRows = (product: PublicProduct) => product.offers.map(p => `<tr><th scope="row">${escape(p.name)}</th><td>¥${publicPrice(p.price_cents)}</td><td>${p.enabled ? p.renewal_only ? '仅续费' : '可选购' : '暂停售卖'}</td></tr>`).join('')
-const productBlock = (product: PublicProduct) => `<section><h2><a href="${escape(product.path)}">${escape(product.name)}</a></h2><p>${escape(product.description)}</p><table><thead><tr><th>规格</th><th>价格</th><th>状态</th></tr></thead><tbody>${offerRows(product)}</tbody></table></section>`
+// This is a loading view for everyone, not a second storefront or crawler-only
+// product document. The unchanged React entry replaces it when it commits.
+// Recovery links remain usable when the application bundle cannot execute.
+const startupShell = (brand: string) => `<main class="storefront-startup" data-storefront-startup aria-labelledby="storefront-startup-title"><p class="storefront-startup-brand">${escape(brand)}</p><p id="storefront-startup-title" class="storefront-startup-title" role="status">正在加载页面…</p><div class="storefront-startup-skeleton" aria-hidden="true"><span></span><div><i></i><i></i><i></i><i></i></div></div><p class="storefront-startup-recovery">如果页面没有继续打开，可以<a href="">重新加载</a>，或<a href="/help/">查看购买指南</a>。</p><noscript><p>当前浏览器未启用 JavaScript，启用后即可选购。</p></noscript></main>`
 const helpLinks = () => publicArticles.map(a => `<li><a href="/help/${a.slug}">${escape(a.title)}</a></li>`).join('')
 function htmlResponse(request: Request, body: string, status = 200, index = true) {
   const response = new Response(request.method === 'HEAD' ? null : body, { status, headers: {
@@ -138,7 +140,6 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   }
   const title = product ? product.name + ' · ' + brand : branding.pageTitle || brand
   const description = product?.description ?? branding.description
-  const body = product ? `<nav><a href="/">全部商品</a></nav><h1>${escape(product.name)}</h1><p>${escape(product.description)}</p>${productBlock(product)}<p>实际可购状态和最终金额以订单确认为准。请先查看购买须知。</p><p><a href="/help/">购买指南</a> · <a href="/orders">我的订单</a></p>` : `<h1>${escape(branding.headline || brand)}</h1><p>${escape(description)}</p>${products.map(productBlock).join('')}<nav aria-label="购买帮助"><a href="/help/">购买指南</a> · <a href="/orders">我的订单</a></nav>`
   const bootstrap = fresh ? `<script id="storefront-public-catalog" type="application/json">${serializePublicBootstrap(catalog, origin, fetchedAt)}</script>` : ''
   const asset = await env.ASSETS.fetch(new Request(origin + '/', { method: 'GET' }))
   if (!asset.ok) throw new Error('Storefront asset unavailable')
@@ -148,8 +149,8 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
     .replace(/<title>[^]*?<\/title>/, () => `<title>${escape(title)}</title>`)
     .replace(/<meta name="description"[^>]*>/, () => `<meta name="description" content="${escape(description)}">`)
     .replace(/<meta name="robots"[^>]*>/, '<meta name="robots" content="index, follow">')
-    .replace('</head>', () => `<link rel="canonical" href="${escape(origin + canonicalPath)}"><link rel="stylesheet" href="/public-content.css">${bootstrap}</head>`)
-    .replace('<div id="root"></div>', () => `<div id="root"><main class="public-seo-fallback">${body}</main></div>`)
+    .replace('</head>', () => `<link rel="canonical" href="${escape(origin + canonicalPath)}"><link rel="stylesheet" href="/storefront-startup.css">${bootstrap}</head>`)
+    .replace('<div id="root"></div>', () => `<div id="root">${startupShell(brand)}</div>`)
   return htmlResponse(request, html)
 }
 
