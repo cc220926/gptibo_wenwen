@@ -42,6 +42,7 @@
     }
   ],
   "ratelimits": [
+    { "name": "SEO_CATALOG_LIMITER", "namespace_id": "16881004", "simple": { "limit": 6, "period": 60 } },
     {
       "name": "INTEREST_LIMITER",
       "namespace_id": "16881001",

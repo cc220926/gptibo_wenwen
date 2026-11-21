@@ -4,7 +4,7 @@ import type { Database, Env, Statement } from './platform.ts'
 import { publicProducts, publicPrice, type PublicCatalog, type PublicProduct } from '../shared/public-storefront.ts'
 import { publicArticles, publicHelpUpdated } from '../shared/public-help.ts'
 
-export type SeoEnv = Env & { STOREFRONT_SEO_ORIGIN?: string }
+export type SeoEnv = Env & { STOREFRONT_SEO_ORIGIN?: string; SEO_CATALOG_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> } }
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 export function seoOrigin(value?: string) {
   if (!value) return null
@@ -30,18 +30,56 @@ export function readOnlyDatabase(database: Database): Database {
     batch: async () => { throw new Error('Public catalog cannot execute batches') },
   }
 }
-async function publicCatalog(env: SeoEnv, origin: string): Promise<PublicCatalog> {
-  // No inbound cookies, buyer token, query string, partner or forwarded headers.
-  // Reuse the existing public retail catalog; don't duplicate pricing or supply logic.
+const catalogTtlMs = 15000
+const retryDelayMs = 5000
+type CatalogSnapshot = { catalog: PublicCatalog; fetchedAt: number }
+type CatalogState = { snapshot?: CatalogSnapshot; inFlight?: Promise<CatalogSnapshot>; retryAt: number; generation: number }
+const catalogStates = new WeakMap<Database, Map<string, CatalogState>>()
+function catalogState(env: SeoEnv, origin: string) {
+  let origins = catalogStates.get(env.INTEREST_DB)
+  if (!origins) { origins = new Map(); catalogStates.set(env.INTEREST_DB, origins) }
+  let state = origins.get(origin)
+  if (!state) { state = { retryAt: 0, generation: 0 }; origins.set(origin, state) }
+  return state
+}
+function cachedCatalog(env: SeoEnv, origin: string) {
+  const snapshot = catalogStates.get(env.INTEREST_DB)?.get(origin)?.snapshot
+  return snapshot && Date.now() - snapshot.fetchedAt < catalogTtlMs ? snapshot.catalog : null
+}
+// Memory invalidation only; never changes the already completed admin response.
+export function invalidatePublicCatalog(env: Env) {
+  for (const state of catalogStates.get(env.INTEREST_DB)?.values() ?? []) {
+    state.snapshot = undefined; state.retryAt = 0; state.generation++
+  }
+}
+async function publicCatalog(env: SeoEnv, origin: string): Promise<{ catalog: PublicCatalog; fetchedAt: number; fresh: boolean }> {
+  const state = catalogState(env, origin)
+  if (state.snapshot && Date.now() - state.snapshot.fetchedAt < catalogTtlMs) return { ...state.snapshot, fresh: false }
+  if (!state.inFlight) {
+    if (Date.now() < state.retryAt || !env.SEO_CATALOG_LIMITER) throw new Error('Public catalog budget unavailable')
+    const generation = state.generation
+    // One key across paths, query strings and clients; separate from buyer API quota.
+    const operation = (async () => {
+      if (!(await env.SEO_CATALOG_LIMITER!.limit({ key: 'public-catalog:' + origin })).success) throw new Error('Public catalog budget exhausted')
+      const response = await commerce(new Request(origin + '/api/catalog'), { ...env, INTEREST_DB: readOnlyDatabase(env.INTEREST_DB) })
+      if (!response.ok) throw new Error('Public catalog unavailable')
+      const catalog = await response.json() as PublicCatalog
+      if (!Array.isArray(catalog.plans) || !catalog.platformBranding) throw new Error('Public catalog incomplete')
+      const snapshot = { catalog, fetchedAt: Date.now() }
+      if (generation === state.generation) state.snapshot = snapshot
+      return snapshot
+    })()
+    state.inFlight = operation
+    // A response deadline does not cancel D1: keep the same in-flight operation
+    // until it really settles, so stalled readers cannot start another batch.
+    void operation.then(() => { state.inFlight = undefined }, () => { state.inFlight = undefined; state.retryAt = Date.now() + retryDelayMs })
+  }
   let timer: ReturnType<typeof setTimeout> | undefined
-  const response = await Promise.race([
-    commerce(new Request(origin + '/api/catalog'), { ...env, INTEREST_DB: readOnlyDatabase(env.INTEREST_DB) }),
-    new Promise<Response>((_, reject) => { timer = setTimeout(() => reject(new Error('Public catalog deadline')), 1500) }),
+  const snapshot = await Promise.race([
+    state.inFlight,
+    new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Public catalog deadline')), 1500) }),
   ]).finally(() => clearTimeout(timer))
-  if (!response.ok) throw new Error('Public catalog unavailable')
-  const catalog = await response.json() as PublicCatalog
-  if (!Array.isArray(catalog.plans) || !catalog.platformBranding) throw new Error('Public catalog incomplete')
-  return catalog
+  return { ...snapshot, fresh: true }
 }
 const privatePath = (path: string) => /^\/(?:api|admin|orders|partner|join|r|s)(?:\/|$)/.test(path) || path.startsWith('/__preview/')
 const assetPath = (path: string) => /^\/(?:assets|brands|fonts|images)\//.test(path) || /\.[a-z\d]{1,8}$/i.test(path)
@@ -76,7 +114,16 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   const article = publicArticles.find(a => '/help/' + a.slug === normalized)
   const validRoute = ['/', '/index.html', '/help', '/sitemap.xml'].includes(normalized) || article || /^\/product\/[a-z0-9_-]+$/i.test(normalized)
   if (!validRoute) return notFound(request)
-  const catalog = await publicCatalog(env, origin)
+  if (isHelp) {
+    const cached = cachedCatalog(env, origin)
+    const brand = cached?.platformBranding?.name || '商店'
+    const products = cached ? publicProducts(cached) : []
+    const canonicalPath = article ? '/help/' + article.slug : '/help/'
+    if (path !== canonicalPath) return secureResponse(request, new Response(null, { status: 308, headers: { Location: canonicalPath + url.search, 'Cache-Control': 'no-store' } }))
+    const body = article ? `<nav aria-label="当前位置"><a href="/help/">购买指南</a></nav><h1>${escape(article.title)}</h1><p class="public-answer">${escape(article.answer)}</p><p class="public-date">内容核对日期：<time datetime="${publicHelpUpdated}">${publicHelpUpdated}</time> · ${escape(brand)} 服务说明</p>${article.sections.map(s => `<section><h2>${escape(s.title)}</h2>${s.paragraphs.map(p => `<p>${escape(p)}</p>`).join('')}</section>`).join('')}${article.related && products.some(p => p.path === article.related) ? `<p><a href="${article.related}">查看对应商品与现有教程</a></p>` : ''}<p><a href="/orders">查看或找回订单</a></p><aside><h2>其他购买问题</h2><ul>${helpLinks()}</ul></aside>` : `<h1>购买指南</h1><p class="public-answer">先确认商品和交付方式，再按原订单继续操作。</p><ul class="public-help-list">${publicArticles.map(a => `<li><h2><a href="/help/${a.slug}">${escape(a.title)}</a></h2><p>${escape(a.answer)}</p></li>`).join('')}</ul>`
+    return htmlResponse(request, document(article ? article.title + ' · ' + brand : '购买指南 · ' + brand, article?.answer ?? '商品选择、付款后操作、订单找回及售后说明。', origin + canonicalPath, body, brand))
+  }
+  const { catalog } = await publicCatalog(env, origin)
   const branding = catalog.platformBranding!, products = publicProducts(catalog)
   const brand = branding.name || '商店'
   const product = products.find(p => p.path === normalized)
@@ -87,10 +134,6 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
     const paths = ['/', ...products.map(p => p.path), '/help/', ...publicArticles.map(a => '/help/' + a.slug)]
     const xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + paths.map(p => `<url><loc>${escape(origin + p)}</loc></url>`).join('') + '</urlset>'
     return secureResponse(request, new Response(request.method === 'HEAD' ? null : xml, { headers: { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'no-store' } }))
-  }
-  if (isHelp) {
-    const body = article ? `<nav aria-label="当前位置"><a href="/help/">购买指南</a></nav><h1>${escape(article.title)}</h1><p class="public-answer">${escape(article.answer)}</p><p class="public-date">内容核对日期：<time datetime="${publicHelpUpdated}">${publicHelpUpdated}</time> · ${escape(brand)} 服务说明</p>${article.sections.map(s => `<section><h2>${escape(s.title)}</h2>${s.paragraphs.map(p => `<p>${escape(p)}</p>`).join('')}</section>`).join('')}${article.related && products.some(p => p.path === article.related) ? `<p><a href="${article.related}">查看对应商品与现有教程</a></p>` : ''}<p><a href="/orders">查看或找回订单</a></p><aside><h2>其他购买问题</h2><ul>${helpLinks()}</ul></aside>` : `<h1>购买指南</h1><p class="public-answer">先确认商品和交付方式，再按原订单继续操作。</p><ul class="public-help-list">${publicArticles.map(a => `<li><h2><a href="/help/${a.slug}">${escape(a.title)}</a></h2><p>${escape(a.answer)}</p></li>`).join('')}</ul>`
-    return htmlResponse(request, document(article ? article.title + ' · ' + brand : '购买指南 · ' + brand, article?.answer ?? '商品选择、付款后操作、订单找回及售后说明。', origin + canonicalPath, body, brand))
   }
   const title = product ? product.name + ' · ' + brand : branding.pageTitle || brand
   const description = product?.description ?? branding.description

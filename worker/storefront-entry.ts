@@ -1,6 +1,6 @@
 import commerceWorker from './index.ts'
 import { secureResponse } from './security.ts'
-import { publicStorefront, privateNavigationShell, type SeoEnv } from './public-seo.ts'
+import { publicStorefront, privateNavigationShell, invalidatePublicCatalog, type SeoEnv } from './public-seo.ts'
 
 // API requests and scheduled work retain the original handler and Env identity.
 // This wrapper is deliberately separate from payment / fulfillment routing.
@@ -8,7 +8,14 @@ export function withPublicStorefront(worker: typeof commerceWorker) {
   return {
     scheduled: worker.scheduled,
     async fetch(request: Request, env: SeoEnv): Promise<Response> {
-      if (new URL(request.url).pathname.startsWith('/api/')) return worker.fetch(request, env)
+      const path = new URL(request.url).pathname
+      if (path.startsWith('/api/')) {
+        const response = await worker.fetch(request, env)
+        if (request.method !== 'GET' && request.method !== 'HEAD' && response.ok && /^\/api\/admin\/(?:catalog|plans|branding|announcement|product-visibility|marketing-metric|inventory|xgift|account_supplier)(?:\/|$)/.test(path)) {
+          try { invalidatePublicCatalog(env) } catch { /* Cache maintenance cannot fail an admin operation. */ }
+        }
+        return response
+      }
       try {
         const publicResponse = await publicStorefront(request, env)
         if (publicResponse) return publicResponse

@@ -53,6 +53,14 @@
         "limit": 90,
         "period": 60
       }
+    },
+    {
+      "name": "SEO_CATALOG_LIMITER",
+      "namespace_id": "1004",
+      "simple": {
+        "limit": 6,
+        "period": 60
+      }
     }
   ],
   "assets": {

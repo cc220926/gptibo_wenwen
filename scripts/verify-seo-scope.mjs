@@ -9,7 +9,7 @@ const allowed = new Set([
   'wrangler.jsonc', 'wrangler.production.example.jsonc', 'src/App.tsx',
   'src/lib/public-seo-metadata.ts', 'worker/public-seo.ts', 'worker/storefront-entry.ts',
   'shared/public-storefront.ts', 'shared/public-help.ts', 'public/public-content.css',
-  'tests/public-seo.test.ts', 'tests/public-seo-boundaries.test.ts',
+  'tests/public-seo.test.ts', 'tests/public-seo-boundaries.test.ts', 'tests/public-seo-resource-isolation.test.ts',
   'scripts/verify-seo-scope.mjs', 'scripts/seo-regression-loader.mjs',
   'scripts/scan-public-source.py', 'docs/seo-foundation-acceptance.md', 'docs/seo-foundation.md',
 ])

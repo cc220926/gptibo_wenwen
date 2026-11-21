@@ -11,7 +11,7 @@ const template = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
 const origin = 'https://shop.example.invalid'
 async function fixture() {
   const s = await customerFixture()
-  const env = { ...s.env, STOREFRONT_SEO_ORIGIN: origin }
+  const env = { ...s.env, STOREFRONT_SEO_ORIGIN: origin, SEO_CATALOG_LIMITER: { limit: async () => ({ success: true }) } }
   env.ASSETS = { fetch: async () => new Response(template, { headers: { 'Content-Type': 'text/html', 'X-Robots-Tag': 'noindex, nofollow' } }) }
   return { ...s, env, get: (path: string, method = 'GET') => worker.fetch(new Request(origin + path, { method }), env) }
 }
@@ -108,7 +108,7 @@ test('current price, paused state, visibility and removal update in HTML and sit
   // Use the actual public visibility API so the fixture follows real storage rules.
   const settings = await (await s.request('/api/admin/product-visibility', undefined, s.admin)).json()
   assert.ok(settings.hiddenProductIds)
-  const saved = await s.request('/api/admin/product-visibility', { hiddenProductIds: ['chatgpt'], version: settings.version, note: '本地 SEO 验收下架测试' }, s.admin)
+  const saved = await worker.fetch(new Request(origin + '/api/admin/product-visibility', { method: 'POST', headers: { Origin: origin, Cookie: s.admin, 'Content-Type': 'application/json' }, body: JSON.stringify({ hiddenProductIds: ['chatgpt'], version: settings.version, note: '本地 SEO 验收下架测试' }) }), s.env)
   assert.equal(saved.status, 200, await saved.clone().text())
   assert.equal((await s.get('/product/chatgpt')).status, 404)
   const sitemap = await (await s.get('/sitemap.xml')).text()
