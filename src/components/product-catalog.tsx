@@ -105,7 +105,7 @@ export function ProductCatalog({ onHelp, onOrders, onNavigate, offers, catalogRe
       {!catalogReady ? error ? <p className="store-empty" role="status">{t('商品暂时加载失败，请点击上方重试。')}</p> : <>
         <span className="sr-only" role="status">{t('正在加载商品')}</span><CatalogSkeleton />
       </> : <>
-        {groups.map(group => <div key={group[0].id} className={(group[0].compact ? 'store-compact-grid' : 'store-featured') + ' store-product-group'}>
+        {groups.map(group => <div key={group[0].id} data-count={group.length} className={(group[0].compact ? 'store-compact-grid' : 'store-featured') + ' store-product-group'}>
           {group.map(card => <div key={card.id} className="store-card-enter reveal-in" style={{ animationDelay: `${Math.min(visibleCards.indexOf(card), 6) * 40}ms` }}>
             {card.node}
           </div>)}

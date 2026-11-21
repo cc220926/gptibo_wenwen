@@ -48,7 +48,9 @@ node scripts/verify-homepage-scope.mjs d7df5ef63ba99577048baf2ab28512ee4d51c2df
 
 ## 本次本地预览
 
-验收使用 `artifacts/homepage-guidance/vite.config.ts` 中的本地示例数据，预览服务仅监听 `127.0.0.1:5179`。交易请求统一拒绝，不连接真实支付、供应商或生产数据库。截图、原始测试日志、范围审计和验收矩阵保存在同目录；`artifacts/` 被 Git 忽略，临时验收材料不随源码提交。
+验收使用 `artifacts/homepage-guidance/vite.config.ts` 读取主站公开商品目录的本地快照，按主站的规格、价格及 `hiddenProductIds` 渲染，不自行添加示例商品，也不把分站限制套用到主站。快照仅保存于被 Git 忽略的验收目录，不随源码提交。桌面商品网格会根据实际卡片数自适应，最多三列；主站当前四类商品使用两行两列，避免三加一的空缺布局。
+
+预览服务仅监听 `127.0.0.1:5179`。交易请求统一拒绝，不连接真实支付、供应商或生产数据库；预览不会改动主站的商品、权限或履约配置。截图、原始测试日志、范围审计和验收矩阵保存在同目录；`artifacts/` 被 Git 忽略，临时验收材料不随源码提交。
 
 当前机器可重新运行：
 
@@ -57,4 +59,4 @@ npm run build
 npx vite preview --config artifacts/homepage-guidance/vite.config.ts --host 127.0.0.1 --port 5179 --strictPort
 ```
 
-示例价格不代表实际售价。其他开发环境请按项目 README 配置本地后端。现有教程的内嵌示意页面在 Vite 热更新模式会遇到 React preamble 错误，因此教程画面须使用构建后的本地 preview 验收；本次没有为此修改既有教程。
+价格为获取快照时的主站公开价格，不会自动同步后续变动。其他开发环境请按项目 README 配置本地后端。现有教程的内嵌示意页面在 Vite 热更新模式会遇到 React preamble 错误，因此教程画面须使用构建后的本地 preview 验收；本次没有为此修改既有教程。
