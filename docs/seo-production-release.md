@@ -1,5 +1,12 @@
 # SEO production release
 
+**Current status: rolled back on 2026-11-21 at 15:04:02 UTC (23:04:02
+Asia/Shanghai) after the user reported an unacceptable first-paint table.**
+The active version is now the verified compatibility version
+`c955856c-9141-4f59-9083-2bc6b744f1ef`, deployment
+`f8d51e8e-44e1-4748-8951-845cb0dbe552`. The original release below is historical;
+its source must not be redeployed without fixing and validating the first paint.
+
 This release changes the public SEO entry and catalog bootstrap. The checkout,
 payment, provider integrations, fulfillment handlers and database schema stay
 at the protected baseline `d7df5ef63ba99577048baf2ab28512ee4d51c2df`.
@@ -47,7 +54,7 @@ or client TLS reset alone is not evidence of a release regression.
 | --- | --- |
 | Source commit | `bc68dd48b27569e7d9ac30450cbeff32465a03c4` |
 | Release tag | `release-2026-11-21-seo-foundation` |
-| Active Worker version | `b6c4145f-f0de-4caa-a079-0ce09eec6669` |
+| Candidate Worker version (now rolled back) | `b6c4145f-f0de-4caa-a079-0ce09eec6669` |
 | Activated | 2026-11-21 14:47:18 UTC / 22:47:18 Asia/Shanghai |
 | Compatible rollback version | `c955856c-9141-4f59-9083-2bc6b744f1ef` |
 | Rollback source | `d7df5ef63ba99577048baf2ab28512ee4d51c2df`, with both asset generations |
@@ -107,6 +114,40 @@ entry points and scheduled execution, but does **not** claim a fresh real-paymen
 or third-party fulfillment success. No confirmed release regression triggered a
 rollback. Tail observation ended after the bounded post-release checks; it is not
 an unattended ongoing monitor or an automatic rollback service.
+
+## User-reported first-paint regression and rollback
+
+The public renderer injected a separate product table into `#root`. The unchanged
+React entry used `createRoot().render()`, replacing that table only after the
+client bundle ran. Consequently the table was visible to ordinary JavaScript
+users too; slow loading extends that interval, and a failed script can leave it
+visible. The user screenshot demonstrates this presentation, but does not by
+itself establish how long it remained visible on that device.
+
+The original 727-test suite and HTTP checks covered document content, routing
+and transaction preservation. Browser acceptance checked the final interactive
+state, not first-paint appearance with delayed or failed scripts. Those checks
+were insufficient for approving this rendering change. The previous description
+of the table as a no-JavaScript view was incomplete.
+
+The user had already authorized immediate rollback on regressions. The rollback
+restored the compatibility version to 100% traffic; a subsequent active-version
+audit preserved all 55 original bindings, and all 14 baseline HTTP checks and
+21 old/new static dependencies passed. The database was not restored or reset.
+The raw evidence is retained in the main project's ignored
+`artifacts/incidents/2026-11-21-seo-first-paint/` directory.
+
+The separate homepage design branch `codex/homepage-guidance` at `0e1b96f` was
+never included in the SEO candidate, which was based directly on `d7df5ef`.
+Thus the prior homepage design work was not deployed, and this release should
+not have been communicated as delivering that visual redesign.
+
+Before another release, remove the mismatching table from the storefront's
+initial render or implement initial markup consistent with the actual storefront.
+Do not merely switch to `hydrateRoot` over incompatible markup, hide content from
+people while showing it to crawlers, or treat final-state screenshots as first-paint
+coverage. Validate delayed/failed script loading and desktop/mobile rendering.
+No corrected SEO candidate was deployed as part of this incident response.
 
 ## Durable private archive and future operations
 
