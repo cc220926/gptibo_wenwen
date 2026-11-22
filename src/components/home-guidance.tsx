@@ -38,7 +38,7 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
   const title = useRef<HTMLHeadingElement>(null)
   const helpTitle = useRef<HTMLHeadingElement>(null)
   const searchInput = useRef<HTMLInputElement>(null)
-  const questionList = useRef<HTMLDivElement>(null)
+  const helpContent = useRef<HTMLDivElement>(null)
   const expandedQuestion = useRef<HTMLDetailsElement>(null)
   const feedbackTitle = useRef<HTMLHeadingElement>(null)
   const feedbackTrigger = useRef<HTMLButtonElement>(null)
@@ -48,11 +48,17 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
   const openDemo = () => setDemoOpen(true)
   const openHelp = (question?: string) => { setQuery(''); setExpanded(question ?? null); setHelpOpen(true) }
   const revealExpandedQuestion = () => {
-    const list = questionList.current
+    const pane = helpContent.current
     const question = expandedQuestion.current
-    if (!list || !question) return
-    // Move only the answer list; scrolling the document would move the storefront.
-    list.scrollTop += question.getBoundingClientRect().top - list.getBoundingClientRect().top
+    if (!pane || !question) return
+    const bounds = pane.getBoundingClientRect()
+    const answer = question.getBoundingClientRect()
+    // Keep the whole answer visible when it fits. Longer answers start at their
+    // heading and can be scrolled inside this pane without moving the storefront.
+    const delta = answer.height > bounds.height || answer.top < bounds.top
+      ? answer.top - bounds.top
+      : Math.max(0, answer.bottom - bounds.bottom)
+    pane.scrollTop += delta
   }
   useLayoutEffect(() => {
     if (helpOpen) revealExpandedQuestion()
@@ -117,10 +123,12 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
     </Dialog>
     <Dialog open={helpOpen} onOpenChange={setHelpOpen} onOpenChangeComplete={open => { if (open) revealExpandedQuestion() }}>
       <DialogContent className="home-guide-dialog home-guide-help-dialog" initialFocus={helpTitle}>
+        <div className="home-guide-help-content" ref={helpContent}>
         <DialogHeader><DialogTitle ref={helpTitle} tabIndex={-1}>{helpCopy.questionTitle}</DialogTitle><DialogDescription>{helpCopy.questionIntro}</DialogDescription></DialogHeader>
         <div className="home-guide-search"><Search size={17} aria-hidden="true" /><Input ref={searchInput} aria-label={helpCopy.search} placeholder={helpCopy.searchPlaceholder} value={query} maxLength={160} onChange={event => { setQuery(event.target.value); setExpanded(null) }} />{query && <Button variant="ghost" size="icon-sm" aria-label={helpCopy.clear} onClick={() => { setQuery(''); setExpanded(null); searchInput.current?.focus() }}><X size={15} /></Button>}</div>
         <p className="home-guide-results-count" role="status">{questions.length} {helpCopy.resultCount}</p>
-        <div className="home-guide-question-list" ref={questionList}>{questions.length ? questions.map(question => <details key={question.id} ref={expanded === question.id ? expandedQuestion : undefined} open={expanded === question.id}><summary onClick={event => { event.preventDefault(); setExpanded(value => value === question.id ? null : question.id) }}>{question.title}<ChevronRight size={16} aria-hidden="true" /></summary><div><p>{question.answer}</p><Button variant="link" className="home-guide-link" onClick={() => leaveGuide(question.action)}>{question.action === 'orders' ? helpCopy.orders : helpCopy.support}<ArrowRight size={15} /></Button></div></details>) : <div className="home-guide-no-results"><p>{helpCopy.noResults}</p><Button variant="link" onClick={() => leaveGuide('support')}>{helpCopy.support}<ArrowRight size={15} /></Button></div>}</div>
+        <div className="home-guide-question-list">{questions.length ? questions.map(question => <details key={question.id} ref={expanded === question.id ? expandedQuestion : undefined} open={expanded === question.id}><summary onClick={event => { event.preventDefault(); setExpanded(value => value === question.id ? null : question.id) }}>{question.title}<ChevronRight size={16} aria-hidden="true" /></summary><div><p>{question.answer}</p><Button variant="link" className="home-guide-link" onClick={() => leaveGuide(question.action)}>{question.action === 'orders' ? helpCopy.orders : helpCopy.support}<ArrowRight size={15} /></Button></div></details>) : <div className="home-guide-no-results"><p>{helpCopy.noResults}</p><Button variant="link" onClick={() => leaveGuide('support')}>{helpCopy.support}<ArrowRight size={15} /></Button></div>}</div>
+        </div>
       </DialogContent>
     </Dialog>
   </>

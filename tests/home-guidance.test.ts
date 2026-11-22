@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { homeGuideCopy, homeHelpCopy, homeFeedbackCopy, searchHomeQuestions } from '../src/lib/home-guidance.ts'
+import { credentialExpiryProblem } from '../shared/credential-expiry.ts'
+import { failureMessages } from '../worker/recharge/errors.ts'
 
 test('help search finds recovery, credentials, manual delivery and refunds without mixing up actions', () => {
   assert.equal(searchHomeQuestions('zh-CN', '页面关了')[0].id, 'recovery')
@@ -107,4 +109,29 @@ test('service records distinguish reported refunds, referrals, questions and cus
   assert.match(item('recharge-confirmed').context, /客服在用户确认完成后/)
   assert.ok(items.every(entry => !/自动退款|保证到账|客服修复成功|多次复购/.test([entry.description, entry.context].join(' '))))
   assert.deepEqual(items.filter(entry => /转账金额已遮挡/.test(entry.context)).map(entry => entry.id), ['renewal-inquiry'])
+})
+
+
+test('Session recovery help matches real expiry messages and keywords in both locales', () => {
+  const expiredToken = `header.${Buffer.from(JSON.stringify({ exp: 1 })).toString('base64url')}.signature`
+  const expiryMessages = [
+    credentialExpiryProblem(expiredToken, undefined, 2000),
+    credentialExpiryProblem('opaque-token', '1970-01-01T00:00:01.000Z', 2000),
+  ]
+  assert.ok(expiryMessages.every(Boolean), 'Exercise both production expiry messages')
+  const queries = [
+    'Session 已失效', failureMessages.session_invalid, ...expiryMessages,
+    'Session已过期或无权访问，请重新获取完整Session后重试。',
+    'Session expired or access denied. Get the complete Session and try again.',
+    '失效', '有效期', '过期', '无权访问', 'Session expired', 'Access Token expired', 'unauthorized', 'access denied',
+  ]
+  const misses: { locale: string; query: string }[] = []
+  for (const locale of ['zh-CN', 'en'] as const) {
+    for (const query of queries) {
+      const match = searchHomeQuestions(locale, query).find(question => question.id === 'session-expired')
+      if (!match) misses.push({ locale, query })
+      else assert.equal(match.action, 'orders', 'Retry stays in the original order flow')
+    }
+  }
+  assert.deepEqual(misses, [], 'Real error text should find the Session recovery instructions')
 })

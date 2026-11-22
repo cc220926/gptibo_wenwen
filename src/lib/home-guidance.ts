@@ -21,6 +21,18 @@ const copy = {
 export function homeGuideCopy(locale: StorefrontLocale) { return copy[locale] }
 
 export type HomeQuestion = { id: string; title: string; answer: string; keywords: string; action: 'orders' | 'support' }
+
+// Public error aliases support pasted messages in either locale. Keep these
+// as informational text; the storefront must not import checkout handlers.
+const sessionExpiryKeywords = [
+  'Session 过期 无权访问 完整 登出 退出 重新登录 重试 expired unauthorized access denied log out sign in',
+  'Session 已失效',
+  '登录凭据已失效，请重新登录后提交。',
+  'Session 中的 Access Token 已过期，请在 ChatGPT 重新获取完整 Session 后再提交。',
+  'Session 已超过有效期，请在 ChatGPT 重新获取完整 Session 后再提交。',
+  'Session已过期或无权访问，请重新获取完整Session后重试。',
+  'Session expired or access denied. Get the complete Session and try again.',
+].join(' ')
 const questions: Record<StorefrontLocale, readonly HomeQuestion[]> = {
   'zh-CN': [
     { id: 'apple-login', title: '通过 Apple 登录的 ChatGPT 账号能充值吗？', answer: '已有通过 Apple 登录的 ChatGPT 账号充值案例。购买前请联系客服确认账号情况及所选套餐，不保证所有账号都适用。这里指 ChatGPT 账号订阅，不是 Apple 账户余额充值。', keywords: 'Apple apple id 苹果 登录 隐藏邮箱 hide my email relay ChatGPT', action: 'support' },
@@ -30,7 +42,7 @@ const questions: Record<StorefrontLocale, readonly HomeQuestion[]> = {
     { id: 'delivery', title: '收到卡密或领取链接，就开通了吗？', answer: '不一定。兑换码和领取链接通常需要你按说明完成兑换或领取，再到对应账号确认结果。具体步骤以所购商品的交付说明为准。', keywords: '激活 兑换 CDK 卡密 链接 领取 redeem code link', action: 'orders' },
     { id: 'email', title: '没有收到交付邮件，怎么办？', answer: '先在原订单确认是否已交付，再检查下单邮箱和垃圾邮件。不要因为未收到邮件就重复购买；需要时携订单号联系支持。', keywords: '邮件 收件 垃圾 信箱 发货 email delivery', action: 'orders' },
     { id: 'credentials', title: '需要提供账号密码或 Session 吗？', answer: '账号充值可能需要在原订单的账号连接步骤提交 Session；它属于登录凭据，不要发给客服或写进售后备注。卡密、领取链接和接码等商品无需提交 Session，以商品说明为准。', keywords: '账号 密码 隐私 安全 凭据 session token password privacy', action: 'support' },
-    { id: 'session-expired', title: 'Session已过期或无权访问，请重新获取完整Session后重试。', answer: '请先在 chatgpt.com 登出账号，再重新登录，重新获取完整 Session 后，在原订单重试。', keywords: 'Session 过期 无权访问 完整 登出 退出 重新登录 重试 expired unauthorized access denied log out sign in', action: 'orders' },
+    { id: 'session-expired', title: 'Session已过期或无权访问，请重新获取完整Session后重试。', answer: '请先在 chatgpt.com 登出账号，再重新登录，重新获取完整 Session 后，在原订单重试。', keywords: sessionExpiryKeywords, action: 'orders' },
     { id: 'renewal', title: '会员没到期，可以提前续费吗？', answer: '不要默认所有套餐都能提前续费或叠加时长。请先核对所选规格的账号条件、新开与续费限制；不确定时，购买前联系支持确认。', keywords: '续费 到期 叠加 时长 新开 renewal subscription', action: 'support' },
     { id: 'refund', title: '出现异常，如何申请售后或退款？', answer: '在原订单查看状态并申请售后，保留订单号与问题说明。是否支持退款、退款金额和处理方式，以商品售后规则及审核结果为准。不要在备注中提交密码、Session 或验证码。', keywords: '退款 售后 退钱 质保 refund after-sales warranty', action: 'orders' },
   ],
@@ -42,7 +54,7 @@ const questions: Record<StorefrontLocale, readonly HomeQuestion[]> = {
     { id: 'delivery', title: 'Does receiving a code or link activate it?', answer: 'Not always. Follow the instructions to redeem the code or claim the link, then check the result in the relevant account. Use the delivery instructions for the product you purchased.', keywords: '激活 兑换 CDK redeem code link claim', action: 'orders' },
     { id: 'email', title: 'No delivery email in your inbox?', answer: 'Check whether the original order has been delivered, then check the purchase email and spam folder. Do not buy again just because the email is missing. Contact support with your order number if needed.', keywords: '邮件 email delivery inbox spam', action: 'orders' },
     { id: 'credentials', title: 'Do I need to share a password or Session?', answer: 'Account top-ups may require a Session in the account connection step of the original order. A Session is a login credential: never send it to support or put it in support notes. Codes, claim links and SMS products do not need a Session. Check the product description.', keywords: '账号 密码 隐私 安全 session token password privacy credentials', action: 'support' },
-    { id: 'session-expired', title: 'Session expired or access denied. Get the complete Session and try again.', answer: 'Log out of your account at chatgpt.com, then log in again. Get the complete Session again and retry in your original order.', keywords: 'Session 过期 无权访问 完整 登出 退出 重新登录 重试 expired unauthorized access denied log out sign in', action: 'orders' },
+    { id: 'session-expired', title: 'Session expired or access denied. Get the complete Session and try again.', answer: 'Log out of your account at chatgpt.com, then log in again. Get the complete Session again and retry in your original order.', keywords: sessionExpiryKeywords, action: 'orders' },
     { id: 'renewal', title: 'Can I renew before my membership expires?', answer: 'Do not assume every plan supports early renewal or stacking time. Check the account requirements and new-subscription or renewal restrictions for the selected plan. Ask support before buying if unsure.', keywords: '续费 到期 renewal subscription expiry stack', action: 'support' },
     { id: 'refund', title: 'How do I request support or a refund?', answer: 'Check status and request support in the original order. Keep your order number and a description of the issue. Refund eligibility, amount and method depend on the product terms and review. Do not include passwords, Sessions or verification codes in notes.', keywords: '退款 售后 refund after-sales warranty', action: 'orders' },
   ],

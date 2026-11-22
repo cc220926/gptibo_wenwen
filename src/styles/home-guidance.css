@@ -53,13 +53,15 @@
 .home-guide-dialog [data-slot=dialog-title] { font-size:23px; font-weight:600; line-height:1.4; letter-spacing:-.5px; }
 .home-guide-dialog [data-slot=dialog-header] { padding-right:22px; }
 .home-guide-dialog [data-slot=dialog-description] { font-size:12px; line-height:1.7; }
-.home-guide-help-dialog { gap:13px; grid-template-rows:auto auto auto minmax(0,1fr); overflow:hidden; }
+.home-guide-help-dialog { grid-template-rows:minmax(0,1fr); overflow:hidden; }
+.home-guide-help-content { display:flex; flex-direction:column; gap:13px; min-height:0; max-height:640px; overflow-y:auto; overscroll-behavior:contain; padding-right:3px; }
+.home-guide-help-content>* { flex-shrink:0; }
 .home-guide-search { position:relative; display:flex; align-items:center; }
 .home-guide-search>svg { position:absolute; left:13px; pointer-events:none; color:var(--muted-foreground); }
 .home-guide-search input { height:43px; border-radius:10px; padding-left:39px; padding-right:39px; font-size:16px; }
 .home-guide-search>button { position:absolute; right:7px; }
 .home-guide-results-count { font-size:11px; color:var(--muted-foreground); }
-.home-guide-question-list { min-height:0; max-height:52dvh; overflow-y:auto; padding-right:3px; overscroll-behavior:contain; }
+.home-guide-question-list { min-width:0; }
 .home-guide-question-list details+details { border-top:1px solid var(--border); }
 .home-guide-question-list summary { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:16px 2px; font-size:13px; line-height:1.7; font-weight:500; cursor:pointer; list-style:none; }
 .home-guide-question-list summary::-webkit-details-marker { display:none; }
@@ -115,14 +117,6 @@
   .home-guide-dialog .home-guide-scene { padding:14px; }
 }
 @media(prefers-reduced-motion:reduce) { .home-guide-play { transition:none; } }
-/* Keep room for the selected answer in short windows and keyboard-sized viewports. */
-@media(max-height:480px) {
-  .home-guide-help-dialog { padding:16px; gap:10px; }
-  .home-guide-help-dialog [data-slot=dialog-title] { font-size:18px; }
-  .home-guide-help-dialog [data-slot=dialog-description] { display:none; }
-  .home-guide-help-dialog summary { padding-block:12px; }
-}
-
 /* User-supplied feedback is mounted only after its tab is selected. */
 .home-guide-feedback-panel { display:grid; grid-template-columns:minmax(0,.58fr) minmax(0,1.42fr); align-items:center; gap:24px; min-height:220px; }
 .home-guide-feedback-panel .home-guide-copy p { margin-top:10px; }
