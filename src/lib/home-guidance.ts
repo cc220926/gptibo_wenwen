@@ -86,41 +86,41 @@ type HomeFeedbackCopy = {
 }
 const feedbackCopy: Record<StorefrontLocale, HomeFeedbackCopy> = {
   'zh-CN': {
-    title: '看看他们怎么说。', intro: '微信沟通节选 · 个人信息已遮挡',
+    title: '看看他们怎么说。', intro: '微信沟通节选',
     open: '查看聊天记录', close: '关闭图片', languageNote: '',
     items: [
       {
         id: 'subscription-confirmed', title: '订阅开通确认', category: '开通反馈', quote: '可以了可以了',
         description: '询问订阅状态后，用户确认已开通并表达感谢。',
         image: '/feedback/subscription-confirmed.png',
-        alt: '脱敏微信聊天记录：客服询问订阅是否开通，用户回复“可以了可以了”“靠谱！”“感谢”。',
+        alt: '微信聊天记录：客服询问订阅是否开通，用户回复“可以了可以了”“靠谱！”“感谢”。',
         context: '',
       },
       {
         id: 'consultation-referral', title: '咨询后，推荐给朋友', category: '咨询后推荐', quote: '我就先把你推给我朋友',
         description: '咨询后向朋友推荐，尚未购买；对话含转介绍返现说明。',
         image: '/feedback/consultation-referral.png',
-        alt: '脱敏微信聊天记录：咨询者表示暂不需要充值并推荐朋友；商家随后提出朋友下单返现五元。',
+        alt: '微信聊天记录：咨询者表示暂不需要充值并推荐朋友；商家随后提出朋友下单返现五元。',
         context: '该次对话中，商家随后提出朋友下单返现 5 元，相关内容保留在截图中。',
       },
     ],
   },
   en: {
-    title: 'In their own words.', intro: 'WeChat excerpts · Personal information redacted',
+    title: 'In their own words.', intro: 'WeChat excerpts',
     open: 'View conversation', close: 'Close image', languageNote: 'The original screenshots and quotations are in Chinese.',
     items: [
       {
         id: 'subscription-confirmed', title: 'Subscription confirmed', category: 'Activation feedback', quote: '可以了可以了',
         description: 'After being asked about the subscription, the customer confirmed activation and thanked support.',
         image: '/feedback/subscription-confirmed.png',
-        alt: 'Redacted WeChat conversation in Chinese: support asks whether the subscription is active; the customer confirms and says thank you.',
+        alt: 'WeChat conversation in Chinese: support asks whether the subscription is active; the customer confirms and says thank you.',
         context: '',
       },
       {
         id: 'consultation-referral', title: 'A recommendation after asking', category: 'Pre-purchase recommendation', quote: '我就先把你推给我朋友',
         description: 'The person had not purchased this top-up. The conversation includes a referral reward offer.',
         image: '/feedback/consultation-referral.png',
-        alt: 'Redacted WeChat conversation in Chinese: a person does not need a top-up yet and refers a friend; the merchant then offers CNY 5 if the friend orders.',
+        alt: 'WeChat conversation in Chinese: a person does not need a top-up yet and refers a friend; the merchant then offers CNY 5 if the friend orders.',
         context: 'In this conversation, the merchant then offered CNY 5 for a friend’s order. This context remains in the screenshot.',
       },
     ],

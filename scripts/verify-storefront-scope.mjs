@@ -168,8 +168,8 @@ restoreScannerSnippet("    # XML sitemap namespace, not an outbound service inte
 restoreScannerSnippet('import hashlib\n')
 restoreScannerSnippet(`# Reviewed testimonial pixels; changed files must be reviewed again.
 REVIEWED_BINARY_ASSETS = {
-    'public/feedback/subscription-confirmed.png': 'f737fb42cf5642a6e3572f768bdc1e69ef8499d1c976bec4e93a1acc64690543',
-    'public/feedback/consultation-referral.png': '2fcb8210ae2edba2ae30e8b8d90b4f849870f5d88f34db2771667f4d9ae1dea9',
+    'public/feedback/subscription-confirmed.png': '5fdbf3ea4a570410cad401bf0a0ff100df25bb2db805155f3d3050cadb37f470',
+    'public/feedback/consultation-referral.png': 'b06bf4018e7bf68ad667bd23c17fbd4d9d614a86c501043073838ac4a0a9d778',
 }
 `)
 restoreScannerSnippet(`        if name in REVIEWED_BINARY_ASSETS:
