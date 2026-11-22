@@ -120,7 +120,7 @@
 /* User-supplied feedback is mounted only after its tab is selected. */
 .home-guide-feedback-panel { display:grid; grid-template-columns:minmax(0,.58fr) minmax(0,1.42fr); align-items:center; gap:24px; min-height:220px; }
 .home-guide-feedback-panel .home-guide-copy p { margin-top:10px; }
-.home-guide-feedback-all { max-width:100%; white-space:normal; text-align:left; }
+.home-guide-feedback-more { max-width:100%; white-space:normal; text-align:left; }
 .home-guide-feedback-cards { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; min-width:0; }
 .home-guide-feedback-card { display:grid; grid-template-columns:90px minmax(0,1fr); gap:13px; min-width:0; padding:14px; text-align:left; border:1px solid var(--border); border-radius:15px; background:var(--card); cursor:pointer; transition:border-color .15s,box-shadow .15s; }
 .home-guide-feedback-card:focus-visible { outline:2px solid var(--ring); outline-offset:3px; }
@@ -134,9 +134,8 @@
 .home-guide-feedback-open svg { flex-shrink:0; }
 .home-guide-feedback-dialog { max-width:720px; }
 .home-guide-feedback-gallery { min-width:0; padding-bottom:2px; }
-.home-guide-feedback-gallery-title { font-size:12px; font-weight:600; line-height:1.5; }
-.home-guide-feedback-gallery-intro { margin-top:4px; color:var(--muted-foreground); font-size:11px; line-height:1.6; }
-.home-guide-feedback-selector { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin-top:11px; }
+.home-guide-feedback-context { margin-top:10px; color:var(--muted-foreground); font-size:11px; line-height:1.6; }
+.home-guide-feedback-selector { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
 .home-guide-feedback-selector button { display:flex; align-items:center; gap:8px; min-width:0; min-height:38px; padding:9px 11px; text-align:left; border:1px solid var(--border); border-radius:9px; color:var(--muted-foreground); background:var(--card); font-size:12px; line-height:1.5; overflow-wrap:anywhere; cursor:pointer; }
 .home-guide-feedback-selector button>span { flex-shrink:0; font-size:10px; opacity:.7; }
 .home-guide-feedback-selector button[aria-pressed=true] { color:var(--primary); background:var(--selected-surface); border-color:var(--ring); }

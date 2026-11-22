@@ -96,36 +96,36 @@ export type HomeFeedbackItem = {
 }
 type HomeFeedbackCopy = {
   title: string; intro: string; open: string; close: string; languageNote: string
-  all: string; galleryTitle: string; galleryIntro: (count: number) => string
+  more: string; galleryTitle: string; galleryIntro: (count: number) => string
   items: readonly HomeFeedbackItem[]
 }
 const feedbackCopy: Record<StorefrontLocale, HomeFeedbackCopy> = {
   'zh-CN': {
     title: '看看他们怎么说。', intro: '微信沟通节选',
     open: '查看聊天记录', close: '关闭图片', languageNote: '',
-    all: '查看全部反馈', galleryTitle: '全部反馈与服务记录',
-    galleryIntro: count => `共 ${count} 段微信沟通，选择标题查看原记录。`,
+    more: '查看更多聊天记录', galleryTitle: '用户反馈与服务记录',
+    galleryIntro: count => `本页展示 ${count} 段微信聊天节选，选择标题查看截图。`,
     items: [
       {
         id: 'service-feedback', title: '服务反馈', category: '服务反馈', quote: '你这个服务太棒了。',
         description: '讲解操作后，用户认可服务，并表达推荐意向。',
         image: '/feedback/service-feedback.png',
         alt: '微信聊天记录：讲解操作后，用户说“你这个服务太棒了。”并表达推荐意向。',
-        context: '历史微信沟通记录。',
+        context: '客服讲解操作后，用户表示想向朋友推荐。',
       },
       {
         id: 'renewal-inquiry', title: '续费咨询', category: '续费咨询', quote: '哈喽我想续费一下！',
         description: '用户后来再次联系，询问续费。',
         image: '/feedback/renewal-inquiry.png',
         alt: '微信聊天记录：用户后来再次询问续费，原话为“哈喽我想续费一下！”；转账金额已遮挡。',
-        context: '历史沟通记录，展示后续的续费咨询；转账金额已遮挡。',
+        context: '后续续费咨询，转账金额已遮挡。',
       },
       {
         id: 'refund-conversation', title: '退款沟通', category: '退款沟通', quote: '好',
         description: '订阅尚未到期，客服引导申请退款，随后告知已退。',
         image: '/feedback/refund-conversation.png',
         alt: '微信聊天记录：订阅未到期时客服引导退款，用户回复“好”，客服随后告知已退。',
-        context: '截图展示退款沟通，未展示用户确认到账。',
+        context: '客服告知已退款，截图未展示用户确认到账。',
       },
       {
         id: 'friend-referral', title: '朋友转介绍', category: '朋友转介绍', quote: '我今天又给你介绍了一个',
@@ -139,7 +139,7 @@ const feedbackCopy: Record<StorefrontLocale, HomeFeedbackCopy> = {
         description: '经过沟通处理后，用户确认可以使用并致谢。',
         image: '/feedback/activation-followup.png',
         alt: '微信聊天记录：用户回复“可以了，可以了，谢谢”，双方也提到开通过程曲折。',
-        context: '截图包含用户确认可用，以及双方对开通过程曲折的反馈。',
+        context: '开通过程遇到问题，沟通后用户确认可用。',
       },
       {
         id: 'early-renewal', title: '到期前续费咨询', category: '续费咨询', quote: '是等中午到期后我再重试吗',
@@ -160,29 +160,29 @@ const feedbackCopy: Record<StorefrontLocale, HomeFeedbackCopy> = {
   en: {
     title: 'In their own words.', intro: 'WeChat excerpts',
     open: 'View conversation', close: 'Close image', languageNote: 'The original screenshots and quotations are in Chinese.',
-    all: 'View all feedback', galleryTitle: 'Feedback and service conversations',
-    galleryIntro: count => `${count} WeChat conversations. Select a title to view the original record.`,
+    more: 'View more conversations', galleryTitle: 'Customer feedback and service conversations',
+    galleryIntro: count => `This page shows ${count} WeChat excerpts. Select a title to view the screenshot.`,
     items: [
       {
         id: 'service-feedback', title: 'Service feedback', category: 'Service feedback', quote: '你这个服务太棒了。',
         description: 'After guidance on the steps, the customer praised the service and expressed interest in recommending it.',
         image: '/feedback/service-feedback.png',
         alt: 'WeChat conversation in Chinese: after guidance, the customer praises the service and expresses interest in recommending it.',
-        context: 'A past WeChat conversation.',
+        context: 'After getting help with the steps, the customer said they would like to recommend the service.',
       },
       {
         id: 'renewal-inquiry', title: 'Renewal inquiry', category: 'Renewal inquiry', quote: '哈喽我想续费一下！',
         description: 'The customer later got in touch again and asked about renewing.',
         image: '/feedback/renewal-inquiry.png',
         alt: 'WeChat conversation in Chinese: the customer later asks about renewing, saying “哈喽我想续费一下！”. The transfer amount is redacted.',
-        context: 'A past conversation showing a later renewal inquiry; the transfer amount is redacted.',
+        context: 'A later renewal inquiry. The transfer amount is redacted.',
       },
       {
         id: 'refund-conversation', title: 'Refund conversation', category: 'Refund conversation', quote: '好',
         description: 'The subscription had not expired. Support suggested requesting a refund and later said it had been refunded.',
         image: '/feedback/refund-conversation.png',
         alt: 'WeChat conversation in Chinese: support suggests a refund before subscription expiry, the customer replies “好”, and support later says it was refunded.',
-        context: 'The screenshot shows the refund discussion, without the customer confirming receipt.',
+        context: 'Support said the refund had been issued. The customer did not confirm receipt in the screenshot.',
       },
       {
         id: 'friend-referral', title: 'A friend referral', category: 'Friend referral', quote: '我今天又给你介绍了一个',
@@ -196,7 +196,7 @@ const feedbackCopy: Record<StorefrontLocale, HomeFeedbackCopy> = {
         description: 'After discussing the issue with support, the customer confirmed it worked and thanked them.',
         image: '/feedback/activation-followup.png',
         alt: 'WeChat conversation in Chinese: the customer replies “可以了，可以了，谢谢”, and both sides mention that activation was difficult.',
-        context: 'The screenshot includes confirmation that it works and both sides discussing a difficult activation process.',
+        context: 'Activation took some troubleshooting. The customer then confirmed it worked.',
       },
       {
         id: 'early-renewal', title: 'Renewal question before expiry', category: 'Renewal inquiry', quote: '是等中午到期后我再重试吗',

@@ -91,7 +91,7 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
       </div>
       <div role="tabpanel" id={`${id}-panel-2`} aria-labelledby={`${id}-tab-2`} hidden={tab !== 2}>
         {tab === 2 && <div className="home-guide-feedback-panel">
-          <div className="home-guide-copy"><span className="home-guide-topic-icon" aria-hidden="true"><MessageCircle size={24} strokeWidth={1.5} /></span><h3>{feedbackCopy.title}</h3><p>{feedbackCopy.intro}</p>{feedbackCopy.languageNote && <p>{feedbackCopy.languageNote}</p>}<Button variant="link" className="home-guide-link home-guide-feedback-all" aria-haspopup="dialog" onClick={event => { feedbackTrigger.current = event.currentTarget; setFeedbackIndex(0) }}>{feedbackCopy.all} ({feedbackCopy.items.length})<ArrowRight size={15} aria-hidden="true" /></Button></div>
+          <div className="home-guide-copy"><span className="home-guide-topic-icon" aria-hidden="true"><MessageCircle size={24} strokeWidth={1.5} /></span><h3>{feedbackCopy.title}</h3><p>{feedbackCopy.intro}</p>{feedbackCopy.languageNote && <p>{feedbackCopy.languageNote}</p>}<Button variant="link" className="home-guide-link home-guide-feedback-more" aria-haspopup="dialog" onClick={event => { feedbackTrigger.current = event.currentTarget; setFeedbackIndex(0) }}>{feedbackCopy.more}<ArrowRight size={15} aria-hidden="true" /></Button></div>
           <div className="home-guide-feedback-cards">
             {feedbackCopy.items.slice(0, 2).map((item, index) => <button type="button" className="home-guide-feedback-card" key={item.id} aria-label={`${feedbackCopy.open}：${item.title}`} aria-haspopup="dialog" onClick={event => { feedbackTrigger.current = event.currentTarget; setFeedbackIndex(index) }}>
               <span className="home-guide-feedback-thumbnail"><img src={item.image} alt="" loading="lazy" decoding="async" /></span>
@@ -104,13 +104,15 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
     </section>
     <Dialog open={feedbackIndex !== null} onOpenChange={open => { if (!open) setFeedbackIndex(null) }}>
       <DialogContent className="home-guide-dialog home-guide-feedback-dialog" initialFocus={feedbackTitle} finalFocus={feedbackTrigger}>
-        <DialogHeader><DialogTitle ref={feedbackTitle} tabIndex={-1}>{selectedFeedback?.title}</DialogTitle><DialogDescription>{selectedFeedback?.context} {feedbackCopy.intro}{feedbackCopy.languageNote && ` · ${feedbackCopy.languageNote}`}</DialogDescription></DialogHeader>
+        <DialogHeader>
+          <DialogTitle ref={feedbackTitle} tabIndex={-1}>{feedbackCopy.galleryTitle}</DialogTitle>
+          <DialogDescription>{feedbackCopy.galleryIntro(feedbackCopy.items.length)}{feedbackCopy.languageNote && ` ${feedbackCopy.languageNote}`}</DialogDescription>
+        </DialogHeader>
         <div className="home-guide-feedback-gallery">
-          <p id={`${id}-feedback-gallery-label`} className="home-guide-feedback-gallery-title">{feedbackCopy.galleryTitle}</p>
-          <p id={`${id}-feedback-gallery-intro`} className="home-guide-feedback-gallery-intro">{feedbackCopy.galleryIntro(feedbackCopy.items.length)}</p>
-          <div className="home-guide-feedback-selector" role="group" aria-labelledby={`${id}-feedback-gallery-label`} aria-describedby={`${id}-feedback-gallery-intro`}>
+          <div className="home-guide-feedback-selector" role="group" aria-label={feedbackCopy.galleryTitle}>
             {feedbackCopy.items.map((item, index) => <button type="button" key={item.id} aria-pressed={feedbackIndex === index} aria-controls={`${id}-feedback-record`} onClick={() => setFeedbackIndex(index)}><span aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>{item.title}</button>)}
           </div>
+          {selectedFeedback && <p className="home-guide-feedback-context" aria-live="polite">{selectedFeedback.context}</p>}
         </div>
         {selectedFeedback && <img key={selectedFeedback.id} id={`${id}-feedback-record`} className="home-guide-feedback-image" src={selectedFeedback.image} alt={selectedFeedback.alt} decoding="async" />}
       </DialogContent>
