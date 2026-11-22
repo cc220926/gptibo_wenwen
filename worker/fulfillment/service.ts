@@ -139,14 +139,13 @@ export async function sendServiceMail(env: Env, id: string) {
     if (!task.encrypted_mail) {
       const value = await unseal(env, task.encrypted_value!, task.stock_id ? 'stock:' + task.stock_id : 'task:' + id), brand = mailBrand(env)
       const codexSms = task.product_id === 'codex-sms' || supplyKind((await musePurchase(env, id))?.product_code ?? null) === 'codex-sms'
-      let delivery = `${value}\n\n${task.instructions}`
-      if (codexSms) {
-        delivery = delivery.replace(legacySmsRedeemAddress, codexSmsMailRedeemUrl)
-        if (!delivery.includes(codexSmsMailRedeemUrl)) delivery += `\n\n接码兑换：${codexSmsMailRedeemUrl}`
-      }
-      const text = `${brand.name} · ${task.product_name} · ${order.plan_name}\n订单号：${id}\n\n交付内容\n${delivery}\n\n请妥善保管。已交付不代表已激活或兑换。\n订单查询：${brand.origin}/orders`
-      const escapedText = escape(text)
-      const htmlBody = codexSms ? escapedText.replaceAll(codexSmsMailRedeemUrl, `<a href="${codexSmsMailRedeemUrl}">${codexSmsMailRedeemUrl}</a>`) : escapedText
+      const delivery = `${value}\n\n${task.instructions}`
+      const introduction = `${brand.name} · ${task.product_name} · ${order.plan_name}\n订单号：${id}\n\n交付内容\n${codexSms ? delivery.replace(legacySmsRedeemAddress, codexSmsMailRedeemUrl) : delivery}\n\n`
+      const footer = `请妥善保管。已交付不代表已激活或兑换。\n订单查询：${brand.origin}/orders`
+      const redeemText = codexSms ? `接码兑换：${codexSmsMailRedeemUrl}\n\n` : ''
+      const redeemLink = codexSms ? `接码兑换：<a href="${codexSmsMailRedeemUrl}">${codexSmsMailRedeemUrl}</a>\n\n` : ''
+      const text = introduction + redeemText + footer
+      const htmlBody = escape(introduction) + redeemLink + escape(footer)
       const payload = emailPayload(env, order.customer_email!, { subject: `${brand.name} · ${task.product_name}已交付`, text, html: `<div style="font-family:system-ui;max-width:600px;margin:auto"><h1>商品已交付</h1><p>${escape(task.product_name)} · ${escape(order.plan_name)}</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${htmlBody}</pre></div>` })
       const encrypted = await seal(env, payload, 'mail:' + id)
       await env.INTEREST_DB.prepare('UPDATE fulfillment_tasks SET encrypted_mail=? WHERE order_id=? AND lease_token=? AND encrypted_mail IS NULL').bind(encrypted, id, lease).run()

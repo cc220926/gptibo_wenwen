@@ -358,7 +358,7 @@ test('Codex SMS delivery mail uses the new redemption site with or without a leg
   for (const withLegacyAddress of [true, false]) {
     await t.test(withLegacyAddress ? 'replace old address in the email' : 'add missing redemption link', async t => {
       const cdk = 'CODEX-SMS-FIXTURE'
-      const deliveryContent = withLegacyAddress ? cdk + '\n兑换：https://sms.llvi.de/' : cdk
+      const deliveryContent = withLegacyAddress ? cdk + '\n兑换：https://sms.llvi.de/' : cdk + '\n辅助说明：https://ai.aikm.workers.dev/guide'
       const instructions = withLegacyAddress ? '前往sms.llvi.de兑换。' : '请妥善保管兑换码。'
       const s = await setup(t, 'zpay', { productCode: 'codex-sms-once', deliveryContent, instructions })
       s.env.GPTIBO_SUPPLY_ENABLED = 'codex-sms-once'
@@ -370,6 +370,10 @@ test('Codex SMS delivery mail uses the new redemption site with or without a leg
       assert.match(s.emails[0].text, /https:\/\/ai\.aikm\.workers\.dev\//)
       assert.match(s.emails[0].html, /href="https:\/\/ai\.aikm\.workers\.dev\/"/)
       assert.match(s.emails[0].text, /CODEX-SMS-FIXTURE/)
+      if (!withLegacyAddress) {
+        assert.match(s.emails[0].text, /接码兑换：https:\/\/ai\.aikm\.workers\.dev\/\n/)
+        assert.match(s.emails[0].html, /辅助说明：https:\/\/ai\.aikm\.workers\.dev\/guide/)
+      }
       assert.match(s.emails[0].text, /订单查询：https:\/\/shop\.example\.test\/orders/)
       assert.doesNotMatch(s.emails[0].text + s.emails[0].html, /sms\.llvi\.de/)
       const delivered = await s.read(order.id)

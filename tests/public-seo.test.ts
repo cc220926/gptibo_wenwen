@@ -90,6 +90,7 @@ test('help center renders category headings and direct article links before sear
   assert.equal(response.status, 200)
   const html = await response.text()
   assert.match(html, /<h1>帮助中心<\/h1>/)
+  assert.match(html, /href="\/help-center-v2.css"/)
   assert.match(html, /<form class="help-search" action="\/help\/" method="get" data-help-search role="search">/)
   assert.match(html, /id="help-activation">充值与到账/)
   assert.match(html, /href="\/help\/completed-still-free"/)
