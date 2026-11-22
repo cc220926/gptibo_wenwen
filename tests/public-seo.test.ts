@@ -49,6 +49,7 @@ test('robots and sitemap expose only explicitly public main-store URLs', async t
   const xml = await sitemap.text()
   assert.match(xml, /<urlset xmlns="http:\/\/www.sitemaps.org\/schemas\/sitemap\/0.9">/)
   assert.match(xml, /<loc>https:\/\/shop.example.invalid\/help\/<\/loc>/)
+  assert.match(xml, /<loc>https:\/\/shop.example.invalid\/help\/session-expired<\/loc>/)
   assert.doesNotMatch(xml, /\/orders|\/admin|\/api\/|\/partner|\/r\/|\/s\//)
 })
 
@@ -57,7 +58,7 @@ test('public content never changes any database row or creates buyer cookies', a
   const tables = s.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r => String(r.name))
   const snapshot = () => tables.map(name => [name, s.db.prepare('SELECT * FROM "' + name + '" ORDER BY rowid').all()])
   const before = snapshot()
-  for (const path of ['/', '/product/chatgpt', '/help/', '/help/order-recovery', '/robots.txt', '/sitemap.xml']) {
+  for (const path of ['/', '/product/chatgpt', '/help/', '/help/order-recovery', '/help/session-expired', '/help/completed-still-free', '/help/renewal-before-expiry', '/robots.txt', '/sitemap.xml']) {
     const r = await s.get(path)
     assert.equal(r.status, 200, path)
     assert.equal(r.headers.get('Set-Cookie'), null)
@@ -81,6 +82,19 @@ test('help pages provide standalone answers and no transactional scripts', async
   assert.match(html, /<h1[^>]*>.*找回订单/)
   assert.match(html, /下单邮箱/)
   assert.doesNotMatch(html, /<script[^>]+src=|aggregateRating|ratingValue/)
+})
+
+test('help center renders category headings and direct article links before search script runs', async t => {
+  const s = await fixture(); t.after(() => s.db.close())
+  const response = await s.get('/help/')
+  assert.equal(response.status, 200)
+  const html = await response.text()
+  assert.match(html, /<h1>帮助中心<\/h1>/)
+  assert.match(html, /id="help-activation">连接账号与到账/)
+  assert.match(html, /href="\/help\/completed-still-free"/)
+  assert.match(html, /<script src="\/help-search.js" defer><\/script>/)
+  assert.doesNotMatch(html, /data-help-(?:article|group)[^>]*\bhidden\b/)
+  assert.equal(response.headers.get('Set-Cookie'), null)
 })
 
 test('disabled SEO and unrelated hosts preserve the original asset response', async t => {
