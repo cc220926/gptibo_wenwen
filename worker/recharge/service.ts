@@ -304,7 +304,7 @@ export async function rechargeSummary(env: Env, order: Order) {
   const canSubmit = available && !completed && (!attempt || (attempt.status === 'unknown' && !unknownExpired(attempt)) || attempt.status === 'rejected' || !!attempt.fallback)
   const savedCurrent = saved && saved.attempt_id === attempt?.id && saved.retain_until > Date.now()
   const savedExpired = savedCurrent && ((saved.credential_expires_at !== null && saved.credential_expires_at <= Date.now()) || attempt?.failure_code === 'session_invalid')
-  const savedCredential = savedCurrent ? { attemptId: saved.attempt_id, savedAt: saved.saved_at, retainUntil: saved.retain_until, expired: Boolean(savedExpired), canReuse: Boolean(canSubmit && retentionReady && (attempt?.status === 'unknown' || !savedExpired)) } : null
+  const savedCredential = savedCurrent ? { attemptId: saved.attempt_id, savedAt: saved.saved_at, retainUntil: saved.retain_until, expired: Boolean(savedExpired), canReuse: Boolean(canSubmit && retentionReady && (attempt?.status === 'unknown' || (attempt?.status !== 'rejected' && !savedExpired))) } : null
   return { canRetainCredential: Boolean(retentionReady), savedCredential, financialHold: !!row.financial_hold && !!row.remote_id && order.payment_status === 'paid', paymentUrl: null, paymentQr: publicQr, paymentKind, expiresAt, paymentExpired, rechargeStatus: completed ? 'succeeded' : attempt?.status ?? null, failureCode: attempt?.failure_code ?? null, errorCategory: attempt?.error_category ?? null, resultCode: attempt?.result_code ?? null, progressStage: completed ? 'completed' : attempt?.progress_stage ?? null, progressVersion: attempt?.progress_version ?? 0, progressUpdatedAt: attempt?.progress_updated_at ?? null, attemptNo: attempt?.remote_attempt_no ?? null, retryKey: attempt?.status === 'unknown' ? attempt.id : null, retryMode: attempt?.status === 'unknown' ? attempt.credential_mode : null, canSubmit, message: row.financial_hold && order.payment_status === 'paid' ? '平台退款金额正在核对，充值与代理收益暂时冻结，请联系客服。' : attempt && unknownExpired(attempt) ? '提交结果长期未确认，请联系客服核对原任务，不要重新付款或提交新任务。' : attempt && (attempt.failure_code || (terminal(attempt.status) && attempt.status !== 'succeeded')) ? failureMessage(attempt.failure_code, attempt.error_category, attempt.subscription_expires_hint, available && !!attempt.fallback) : null, accountEmailMasked: attempt?.account_email_masked ?? null, finishedAt: attempt?.finished_at ?? null }
 }
 export async function rechargeAction(requestMessage: Request, env: Env, order: Order) {
@@ -335,6 +335,7 @@ export async function rechargeAction(requestMessage: Request, env: Env, order: O
     if (reuse) {
       saved = await retainedCredential(env, order.id)
       if (!saved || saved.attempt_id !== attempt?.id || (saved.attempt_id !== data.sourceAttemptId && attempt?.id !== data.key)) throw new ApiError('原资料已更新或未保存，请刷新订单或重新提交 Session。', 409)
+      if (attempt.id !== data.key && attempt.status === 'rejected') throw new ApiError('上次提交的资料未被受理，请重新提交 Session。', 409)
       raw = await retainedRequest(env, saved, attempt.request_hash)
       let payload
       try { payload = JSON.parse(raw) } catch { throw new ApiError('原资料暂不可用，请重新提交 Session。', 409) }

@@ -72,6 +72,14 @@
 .live-account-badge { display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:9999px; background:color-mix(in srgb,var(--primary) 14%,var(--background)); color:var(--primary); font-size:11px; font-weight:550; flex-shrink:0; }
 .live-session-form .live-account-confirmation { align-items:center; gap:9px; margin:8px 0 18px; min-height:36px; }
 .live-account-confirmation>[data-slot=field-label] { min-width:0; min-height:28px; font-size:12px; font-weight:450; line-height:1.5; color:var(--foreground); cursor:pointer; display:inline-flex; align-items:center; }
+.live-session-form .live-retention-consent { align-items:flex-start; padding:12px; margin-top:0; background:var(--secondary); border-radius:10px; }
+.live-retention-consent [data-slot=checkbox] { margin-top:3px; }
+.live-retention-consent [data-slot=field-label] { font-size:12px; line-height:1.5; cursor:pointer; }
+.live-retention-consent p { margin:4px 0 0; color:var(--muted-foreground); font-size:11px; line-height:1.6; }
+.live-saved-credential { display:grid; gap:12px; padding:14px; border:1px solid var(--border); border-radius:12px; background:var(--secondary); overflow-wrap:anywhere; }
+.live-saved-credential p { margin:0; color:var(--muted-foreground); font-size:12px; line-height:1.8; }
+.live-saved-actions { display:grid; gap:8px; }
+.live-saved-actions > button { width:100%; min-height:44px; }
 .live-sync { display:flex; justify-content:center; }
 .live-watch { display:flex; align-items:center; justify-content:center; gap:7px; font-size:11px; color:var(--muted-foreground); line-height:1.7; }
 .live-watch>span,.live-watch>i { width:5px; height:5px; background:var(--primary); border-radius:50%; flex-shrink:0; animation:payment-breathe 1.6s ease-in-out infinite; }

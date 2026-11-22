@@ -210,15 +210,23 @@ test('channel two fixed-price direct orders forward long complete Session JSON w
 })
 
 test('channel two full_session_required is a definitive non-submission and permits complete JSON on the same paid order', async t => {
-  const s=setup(t),buyer=await s.buyer(),order=await s.create(buyer)
+  const s = setup(t)
+  s.env.CDK_ENCRYPTION_KEY = Buffer.alloc(32, 51).toString('base64')
+  s.env.RECHARGE_SAVED_CREDENTIALS_ENABLED = 'true'
+  const buyer = await s.buyer(), order = await s.create(buyer), key = crypto.randomUUID()
+  const endpoint = `/api/orders/${order.id}/fulfillment`
   await s.query(order.id,buyer);s.setPayment('paid');await s.query(order.id,buyer)
   s.override(path=>path==='/v1/redemptions'?Response.json({error:{code:'full_session_required',retryable:false,message:'PRIVATE-FULL-TOKEN'}},{status:422}):undefined)
-  const denied=await s.submit(order.id,buyer)
+  const denied = await s.call(endpoint, { action: 'submit', key, customerConfirmedEmail: true, retainCredential: true, credential: { mode: 'session', session } }, buyer)
   assert.match(await denied.text(),/完整.*Session/)
   const current=(await(await s.call('/api/orders/'+order.id,undefined,buyer)).json()).order
   assert.equal(current.status,'failed');assert.equal(current.fulfillment.canSubmit,true)
   assert.equal(current.fulfillment.failureCode,'full_session_required')
   assert.equal(s.db.prepare('SELECT status FROM recharge_redemptions').get()!.status,'rejected')
+  assert.equal(current.fulfillment.savedCredential.canReuse, false)
+  const retry = await s.call(endpoint, { action: 'retry-saved', key: crypto.randomUUID(), sourceAttemptId: key, customerConfirmedEmail: true }, buyer)
+  assert.equal(retry.status, 409)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 1)
   s.override(undefined)
   const raw=JSON.stringify({user:{email:'target@example.test'},account_id:'account-two',accessToken:'PRIVATE-FULL-TOKEN'})
   assert.equal((await s.submit(order.id,buyer,crypto.randomUUID(),raw)).status,200)
