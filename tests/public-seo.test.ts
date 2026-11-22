@@ -88,6 +88,58 @@ test('help pages provide standalone answers and no transactional scripts', async
   assert.doesNotMatch(html, /<script[^>]+src=|aggregateRating|ratingValue/)
 })
 
+test('partner help uses the shared guides with scoped search, product, and order links', async t => {
+  const s = await fixture(); t.after(() => s.db.close())
+  const partner = await s.agent('Scoped Shop')
+  s.db.prepare("UPDATE partners SET slug='ABC123' WHERE id=?").run(partner.id)
+  s.db.prepare("INSERT INTO partner_prices(partner_id,plan,cost_cents,price_cents) VALUES (?,'plus',11500,15900)").run(partner.id)
+  s.env.PARTNER_PRODUCT_IDS = 'chatgpt,codex-credits'
+  for (const base of ['/r/ABC123', '/s/ABC123']) {
+    const shop = await s.get(base)
+    assert.match(await shop.text(), /data-scoped-help="true"/)
+    const help = await s.get(base + '/help')
+    assert.equal(help.status, 308)
+    assert.equal(help.headers.get('Location'), base + '/help/')
+    const index = await s.get(base + '/help/?q=Session')
+    assert.equal(index.status, 200)
+    assert.match(index.headers.get('X-Robots-Tag') ?? '', /noindex/)
+    assert.match(index.headers.get('Content-Security-Policy') ?? '', /form-action 'self'/)
+    const indexHtml = await index.text()
+    assert.ok(indexHtml.includes(`action="${base}/help/"`))
+    for (const guide of publicArticles) {
+      const res = await s.get(base + '/help/' + guide.slug)
+      assert.equal(res.status, 200)
+      assert.equal(res.headers.get('Set-Cookie'), null)
+      assert.match(res.headers.get('X-Robots-Tag') ?? '', /noindex/)
+      const html = await res.text()
+      assert.ok(html.includes(`href="${base}/orders">查看或找回订单`))
+      assert.ok(html.includes(`class="public-store-back" href="${base}"`))
+      assert.ok(html.includes(`href="${base}/help/#help-${guide.category}"`))
+      assert.doesNotMatch(html, /href="\/(?:orders|product\/|help\/)|storefront-public-catalog|rel="canonical"/)
+      if (guide.related === '/product/chatgpt') assert.ok(html.includes(`href="${base}/product/chatgpt">查看商品与教程`))
+      else assert.doesNotMatch(html, /查看商品与教程/)
+      assert.ok(indexHtml.includes(`href="${base}/help/${guide.slug}"`))
+    }
+  }
+  const unknown = await s.get('/r/ZZZ999/help/')
+  assert.equal(unknown.status, 404)
+  assert.match(unknown.headers.get('X-Robots-Tag') ?? '', /noindex/)
+  assert.equal(s.db.prepare('SELECT count(*) AS n FROM orders').get()!.n, 0)
+  const client = await worker.fetch(new Request(origin + '/api/orders/client', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: '{}' }), s.env)
+  const cookie = client.headers.get('Set-Cookie')!.split(';')[0]
+  const order = await worker.fetch(new Request(origin + '/api/orders', {
+    method: 'POST', headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan: 'plus', partner: 'ABC123', expectedPrice: 15900, email: 'scoped-buyer@example.test', key: crypto.randomUUID() }),
+  }), s.env)
+  assert.equal(order.status, 201, await order.clone().text())
+  const stored = s.db.prepare('SELECT partner_id, price_cents FROM orders').get()
+  assert.equal(stored?.partner_id, partner.id)
+  assert.equal(stored?.price_cents, 15900)
+
+  s.db.prepare('UPDATE partners SET active=0 WHERE id=?').run(partner.id)
+  assert.equal((await s.get('/r/ABC123/help/session-expired')).status, 404)
+})
+
 test('related questions reuse help-center rows and only link to other articles in the category', async t => {
   const s = await fixture(); t.after(() => s.db.close())
   const html = await (await s.get('/help/recharge-or-account')).text()

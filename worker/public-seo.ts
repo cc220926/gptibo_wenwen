@@ -2,6 +2,10 @@ import { serializePublicBootstrap } from '../shared/public-bootstrap.ts'
 import { commerce } from './commerce.ts'
 import { secureResponse } from './security.ts'
 import type { Database, Env, Statement } from './platform.ts'
+import { ApiError } from './platform.ts'
+import { partnerCatalog, resolvePartner } from './partners.ts'
+import { platformProductVisibility } from './platform-product-visibility.ts'
+import { referralCodePattern } from '../shared/partner-link.ts'
 import { publicProducts, type PublicCatalog } from '../shared/public-storefront.ts'
 import { publicArticles, publicHelpCategories, publicHelpUpdated, type HelpParagraph, type PublicArticle } from '../shared/public-help.ts'
 
@@ -84,16 +88,24 @@ async function publicCatalog(env: SeoEnv, origin: string): Promise<{ catalog: Pu
 }
 const privatePath = (path: string) => /^\/(?:api|admin|orders|partner|join|r|s)(?:\/|$)/.test(path) || path.startsWith('/__preview/')
 const assetPath = (path: string) => /^\/(?:assets|brands|fonts|images)\//.test(path) || /\.[a-z\d]{1,8}$/i.test(path)
+
+function shopScope(pathname: string) {
+  const match = pathname.match(/^\/(r|s)\/([a-zA-Z0-9-]{3,32})(\/.*)?$/)
+  if (!match) return null
+  const [, kind, slug, path = '/'] = match
+  if (kind === 'r' ? !referralCodePattern.test(slug) : !referralCodePattern.test(slug) && !/^[a-z0-9][a-z0-9-]{2,31}$/.test(slug)) return null
+  return { base: '/' + kind + '/' + slug, slug, path }
+}
 // This is a loading view for everyone, not a second storefront or crawler-only
 // product document. The unchanged React entry replaces it when it commits.
 // Recovery links remain usable when the application bundle cannot execute.
 const startupShell = (brand: string) => `<main class="storefront-startup" data-storefront-startup aria-labelledby="storefront-startup-title"><p class="storefront-startup-brand">${escape(brand)}</p><p id="storefront-startup-title" class="storefront-startup-title" role="status">正在加载页面…</p><div class="storefront-startup-skeleton" aria-hidden="true"><span></span><div><i></i><i></i><i></i><i></i></div></div><p class="storefront-startup-recovery">如果页面没有继续打开，可以<a href="">重新加载</a>，或<a href="/help/">查看购买指南</a>。</p><noscript><p>当前浏览器未启用 JavaScript，启用后即可选购。</p></noscript></main>`
-const helpArticleLink = ({ slug, title }: PublicArticle) => `<a href="/help/${slug}">${escape(title)}<span aria-hidden="true">›</span></a>`
+const helpArticleLink = ({ slug, title }: PublicArticle, base: string) => `<a href="${base}/help/${slug}">${escape(title)}<span aria-hidden="true">›</span></a>`
 function helpParagraph(paragraph: HelpParagraph) {
   const spans = typeof paragraph === 'string' ? [paragraph] : paragraph
   return spans.map(span => typeof span === 'string' ? escape(span) : `<code>${escape(span.code)}</code>`).join('')
 }
-function helpArticle(article: PublicArticle, productHref?: string) {
+function helpArticle(article: PublicArticle, base: string, productHref?: string) {
   const category = publicHelpCategories.find(group => group.id === article.category)!
   const categoryArticles = publicArticles.filter(item => item.category === article.category)
   const position = categoryArticles.indexOf(article)
@@ -109,8 +121,8 @@ function helpArticle(article: PublicArticle, productHref?: string) {
   return `<div class="help-article-layout">
     <article class="help-article" aria-labelledby="help-article-title">
       <nav class="help-article-breadcrumb" aria-label="当前位置">
-        <a href="/help/">帮助中心</a><span aria-hidden="true">›</span>
-        <a href="/help/#help-${category.id}">${escape(category.title)}</a>
+        <a href="${base}/help/">帮助中心</a><span aria-hidden="true">›</span>
+        <a href="${base}/help/#help-${category.id}">${escape(category.title)}</a>
       </nav>
       <header>
         <h1 id="help-article-title">${escape(article.title)}</h1>
@@ -119,14 +131,14 @@ function helpArticle(article: PublicArticle, productHref?: string) {
       </header>
       <div class="help-article-body">${sections}</div>
       ${previous || next ? `<nav class="help-article-pagination" aria-label="同分类文章翻页">
-        ${previous ? `<a rel="prev" href="/help/${previous.slug}"><small>‹ 上一篇</small>${escape(previous.title)}</a>` : ''}
-        ${next ? `<a rel="next" href="/help/${next.slug}"><small>下一篇 ›</small>${escape(next.title)}</a>` : ''}
+        ${previous ? `<a rel="prev" href="${base}/help/${previous.slug}"><small>‹ 上一篇</small>${escape(previous.title)}</a>` : ''}
+        ${next ? `<a rel="next" href="${base}/help/${next.slug}"><small>下一篇 ›</small>${escape(next.title)}</a>` : ''}
       </nav>` : ''}
       <section class="help-article-support" aria-labelledby="help-article-support-title">
         <h2 id="help-article-support-title">订单问题还没解决？</h2>
         <p>打开原订单，按页面提示联系支持或查看售后进度。联系客服时请提供订单号和报错文字。</p>
         <div class="help-article-actions">
-          <a class="help-article-primary" href="/orders">查看或找回订单 <span aria-hidden="true">→</span></a>
+          <a class="help-article-primary" href="${base}/orders">查看或找回订单 <span aria-hidden="true">→</span></a>
           ${productHref ? `<a href="${escape(productHref)}">查看商品与教程</a>` : ''}
         </div>
       </section>
@@ -135,14 +147,14 @@ function helpArticle(article: PublicArticle, productHref?: string) {
     <aside class="help-article-rail" aria-label="帮助导航">
       <nav class="help-topic" aria-label="浏览帮助分类">
         <h2>帮助分类</h2>
-        <ul>${publicHelpCategories.map(group => `<li><a href="/help/#help-${group.id}"${group.id === category.id ? ' aria-current="true"' : ''}>${escape(group.title)}<span aria-hidden="true">›</span></a></li>`).join('')}</ul>
+        <ul>${publicHelpCategories.map(group => `<li><a href="${base}/help/#help-${group.id}"${group.id === category.id ? ' aria-current="true"' : ''}>${escape(group.title)}<span aria-hidden="true">›</span></a></li>`).join('')}</ul>
       </nav>
-      ${related.length ? `<section class="help-topic" aria-labelledby="related-help-title"><h2 id="related-help-title">相关问题</h2><ul>${related.map(item => `<li>${helpArticleLink(item)}</li>`).join('')}</ul></section>` : ''}
+      ${related.length ? `<section class="help-topic" aria-labelledby="related-help-title"><h2 id="related-help-title">相关问题</h2><ul>${related.map(item => `<li>${helpArticleLink(item, base)}</li>`).join('')}</ul></section>` : ''}
     </aside>
   </div>`
 }
 
-function helpCenter(query: string) {
+function helpCenter(query: string, base: string) {
   const normalize = (text: string) => text.normalize('NFKC').toLowerCase()
   const terms = normalize(query).split(/[\s,，、。？！?!：:]+/).filter(Boolean)
   let count = 0
@@ -156,27 +168,28 @@ function helpCenter(query: string) {
     count += visibleCount
     return `<section class="help-topic" data-help-group aria-labelledby="help-${category.id}"${visibleCount ? '' : ' hidden'}>
       <h2 id="help-${category.id}">${escape(category.title)}</h2>
-      <ul>${articles.map(({ article, search, visible }) => `<li data-help-article${visible ? '' : ' hidden'} data-search="${escape(search)}">${helpArticleLink(article)}</li>`).join('')}</ul>
+      <ul>${articles.map(({ article, search, visible }) => `<li data-help-article${visible ? '' : ' hidden'} data-search="${escape(search)}">${helpArticleLink(article, base)}</li>`).join('')}</ul>
     </section>`
   }).join('')
   const result = count ? `找到 ${count} 个相关问题` : '没找到相关问题。试试「查单」「付款」或「Session」。'
   return `<div class="help-center">
     <div class="help-intro">
       <h1>帮助中心</h1>
-      <form class="help-search" action="/help/" method="get" data-help-search role="search">
+      <form class="help-search" action="${base}/help/" method="get" data-help-search role="search">
         <label class="help-visually-hidden" for="help-search-input">搜索帮助</label>
         <input type="search" id="help-search-input" name="q" value="${escape(query)}" maxlength="120" autocomplete="off" placeholder="搜索问题，例如 Session 过期" aria-controls="help-topics">
         <button type="submit">搜索</button>
       </form>
     </div>
-    <nav class="help-quick-links" aria-label="常用问题"><a href="/help/order-recovery">找回订单</a><a href="/help/session-expired">Session 过期</a><a href="/help/completed-still-free">已完成但未显示会员</a></nav>
+    <nav class="help-quick-links" aria-label="常用问题"><a href="${base}/help/order-recovery">找回订单</a><a href="${base}/help/session-expired">Session 过期</a><a href="${base}/help/completed-still-free">已完成但未显示会员</a></nav>
     <p class="help-results" data-help-results role="status"${terms.length ? '' : ' hidden'}>${terms.length ? result : ''}</p>
     <div class="help-topics" id="help-topics">${groups}</div>
-    <p class="help-order-action">已经下单？ <a href="/orders">回到我的订单</a></p>
+    <p class="help-order-action">已经下单？ <a href="${base}/orders">回到我的订单</a></p>
   </div><script src="/help-search.js" defer></script>`
 }
 function htmlResponse(request: Request, body: string, status = 200, index = true) {
-  const formAction = new URL(request.url).pathname === '/help/' ? 'self' : 'none'
+  const pathname = new URL(request.url).pathname
+  const formAction = (shopScope(pathname)?.path ?? pathname) === '/help/' ? 'self' : 'none'
   const response = new Response(request.method === 'HEAD' ? null : body, { status, headers: {
     'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
     'X-Robots-Tag': index ? 'index, follow' : 'noindex, nofollow',
@@ -184,16 +197,21 @@ function htmlResponse(request: Request, body: string, status = 200, index = true
   } })
   return secureResponse(request, response)
 }
-function document(title: string, description: string, canonical: string, body: string, brand: string, index: boolean, articleLayout: boolean) {
-  return `<!doctype html><html lang="zh-CN" data-public-document><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title><meta name="description" content="${escape(description)}"><meta name="robots" content="${index ? 'index, follow' : 'noindex, nofollow'}"><link rel="canonical" href="${escape(canonical)}"><link rel="icon" href="/brands/shop.svg"><link rel="stylesheet" href="/help-center-v2.css">${articleLayout ? '<link rel="stylesheet" href="/help-article-v2.css">' : ''}</head><body><header class="public-document-header"><a class="public-store-back" href="/"><span aria-hidden="true">‹</span>返回商店</a><nav aria-label="页面导航"><a href="/orders">我的订单</a></nav></header><main class="public-document">${body}</main>${brand ? `<footer class="public-document-footer">${escape(brand)} · 独立服务商</footer>` : ''}</body></html>`
+function document(title: string, description: string, canonical: string, body: string, brand: string, index: boolean, articleLayout: boolean, base: string) {
+  return `<!doctype html><html lang="zh-CN" data-public-document><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title><meta name="description" content="${escape(description)}"><meta name="robots" content="${index ? 'index, follow' : 'noindex, nofollow'}">${base ? '' : `<link rel="canonical" href="${escape(canonical)}">`}<link rel="icon" href="/brands/shop.svg"><link rel="stylesheet" href="/help-center-v2.css">${articleLayout ? '<link rel="stylesheet" href="/help-article-v2.css">' : ''}</head><body><header class="public-document-header"><a class="public-store-back" href="${base || '/'}"><span aria-hidden="true">‹</span>返回商店</a><nav aria-label="页面导航"><a href="${base}/orders">我的订单</a></nav></header><main class="public-document">${body}</main>${brand ? `<footer class="public-document-footer">${escape(brand)} · 独立服务商</footer>` : ''}</body></html>`
 }
-function notFound(request: Request) {
-  return htmlResponse(request, '<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="robots" content="noindex, nofollow"><title>页面不存在</title></head><body><main><h1>页面不存在</h1><p>商品可能已下架，或链接有误。</p><a href="/">返回商店</a> <a href="/orders">查询已有订单</a></main></body></html>', 404, false)
+function notFound(request: Request, base = '') {
+  return htmlResponse(request, `<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="robots" content="noindex, nofollow"><title>页面不存在</title></head><body><main><h1>页面不存在</h1><p>商品可能已下架，或链接有误。</p><a href="${base || '/'}">返回商店</a> <a href="${base}/orders">查询已有订单</a></main></body></html>`, 404, false)
 }
 export async function publicStorefront(request: Request, env: SeoEnv): Promise<Response | null> {
   const origin = seoOrigin(env.STOREFRONT_SEO_ORIGIN), url = new URL(request.url)
-  if (!origin || url.origin !== origin || !['GET', 'HEAD'].includes(request.method) || privatePath(url.pathname)) return null
-  const path = url.pathname
+  if (!origin || url.origin !== origin || !['GET', 'HEAD'].includes(request.method)) return null
+  const scopedHelp = /^\/(?:r|s)\/[^/]+\/help(?:\/|$)/.test(url.pathname)
+  if (!scopedHelp && privatePath(url.pathname)) return null
+  const scope = scopedHelp ? shopScope(url.pathname) : null
+  if (scopedHelp && !scope) return notFound(request)
+  const base = scope?.base ?? ''
+  const path = scope?.path ?? url.pathname
   if (path === '/robots.txt') {
     const body = `User-agent: GPTBot\nDisallow: /\n\nUser-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /admin\nDisallow: /orders\nDisallow: /partner\nDisallow: /join\nDisallow: /r/\nDisallow: /s/\nDisallow: /__preview/\n\nSitemap: ${origin}/sitemap.xml\n`
     return secureResponse(request, new Response(request.method === 'HEAD' ? null : body, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } }))
@@ -203,23 +221,38 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   const normalized = path.replace(/\/$/, '') || '/'
   const article = publicArticles.find(a => '/help/' + a.slug === normalized)
   const validRoute = ['/', '/index.html', '/help', '/sitemap.xml'].includes(normalized) || article || /^\/product\/[a-z0-9_-]+$/i.test(normalized)
-  if (!validRoute) return notFound(request)
+  if (!validRoute) return notFound(request, base)
   if (isHelp) {
-    const cached = cachedCatalog(env, origin)
-    const brand = cached?.platformBranding?.name ?? ''
-    const canonicalPath = article ? '/help/' + article.slug : '/help/'
-    if (path !== canonicalPath) return secureResponse(request, new Response(null, { status: 308, headers: { Location: canonicalPath + url.search, 'Cache-Control': 'no-store' } }))
+    const canonicalPath = base + (article ? '/help/' + article.slug : '/help/')
+    if (url.pathname !== canonicalPath) return secureResponse(request, new Response(null, { status: 308, headers: { Location: canonicalPath + url.search, 'Cache-Control': 'no-store' } }))
     const query = article ? '' : (url.searchParams.get('q') ?? '').trim().slice(0, 120)
-    const index = !query
-    // A direct article load must stay independent of the catalog. The product
-    // page checks visibility when the reader follows a link without a snapshot.
+    const index = !scope && !query
     const related = article?.related
-    const productHref = related
-      ? cached ? publicProducts(cached).find(product => product.path === related)?.path : `${related}?from=help`
-      : undefined
-    const body = article ? helpArticle(article, productHref) : helpCenter(query)
+    let brand = '', productHref: string | undefined
+    if (scope) {
+      const readEnv = { ...env, INTEREST_DB: readOnlyDatabase(env.INTEREST_DB) }
+      try {
+        const partner = await resolvePartner(readEnv, scope.slug)
+        if (!partner) return notFound(request, base)
+        brand = partner.name
+        if (related) {
+          const [catalog, platform] = await Promise.all([partnerCatalog(readEnv, partner), platformProductVisibility(readEnv)])
+          const product = catalog.plans.find(plan => '/product/' + plan.product_id === related)
+          if (product && !platform.hiddenProductIds.some(id => id === product.product_id)) productHref = base + related
+        }
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return notFound(request, base)
+        throw error
+      }
+    } else {
+      const cached = cachedCatalog(env, origin)
+      brand = cached?.platformBranding?.name ?? ''
+      // The main-store help page remains available without loading a catalog.
+      if (related) productHref = cached ? publicProducts(cached).find(product => product.path === related)?.path : `${related}?from=help`
+    }
+    const body = article ? helpArticle(article, base, productHref) : helpCenter(query, base)
     const title = article?.title ?? '帮助中心'
-    return htmlResponse(request, document(brand ? title + ' · ' + brand : title, article?.answer ?? '商品选择、付款后操作、订单找回及售后说明。', origin + canonicalPath, body, brand, index, Boolean(article)), 200, index)
+    return htmlResponse(request, document(brand ? title + ' · ' + brand : title, article?.answer ?? '商品选择、付款后操作、订单找回及售后说明。', origin + canonicalPath, body, brand, index, Boolean(article), base), 200, index)
   }
   const { catalog, fetchedAt, fresh } = await publicCatalog(env, origin)
   const branding = catalog.platformBranding!, products = publicProducts(catalog)
@@ -262,7 +295,9 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
 export async function noindexNavigationShell(request: Request, env: SeoEnv, response: Response, catalogFallback = false) {
   const url = new URL(request.url)
   if (request.method !== 'GET' || url.origin !== seoOrigin(env.STOREFRONT_SEO_ORIGIN) || response.status !== 200 || !response.headers.get('Content-Type')?.includes('text/html')) return response
-  const marker = /^\/orders\/?$/.test(url.pathname) ? 'data-public-seo'
+  const scope = shopScope(url.pathname)
+  const marker = scope && /^(?:\/|\/orders\/?|\/product\/[a-z0-9_-]+\/?)$/i.test(scope.path) ? 'data-scoped-help'
+    : /^\/orders\/?$/.test(url.pathname) ? 'data-public-seo'
     : catalogFallback && (['/', '/index.html'].includes(url.pathname) || /^\/product\/[a-z0-9_-]+\/?$/i.test(url.pathname)) ? 'data-public-help'
     : null
   if (!marker) return response
