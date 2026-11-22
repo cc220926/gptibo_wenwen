@@ -29,7 +29,7 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
   const helpCopy = homeHelpCopy(locale)
   const feedbackCopy = homeFeedbackCopy(locale)
   const id = useId()
-  const [tab, setTab] = useState(import.meta.env.MODE === 'wechat-note-preview' && location.hash === '#feedback' ? 2 : 0)
+  const [tab, setTab] = useState(0)
   const [feedbackIndex, setFeedbackIndex] = useState<number | null>(null)
   const [demoOpen, setDemoOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
