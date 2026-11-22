@@ -3,7 +3,7 @@ import { commerce } from './commerce.ts'
 import { secureResponse } from './security.ts'
 import type { Database, Env, Statement } from './platform.ts'
 import { publicProducts, type PublicCatalog } from '../shared/public-storefront.ts'
-import { publicArticles, publicHelpCategories, publicHelpUpdated } from '../shared/public-help.ts'
+import { publicArticles, publicHelpCategories, publicHelpUpdated, type PublicArticle } from '../shared/public-help.ts'
 
 export type SeoEnv = Env & { STOREFRONT_SEO_ORIGIN?: string; SEO_CATALOG_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> } }
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
@@ -88,7 +88,11 @@ const assetPath = (path: string) => /^\/(?:assets|brands|fonts|images)\//.test(p
 // product document. The unchanged React entry replaces it when it commits.
 // Recovery links remain usable when the application bundle cannot execute.
 const startupShell = (brand: string) => `<main class="storefront-startup" data-storefront-startup aria-labelledby="storefront-startup-title"><p class="storefront-startup-brand">${escape(brand)}</p><p id="storefront-startup-title" class="storefront-startup-title" role="status">正在加载页面…</p><div class="storefront-startup-skeleton" aria-hidden="true"><span></span><div><i></i><i></i><i></i><i></i></div></div><p class="storefront-startup-recovery">如果页面没有继续打开，可以<a href="">重新加载</a>，或<a href="/help/">查看购买指南</a>。</p><noscript><p>当前浏览器未启用 JavaScript，启用后即可选购。</p></noscript></main>`
-const helpLinks = () => publicArticles.map(a => `<li><a href="/help/${a.slug}">${escape(a.title)}</a></li>`).join('')
+function relatedHelpArticles(article: PublicArticle) {
+  const links = publicArticles.filter(item => item.category === article.category && item.slug !== article.slug)
+  if (!links.length) return ''
+  return `<aside><h2>相关问题</h2><ul>${links.map(item => `<li><a href="/help/${item.slug}">${escape(item.title)}</a></li>`).join('')}</ul></aside>`
+}
 function helpCenter(query: string) {
   const normalize = (text: string) => text.normalize('NFKC').toLowerCase()
   const terms = normalize(query).split(/[\s,，、。？！?!：:]+/).filter(Boolean)
@@ -159,7 +163,7 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
     if (path !== canonicalPath) return secureResponse(request, new Response(null, { status: 308, headers: { Location: canonicalPath + url.search, 'Cache-Control': 'no-store' } }))
     const query = article ? '' : (url.searchParams.get('q') ?? '').trim().slice(0, 120)
     const index = !query
-    const body = article ? `<nav aria-label="当前位置"><a href="/help/">帮助中心</a></nav><h1>${escape(article.title)}</h1><p class="public-answer">${escape(article.answer)}</p><p class="public-date">内容核对日期：<time datetime="${publicHelpUpdated}">${publicHelpUpdated}</time> · ${escape(brand || '本站')} 服务说明</p>${article.sections.map(s => `<section><h2>${escape(s.title)}</h2>${s.paragraphs.map(p => `<p>${escape(p)}</p>`).join('')}</section>`).join('')}${article.related && products.some(p => p.path === article.related) ? `<p><a href="${article.related}">查看对应商品与现有教程</a></p>` : ''}<p><a href="/orders">查看或找回订单</a></p><aside><h2>其他购买问题</h2><ul>${helpLinks()}</ul></aside>` : helpCenter(query)
+    const body = article ? `<nav aria-label="当前位置"><a href="/help/">帮助中心</a></nav><h1>${escape(article.title)}</h1><p class="public-answer">${escape(article.answer)}</p><p class="public-date">内容核对日期：<time datetime="${publicHelpUpdated}">${publicHelpUpdated}</time> · ${escape(brand || '本站')} 服务说明</p>${article.sections.map(s => `<section><h2>${escape(s.title)}</h2>${s.paragraphs.map(p => `<p>${escape(p)}</p>`).join('')}</section>`).join('')}${article.related && products.some(p => p.path === article.related) ? `<p><a href="${article.related}">查看对应商品与现有教程</a></p>` : ''}<p><a href="/orders">查看或找回订单</a></p>${relatedHelpArticles(article)}` : helpCenter(query)
     const title = article?.title ?? '帮助中心'
     return htmlResponse(request, document(brand ? title + ' · ' + brand : title, article?.answer ?? '商品选择、付款后操作、订单找回及售后说明。', origin + canonicalPath, body, brand, index), 200, index)
   }
