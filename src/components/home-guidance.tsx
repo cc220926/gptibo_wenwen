@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type KeyboardEvent } from 'react'
+import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { ArrowRight, Check, ChevronRight, CircleHelp, ClipboardList, Maximize2, MessageCircle, Play, Search, X } from 'lucide-react'
 import { useStorefrontI18n } from '@/lib/storefront-i18n'
 import type { CatalogPlan } from '@/lib/api'
@@ -36,7 +36,10 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
   const title = useRef<HTMLHeadingElement>(null)
+  const helpTitle = useRef<HTMLHeadingElement>(null)
   const searchInput = useRef<HTMLInputElement>(null)
+  const questionList = useRef<HTMLDivElement>(null)
+  const expandedQuestion = useRef<HTMLDetailsElement>(null)
   const feedbackTitle = useRef<HTMLHeadingElement>(null)
   const feedbackTrigger = useRef<HTMLButtonElement>(null)
   const selectedFeedback = feedbackIndex === null ? null : feedbackCopy.items[feedbackIndex]
@@ -44,6 +47,16 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
   const featured = ['apple-login', 'recovery', 'pending'].flatMap(questionId => searchHomeQuestions(locale).filter(question => question.id === questionId))
   const openDemo = () => setDemoOpen(true)
   const openHelp = (question?: string) => { setQuery(''); setExpanded(question ?? null); setHelpOpen(true) }
+  const revealExpandedQuestion = () => {
+    const list = questionList.current
+    const question = expandedQuestion.current
+    if (!list || !question) return
+    // Move only the answer list; scrolling the document would move the storefront.
+    list.scrollTop += question.getBoundingClientRect().top - list.getBoundingClientRect().top
+  }
+  useLayoutEffect(() => {
+    if (helpOpen) revealExpandedQuestion()
+  }, [helpOpen, expanded, query])
   const leaveGuide = (destination: 'orders' | 'support') => {
     setHelpOpen(false)
     if (destination === 'orders') onOrders()
@@ -102,12 +115,12 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
         {demoOpen && <div className="home-guide-recharge-content" lang="zh-CN"><RechargeGuide offers={offers} /></div>}
       </DialogContent>
     </Dialog>
-    <Dialog open={helpOpen} onOpenChange={setHelpOpen}>
-      <DialogContent className="home-guide-dialog home-guide-help-dialog" initialFocus={searchInput}>
-        <DialogHeader><DialogTitle>{helpCopy.questionTitle}</DialogTitle><DialogDescription>{helpCopy.questionIntro}</DialogDescription></DialogHeader>
+    <Dialog open={helpOpen} onOpenChange={setHelpOpen} onOpenChangeComplete={open => { if (open) revealExpandedQuestion() }}>
+      <DialogContent className="home-guide-dialog home-guide-help-dialog" initialFocus={helpTitle}>
+        <DialogHeader><DialogTitle ref={helpTitle} tabIndex={-1}>{helpCopy.questionTitle}</DialogTitle><DialogDescription>{helpCopy.questionIntro}</DialogDescription></DialogHeader>
         <div className="home-guide-search"><Search size={17} aria-hidden="true" /><Input ref={searchInput} aria-label={helpCopy.search} placeholder={helpCopy.searchPlaceholder} value={query} maxLength={160} onChange={event => { setQuery(event.target.value); setExpanded(null) }} />{query && <Button variant="ghost" size="icon-sm" aria-label={helpCopy.clear} onClick={() => { setQuery(''); setExpanded(null); searchInput.current?.focus() }}><X size={15} /></Button>}</div>
         <p className="home-guide-results-count" role="status">{questions.length} {helpCopy.resultCount}</p>
-        <div className="home-guide-question-list">{questions.length ? questions.map(question => <details key={question.id} open={expanded === question.id}><summary onClick={event => { event.preventDefault(); setExpanded(value => value === question.id ? null : question.id) }}>{question.title}<ChevronRight size={16} aria-hidden="true" /></summary><div><p>{question.answer}</p><Button variant="link" className="home-guide-link" onClick={() => leaveGuide(question.action)}>{question.action === 'orders' ? helpCopy.orders : helpCopy.support}<ArrowRight size={15} /></Button></div></details>) : <div className="home-guide-no-results"><p>{helpCopy.noResults}</p><Button variant="link" onClick={() => leaveGuide('support')}>{helpCopy.support}<ArrowRight size={15} /></Button></div>}</div>
+        <div className="home-guide-question-list" ref={questionList}>{questions.length ? questions.map(question => <details key={question.id} ref={expanded === question.id ? expandedQuestion : undefined} open={expanded === question.id}><summary onClick={event => { event.preventDefault(); setExpanded(value => value === question.id ? null : question.id) }}>{question.title}<ChevronRight size={16} aria-hidden="true" /></summary><div><p>{question.answer}</p><Button variant="link" className="home-guide-link" onClick={() => leaveGuide(question.action)}>{question.action === 'orders' ? helpCopy.orders : helpCopy.support}<ArrowRight size={15} /></Button></div></details>) : <div className="home-guide-no-results"><p>{helpCopy.noResults}</p><Button variant="link" onClick={() => leaveGuide('support')}>{helpCopy.support}<ArrowRight size={15} /></Button></div>}</div>
       </DialogContent>
     </Dialog>
   </>
