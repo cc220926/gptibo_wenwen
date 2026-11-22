@@ -13,7 +13,7 @@ import { museWebhook } from '../worker/muse/webhook.ts'
 
 type Context = Parameters<Parameters<typeof test>[1]>[0]
 const content = 'private-muse@example.test----PRIVATE-PASSWORD----https://code.example.test/secret'
-async function setup(t: Context, paymentProvider = 'zpay', options: { productCode?: string } = {}) {
+async function setup(t: Context, paymentProvider = 'zpay', options: { productCode?: string; deliveryContent?: string; instructions?: string } = {}) {
   const s = await customerFixture(); t.after(() => s.db.close())
   Object.assign(s.env, { ORDER_TESTING_ENABLED: 'false', SERVICE_CHECKOUT_ENABLED: 'true', SERVICE_PAYMENT_PROVIDER: paymentProvider,
     MAPAY_PID: '10101', MAPAY_KEY: 'private-mapay-test-secret', ZPAY_PID: '2026110800000000', ZPAY_KEY: 'fixture-payment-secret', CDK_ENCRYPTION_KEY: Buffer.alloc(32, 37).toString('base64'),
@@ -23,6 +23,7 @@ async function setup(t: Context, paymentProvider = 'zpay', options: { productCod
   const productCode = options.productCode ?? (paymentProvider === 'mapay' ? 'muse-account-31b' : 'muse_1b_pro')
   const products = [{ code: productCode, name: 'Muse 供应商品', supply_minor: cost, enabled: true, available: true, fulfillment_type: 'account_delivery' }]
   const calls: { path: string; raw: string; headers: Headers }[] = []
+  const emails: { html: string; text: string }[] = []
   let remote: Record<string, unknown> | null = null
   let remoteStatus = 'succeeded', loseCreate = false, deliveryFails = false, mismatch = false, reject = ''
   let posted = 0, assigned = 0, mapayStatus = 0
@@ -34,7 +35,7 @@ async function setup(t: Context, paymentProvider = 'zpay', options: { productCod
       assert.equal(url.pathname,'/xpay/epay/api.php')
       return Response.json({code:1,pid:Number(s.env.MAPAY_PID),type:'alipay',out_trade_no:url.searchParams.get('out_trade_no'),money:(sale / 100).toFixed(2),status:mapayStatus,trade_no:'mapay-fixture-trade'})
     }
-    if (url.hostname === 'api.resend.com') return Response.json({ id: 'muse-mail' })
+    if (url.hostname === 'api.resend.com') { emails.push(JSON.parse(raw)); return Response.json({ id: 'muse-mail' }) }
     assert.equal(url.origin, 'https://api.gptibo.com'); assert.equal(init?.redirect, 'manual')
     const canonical = [init?.method, url.pathname, '', headers.get('X-Timestamp'), headers.get('X-Nonce'), headers.get('X-Key-Id'), headers.get('Idempotency-Key') ?? '', createHash('sha256').update(raw).digest('hex')].join('\n')
     assert.equal(headers.get('X-Signature'), createHmac('sha256', s.env.MUSE_API_SECRET!).update(canonical).digest('hex'))
@@ -55,7 +56,7 @@ async function setup(t: Context, paymentProvider = 'zpay', options: { productCod
     }
     if (path.endsWith('/delivery')) {
       if (deliveryFails) return Response.json({ error: { code: 'delivery_unavailable' } }, { status: 503 })
-      return Response.json({ data: { order_id: remote!.id, product_code: remote!.product_code, fulfillment_type: 'account_delivery', quantity: 1, content } })
+      return Response.json({ data: { order_id: remote!.id, product_code: remote!.product_code, fulfillment_type: 'account_delivery', quantity: 1, content: options.deliveryContent ?? content } })
     }
     if (path.startsWith('/orders/')) {
       if (!remote) return Response.json({ error: { code: 'order_missing' } }, { status: 404 })
@@ -65,7 +66,7 @@ async function setup(t: Context, paymentProvider = 'zpay', options: { productCod
   })
   const p = await s.request('/api/admin/inventory/products', { name: 'Muse', category: '账密交付', description: '交付账号资料' }, s.admin)
   const productId = (await p.json()).id
-  const spec = { productId, name: 'Muse 精品手搓（API）', priceCents: sale, kind: 'muse', enabled: true, purchaseNote: '按商品说明交付。', instructions: '请妥善保存账号。', supplierCode: productCode, maxCostCents: cost }
+  const spec = { productId, name: 'Muse 精品手搓（API）', priceCents: sale, kind: 'muse', enabled: true, purchaseNote: '按商品说明交付。', instructions: options.instructions ?? '请妥善保存账号。', supplierCode: productCode, maxCostCents: cost }
   const r = await s.request('/api/admin/inventory/plans', spec, s.admin)
   assert.equal(r.status, 200, await r.clone().text())
   const plan = (await r.json()).id
@@ -80,7 +81,7 @@ async function setup(t: Context, paymentProvider = 'zpay', options: { productCod
   const read = async (id: string) => (await (await s.request('/api/orders/' + id, undefined, buyer)).json()).order
   const due = (id: string) => s.db.prepare('UPDATE muse_orders SET next_attempt_at=0 WHERE order_id=?').run(id)
   const state = (id: string) => s.db.prepare('SELECT * FROM muse_orders WHERE order_id=?').get(id)!
-  return { ...s, products, plan, spec, productId, calls, buyer, create, order, pay, read, due, state,
+  return { ...s, products, plan, spec, productId, calls, emails, buyer, create, order, pay, read, due, state,
     get posted() { return posted }, get assigned() { return assigned },
     controls: { paymentStatus: (v: number) => { mapayStatus = v }, lose: (v: boolean) => { loseCreate = v }, deliveryFail: (v: boolean) => { deliveryFails = v }, mismatch: (v: boolean) => { mismatch = v }, status: (v: string) => { remoteStatus = v }, reject: (v: string) => { reject = v }, forget: () => { remote = null } } }
 }
@@ -114,6 +115,8 @@ test('confirmed payment buys once, encrypts original delivery, records actual co
   assert.equal((await s.request('/api/orders/' + o.id, undefined, stranger)).status, 404)
   await sendServiceMail(s.env, o.id)
   assert.equal((await s.read(o.id)).serviceDelivery.mailState, 'sent')
+  assert.equal(s.emails.length, 1)
+  assert.doesNotMatch(s.emails[0].text + s.emails[0].html, /ai\.aikm\.workers\.dev/)
 })
 
 test('lost POST result recovers by original merchant order without another purchase', async t => {
@@ -349,4 +352,29 @@ test('admin refuses supplier codes outside Muse and the explicit GPTibo allow-li
   }
   const ok = await s.request('/api/admin/inventory/plans', { ...s.spec, supplierCode: 'codex-sms-once', maxCostCents: 300 }, s.admin)
   assert.equal(ok.status, 200, await ok.clone().text())
+})
+
+test('Codex SMS delivery mail uses the new redemption site with or without a legacy address', async t => {
+  for (const withLegacyAddress of [true, false]) {
+    await t.test(withLegacyAddress ? 'replace old address in the email' : 'add missing redemption link', async t => {
+      const cdk = 'CODEX-SMS-FIXTURE'
+      const deliveryContent = withLegacyAddress ? cdk + '\n兑换：https://sms.llvi.de/' : cdk
+      const instructions = withLegacyAddress ? '前往sms.llvi.de兑换。' : '请妥善保管兑换码。'
+      const s = await setup(t, 'zpay', { productCode: 'codex-sms-once', deliveryContent, instructions })
+      s.env.GPTIBO_SUPPLY_ENABLED = 'codex-sms-once'
+      const order = await s.order()
+      await s.pay(order.id)
+      await sendServiceMail(s.env, order.id)
+      assert.equal(s.posted, 1)
+      assert.equal(s.emails.length, 1)
+      assert.match(s.emails[0].text, /https:\/\/ai\.aikm\.workers\.dev\//)
+      assert.match(s.emails[0].html, /href="https:\/\/ai\.aikm\.workers\.dev\/"/)
+      assert.match(s.emails[0].text, /CODEX-SMS-FIXTURE/)
+      assert.match(s.emails[0].text, /订单查询：https:\/\/shop\.example\.test\/orders/)
+      assert.doesNotMatch(s.emails[0].text + s.emails[0].html, /sms\.llvi\.de/)
+      const delivered = await s.read(order.id)
+      assert.equal(delivered.delivery.value, deliveryContent)
+      assert.equal(delivered.delivery.instructions, instructions)
+    })
+  }
 })

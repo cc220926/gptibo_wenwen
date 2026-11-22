@@ -1,5 +1,5 @@
 import { fulfillMuse, museMapping, musePurchase, museSnapshot, prepareMuse } from '../muse/service.ts'
-import { isMuseCode } from '../muse/client.ts'
+import { isMuseCode, supplyKind } from '../muse/client.ts'
 import { ApiError, type Env, type Statement } from '../platform.ts'
 import { getOrder, type Order } from '../order-state.ts'
 import { deliveryMailReady } from '../email-delivery.ts'
@@ -121,6 +121,8 @@ export async function serviceOrderSummary(env: Env, order: Order, reveal = true)
 }
 
 const escape = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!)
+const codexSmsMailRedeemUrl = 'https://ai.aikm.workers.dev/'
+const legacySmsRedeemAddress = /(?<![\w@./-])(?:https?:\/\/)?sms\.llvi\.de\/?(?![\w./:?#-])/gi
 /** Notification failure never reallocates inventory or undoes a visible delivery. */
 export async function sendServiceMail(env: Env, id: string) {
   let task = await taskFor(env, id)
@@ -136,8 +138,16 @@ export async function sendServiceMail(env: Env, id: string) {
     const order = await getOrder(env, id)
     if (!task.encrypted_mail) {
       const value = await unseal(env, task.encrypted_value!, task.stock_id ? 'stock:' + task.stock_id : 'task:' + id), brand = mailBrand(env)
-      const text = `${brand.name} · ${task.product_name} · ${order.plan_name}\n订单号：${id}\n\n交付内容\n${value}\n\n${task.instructions}\n\n请妥善保管。已交付不代表已激活或兑换。\n订单查询：${brand.origin}/orders`
-      const payload = emailPayload(env, order.customer_email!, { subject: `${brand.name} · ${task.product_name}已交付`, text, html: `<div style="font-family:system-ui;max-width:600px;margin:auto"><h1>商品已交付</h1><p>${escape(task.product_name)} · ${escape(order.plan_name)}</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${escape(text)}</pre></div>` })
+      const codexSms = task.product_id === 'codex-sms' || supplyKind((await musePurchase(env, id))?.product_code ?? null) === 'codex-sms'
+      let delivery = `${value}\n\n${task.instructions}`
+      if (codexSms) {
+        delivery = delivery.replace(legacySmsRedeemAddress, codexSmsMailRedeemUrl)
+        if (!delivery.includes(codexSmsMailRedeemUrl)) delivery += `\n\n接码兑换：${codexSmsMailRedeemUrl}`
+      }
+      const text = `${brand.name} · ${task.product_name} · ${order.plan_name}\n订单号：${id}\n\n交付内容\n${delivery}\n\n请妥善保管。已交付不代表已激活或兑换。\n订单查询：${brand.origin}/orders`
+      const escapedText = escape(text)
+      const htmlBody = codexSms ? escapedText.replaceAll(codexSmsMailRedeemUrl, `<a href="${codexSmsMailRedeemUrl}">${codexSmsMailRedeemUrl}</a>`) : escapedText
+      const payload = emailPayload(env, order.customer_email!, { subject: `${brand.name} · ${task.product_name}已交付`, text, html: `<div style="font-family:system-ui;max-width:600px;margin:auto"><h1>商品已交付</h1><p>${escape(task.product_name)} · ${escape(order.plan_name)}</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${htmlBody}</pre></div>` })
       const encrypted = await seal(env, payload, 'mail:' + id)
       await env.INTEREST_DB.prepare('UPDATE fulfillment_tasks SET encrypted_mail=? WHERE order_id=? AND lease_token=? AND encrypted_mail IS NULL').bind(encrypted, id, lease).run()
       task = (await taskFor(env, id))!
