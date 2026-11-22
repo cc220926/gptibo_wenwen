@@ -168,7 +168,7 @@ test('SEO errors do not prevent the legacy app and do not expose internal failur
   s.env.INTEREST_DB = { prepare() { throw new Error('PRIVATE DATABASE DETAIL') }, batch() { throw new Error('write') } }
   const r = await s.get('/')
   assert.equal(r.status, 200); assert.match(r.headers.get('X-Robots-Tag')!, /noindex/)
-  assert.equal(await r.text(), template)
+  assert.equal(await r.text(), template.replace('<html', `<html data-public-help="true" data-public-origin="${origin}"`))
 })
 
 test('direct order shell remains private but can restore public metadata when navigating home', async t => {
@@ -179,6 +179,23 @@ test('direct order shell remains private but can restore public metadata when na
   assert.match(html, /data-public-seo="true"/)
   assert.match(html, /name="robots" content="noindex/)
   assert.doesNotMatch(html, /rel="canonical"|public-seo-fallback/)
+})
+
+test('public help stays discoverable on the main shop when the catalog cannot render', async t => {
+  const s = await fixture(); t.after(() => s.db.close())
+  s.env.SEO_CATALOG_LIMITER = { limit: async () => ({ success: false }) }
+  for (const path of ['/', '/product/chatgpt']) {
+    const response = await s.get(path)
+    const html = await response.text()
+    assert.equal(response.status, 200)
+    assert.match(html, /data-public-help="true" data-public-origin="https:\/\/shop.example.invalid"/)
+    assert.match(response.headers.get('X-Robots-Tag')!, /noindex/)
+    assert.doesNotMatch(html, /data-public-seo|rel="canonical"/)
+  }
+  const partner = await s.get('/r/ABC123')
+  assert.doesNotMatch(await partner.text(), /data-public-help|data-public-seo/)
+  const help = await s.get('/help/')
+  assert.match(await help.text(), /<h1>帮助中心<\/h1>/)
 })
 
 test('discovery failures are retryable errors, never a successful HTML sitemap', async t => {
@@ -211,5 +228,5 @@ test('a stalled public catalog falls back within its deadline while buyer initia
   const response = await pending
   assert.equal(response.status, 200)
   assert.match(response.headers.get('X-Robots-Tag')!, /noindex/)
-  assert.equal(await response.text(), template)
+  assert.equal(await response.text(), template.replace('<html', `<html data-public-help="true" data-public-origin="${origin}"`))
 })

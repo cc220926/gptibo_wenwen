@@ -195,12 +195,16 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   return htmlResponse(request, html)
 }
 
-// A direct visit to orders must stay noindex. The public-origin marker contains
-// no buyer data and lets the existing SPA restore metadata when returning home.
-export async function privateNavigationShell(request: Request, env: SeoEnv, response: Response) {
+// Orders can restore public metadata when navigating back to the shop.
+// A catalog fallback may link to standalone help without enabling SEO metadata.
+export async function noindexNavigationShell(request: Request, env: SeoEnv, response: Response, catalogFallback = false) {
   const url = new URL(request.url)
-  if (request.method !== 'GET' || !['/orders', '/orders/'].includes(url.pathname) || url.origin !== seoOrigin(env.STOREFRONT_SEO_ORIGIN) || response.status !== 200 || !response.headers.get('Content-Type')?.includes('text/html')) return response
-  const html = (await response.text()).replace(/<html\b/, `<html data-public-seo="true" data-public-origin="${escape(url.origin)}"`)
+  if (request.method !== 'GET' || url.origin !== seoOrigin(env.STOREFRONT_SEO_ORIGIN) || response.status !== 200 || !response.headers.get('Content-Type')?.includes('text/html')) return response
+  const marker = /^\/orders\/?$/.test(url.pathname) ? 'data-public-seo'
+    : catalogFallback && (['/', '/index.html'].includes(url.pathname) || /^\/product\/[a-z0-9_-]+\/?$/i.test(url.pathname)) ? 'data-public-help'
+    : null
+  if (!marker) return response
+  const html = (await response.text()).replace(/<html\b/, `<html ${marker}="true" data-public-origin="${escape(url.origin)}"`)
   const headers = new Headers(response.headers)
   for (const key of ['ETag', 'Content-Length', 'Last-Modified', 'Content-Encoding']) headers.delete(key)
   headers.set('Cache-Control', 'no-store')

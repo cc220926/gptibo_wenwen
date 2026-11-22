@@ -14,7 +14,7 @@ async function setup(allowed=true){
 }
 test('denied dedicated SEO budget performs no D1 reads and preserves the app',async t=>{
  const s=await setup(false);t.after(()=>s.db.close())
- const r=await s.get('/');assert.equal(r.status,200);assert.equal(await r.text(),shell);assert.deepEqual(s.stats(),{reads:0,limits:1})
+ const r=await s.get('/');assert.equal(r.status,200);assert.equal(await r.text(),shell.replace('<html', `<html data-public-help="true" data-public-origin="${origin}"`));assert.deepEqual(s.stats(),{reads:0,limits:1})
 })
 test('concurrent and repeated public pages coalesce one bounded catalog read',async t=>{
  const s=await setup();t.after(()=>s.db.close())

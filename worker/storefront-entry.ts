@@ -1,6 +1,6 @@
 import commerceWorker from './index.ts'
 import { secureResponse } from './security.ts'
-import { publicStorefront, privateNavigationShell, invalidatePublicCatalog, type SeoEnv } from './public-seo.ts'
+import { publicStorefront, noindexNavigationShell, invalidatePublicCatalog, type SeoEnv } from './public-seo.ts'
 
 // API requests and scheduled work retain the original handler and Env identity.
 // This wrapper is deliberately separate from payment / fulfillment routing.
@@ -19,7 +19,7 @@ export function withPublicStorefront(worker: typeof commerceWorker) {
       try {
         const publicResponse = await publicStorefront(request, env)
         if (publicResponse) return publicResponse
-        return await privateNavigationShell(request, env, await worker.fetch(request, env))
+        return await noindexNavigationShell(request, env, await worker.fetch(request, env))
       } catch {
         // SEO must fail closed for indexing, without blocking the original app.
         if (['/sitemap.xml', '/robots.txt'].includes(new URL(request.url).pathname)) {
@@ -29,7 +29,8 @@ export function withPublicStorefront(worker: typeof commerceWorker) {
         const headers = new Headers(response.headers)
         headers.set('X-Robots-Tag', 'noindex, nofollow')
         headers.set('Cache-Control', 'no-store')
-        return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
+        const fallback = new Response(response.body, { status: response.status, statusText: response.statusText, headers })
+        return noindexNavigationShell(request, env, fallback, true)
       }
     },
   }
