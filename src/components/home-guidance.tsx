@@ -28,7 +28,6 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
   const copy = homeGuideCopy(locale)
   const helpCopy = homeHelpCopy(locale)
   const feedbackCopy = homeFeedbackCopy(locale)
-  const galleryItems = feedbackCopy.items.slice(0, 3)
   const id = useId()
   const [tab, setTab] = useState(0)
   const [feedbackIndex, setFeedbackIndex] = useState<number | null>(null)
@@ -43,7 +42,7 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
   const expandedQuestion = useRef<HTMLDetailsElement>(null)
   const feedbackTitle = useRef<HTMLHeadingElement>(null)
   const feedbackTrigger = useRef<HTMLButtonElement>(null)
-  const selectedFeedback = feedbackIndex === null ? null : galleryItems[feedbackIndex]
+  const selectedFeedback = feedbackIndex === null ? null : feedbackCopy.items[feedbackIndex]
   const questions = searchHomeQuestions(locale, query)
   const featured = ['apple-login', 'recovery', 'pending'].flatMap(questionId => searchHomeQuestions(locale).filter(question => question.id === questionId))
   const openDemo = () => setDemoOpen(true)
@@ -94,7 +93,7 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
         {tab === 2 && <div className="home-guide-feedback-panel">
           <div className="home-guide-copy"><span className="home-guide-topic-icon" aria-hidden="true"><MessageCircle size={24} strokeWidth={1.5} /></span><h3>{feedbackCopy.title}</h3><p>{feedbackCopy.intro}</p>{feedbackCopy.languageNote && <p>{feedbackCopy.languageNote}</p>}<Button variant="link" className="home-guide-link home-guide-feedback-more" aria-haspopup="dialog" onClick={event => { feedbackTrigger.current = event.currentTarget; setFeedbackIndex(0) }}>{feedbackCopy.more}<ArrowRight size={15} aria-hidden="true" /></Button></div>
           <div className="home-guide-feedback-cards">
-            {galleryItems.slice(0, 2).map((item, index) => <button type="button" className="home-guide-feedback-card" key={item.id} aria-label={`${feedbackCopy.open}：${item.title}`} aria-haspopup="dialog" onClick={event => { feedbackTrigger.current = event.currentTarget; setFeedbackIndex(index) }}>
+            {feedbackCopy.items.slice(0, 2).map((item, index) => <button type="button" className="home-guide-feedback-card" key={item.id} aria-label={`${feedbackCopy.open}：${item.title}`} aria-haspopup="dialog" onClick={event => { feedbackTrigger.current = event.currentTarget; setFeedbackIndex(index) }}>
               <span className="home-guide-feedback-thumbnail"><img src={item.image} alt="" loading="lazy" decoding="async" /></span>
               <span className="home-guide-feedback-content"><span className="home-guide-feedback-category">{item.category}</span><q>{item.quote}</q><span className="home-guide-feedback-description">{item.description}</span><span className="home-guide-feedback-open">{feedbackCopy.open}<Maximize2 size={13} aria-hidden="true" /></span></span>
             </button>)}
@@ -107,11 +106,11 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
       <DialogContent className="home-guide-dialog home-guide-feedback-dialog" initialFocus={feedbackTitle} finalFocus={feedbackTrigger}>
         <DialogHeader>
           <DialogTitle ref={feedbackTitle} tabIndex={-1}>{feedbackCopy.galleryTitle}</DialogTitle>
-          <DialogDescription>{feedbackCopy.galleryIntro(galleryItems.length)}{feedbackCopy.languageNote && ` ${feedbackCopy.languageNote}`}</DialogDescription>
+          <DialogDescription>{feedbackCopy.galleryIntro(feedbackCopy.items.length)}{feedbackCopy.languageNote && ` ${feedbackCopy.languageNote}`}</DialogDescription>
         </DialogHeader>
         <div className="home-guide-feedback-gallery">
           <div className="home-guide-feedback-selector" role="group" aria-label={feedbackCopy.galleryTitle}>
-            {galleryItems.map((item, index) => <button type="button" key={item.id} aria-pressed={feedbackIndex === index} aria-controls={`${id}-feedback-record`} onClick={() => setFeedbackIndex(index)}><span aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>{item.title}</button>)}
+            {feedbackCopy.items.map((item, index) => <button type="button" key={item.id} aria-pressed={feedbackIndex === index} aria-controls={`${id}-feedback-record`} onClick={() => setFeedbackIndex(index)}><span aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>{item.title}</button>)}
           </div>
           {selectedFeedback && <p className="home-guide-feedback-context" aria-live="polite">{selectedFeedback.context}</p>}
         </div>
