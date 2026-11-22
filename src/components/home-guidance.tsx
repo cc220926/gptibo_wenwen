@@ -1,9 +1,9 @@
 import { useId, useRef, useState, type KeyboardEvent } from 'react'
-import { ArrowRight, Check, ChevronRight, CircleHelp, ClipboardList, Play, Search, X } from 'lucide-react'
+import { ArrowRight, Check, ChevronRight, CircleHelp, ClipboardList, Maximize2, MessageCircle, Play, Search, X } from 'lucide-react'
 import { useStorefrontI18n } from '@/lib/storefront-i18n'
 import type { CatalogPlan } from '@/lib/api'
 import { RechargeGuide } from './recharge-guide'
-import { homeGuideCopy, homeHelpCopy, searchHomeQuestions } from '@/lib/home-guidance'
+import { homeFeedbackCopy, homeGuideCopy, homeHelpCopy, searchHomeQuestions } from '@/lib/home-guidance'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog'
@@ -27,17 +27,21 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
   const { locale } = useStorefrontI18n()
   const copy = homeGuideCopy(locale)
   const helpCopy = homeHelpCopy(locale)
+  const feedbackCopy = homeFeedbackCopy(locale)
   const id = useId()
   const [tab, setTab] = useState(0)
-  const [scenario, setScenario] = useState(0)
+  const [feedbackIndex, setFeedbackIndex] = useState<number | null>(null)
   const [demoOpen, setDemoOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
   const title = useRef<HTMLHeadingElement>(null)
   const searchInput = useRef<HTMLInputElement>(null)
+  const feedbackTitle = useRef<HTMLHeadingElement>(null)
+  const feedbackTrigger = useRef<HTMLButtonElement>(null)
+  const selectedFeedback = feedbackIndex === null ? null : feedbackCopy.items[feedbackIndex]
   const questions = searchHomeQuestions(locale, query)
-  const featured = searchHomeQuestions(locale).slice(0, 3)
+  const featured = ['apple-login', 'recovery', 'pending'].flatMap(questionId => searchHomeQuestions(locale).filter(question => question.id === questionId))
   const openDemo = () => setDemoOpen(true)
   const openHelp = (question?: string) => { setQuery(''); setExpanded(question ?? null); setHelpOpen(true) }
   const leaveGuide = (destination: 'orders' | 'support') => {
@@ -67,12 +71,24 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
         </div>
       </div>
       <div role="tabpanel" id={`${id}-panel-2`} aria-labelledby={`${id}-tab-2`} hidden={tab !== 2}>
-        <div className="home-guide-cases-panel">
-          <div className="home-guide-copy"><span className="home-guide-case-badge">{helpCopy.caseBadge}</span><h3>{helpCopy.caseTitle}</h3><p>{helpCopy.caseDisclaimer}</p><Button variant="link" className="home-guide-link" onClick={onOrders}>{helpCopy.orders}<ArrowRight size={15} /></Button></div>
-          <div className="home-guide-case-content"><div className="home-guide-scenarios" role="group" aria-label={helpCopy.cases}>{helpCopy.scenarios.map((item, index) => <button type="button" key={item.id} aria-pressed={scenario === index} onClick={() => setScenario(index)}>{item.label}</button>)}</div><dl aria-live="polite" aria-atomic="true"><div><dt>{helpCopy.situation}</dt><dd>{helpCopy.scenarios[scenario].situation}</dd></div><div><dt>{helpCopy.nextStep}</dt><dd>{helpCopy.scenarios[scenario].nextStep}</dd></div></dl></div>
-        </div>
+        {tab === 2 && <div className="home-guide-feedback-panel">
+          <div className="home-guide-copy"><span className="home-guide-topic-icon" aria-hidden="true"><MessageCircle size={24} strokeWidth={1.5} /></span><h3>{feedbackCopy.title}</h3><p>{feedbackCopy.intro}</p>{feedbackCopy.languageNote && <p>{feedbackCopy.languageNote}</p>}</div>
+          <div className="home-guide-feedback-cards">
+            {feedbackCopy.items.map((item, index) => <button type="button" className="home-guide-feedback-card" key={item.id} aria-label={`${feedbackCopy.open}：${item.title}`} aria-haspopup="dialog" onClick={event => { feedbackTrigger.current = event.currentTarget; setFeedbackIndex(index) }}>
+              <span className="home-guide-feedback-thumbnail"><img src={item.image} alt="" loading="lazy" decoding="async" /></span>
+              <span className="home-guide-feedback-content"><span className="home-guide-feedback-category">{item.category}</span><q>{item.quote}</q><span className="home-guide-feedback-description">{item.description}</span><span className="home-guide-feedback-open">{feedbackCopy.open}<Maximize2 size={13} aria-hidden="true" /></span></span>
+            </button>)}
+          </div>
+        </div>}
+
       </div>
     </section>
+    <Dialog open={feedbackIndex !== null} onOpenChange={open => { if (!open) setFeedbackIndex(null) }}>
+      <DialogContent className="home-guide-dialog home-guide-feedback-dialog" initialFocus={feedbackTitle} finalFocus={feedbackTrigger}>
+        <DialogHeader><DialogTitle ref={feedbackTitle} tabIndex={-1}>{selectedFeedback?.title}</DialogTitle><DialogDescription>{selectedFeedback?.context} {feedbackCopy.intro}{feedbackCopy.languageNote && ` · ${feedbackCopy.languageNote}`}</DialogDescription></DialogHeader>
+        {selectedFeedback && <img className="home-guide-feedback-image" src={selectedFeedback.image} alt={selectedFeedback.alt} decoding="async" />}
+      </DialogContent>
+    </Dialog>
     <Dialog open={demoOpen} onOpenChange={setDemoOpen}>
       <DialogContent className="home-guide-dialog home-guide-recharge-dialog" initialFocus={title}>
         <DialogHeader><DialogTitle ref={title} tabIndex={-1}>{copy.demoTitle}</DialogTitle><DialogDescription>{copy.demoDisclaimer} {copy.tutorialLanguage}</DialogDescription></DialogHeader>

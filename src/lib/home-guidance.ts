@@ -23,6 +23,7 @@ export function homeGuideCopy(locale: StorefrontLocale) { return copy[locale] }
 export type HomeQuestion = { id: string; title: string; answer: string; keywords: string; action: 'orders' | 'support' }
 const questions: Record<StorefrontLocale, readonly HomeQuestion[]> = {
   'zh-CN': [
+    { id: 'apple-login', title: '通过 Apple 登录的 ChatGPT 账号能充值吗？', answer: '已有通过 Apple 登录的 ChatGPT 账号充值案例。购买前请联系客服确认账号情况及所选套餐，不保证所有账号都适用。这里指 ChatGPT 账号订阅，不是 Apple 账户余额充值。', keywords: 'Apple apple id 苹果 登录 隐藏邮箱 hide my email relay ChatGPT', action: 'support' },
     { id: 'recovery', title: '付款页面关了，怎么找回订单？', answer: '进入「我的订单」，使用下单邮箱接收验证码找回订单。原浏览器也会显示已有记录；找回后在同一笔订单继续，不要重复下单。', keywords: '查单 找回 邮箱 关闭 页面 丢失 recovery email', action: 'orders' },
     { id: 'pending', title: '已经付款，为什么还没开通？', answer: '先查看原订单的付款和处理状态。账号充值可能还需要连接账号并提交；等待或超时不代表失败，请勿重复付款。仍有异常时，在原订单联系支持。', keywords: '支付 付款 没到账 充值 延迟 失败 pending payment', action: 'orders' },
     { id: 'manual', title: '人工交付需要我做什么？', answer: '先阅读商品说明。付款后按订单提示联系客服，提供订单号，由工作人员交付。处理时间以商品说明及客服确认为准，不能按自动发货的时间预期等待。', keywords: '人工 客服 联系 时效 手动 manual support', action: 'support' },
@@ -33,6 +34,7 @@ const questions: Record<StorefrontLocale, readonly HomeQuestion[]> = {
     { id: 'refund', title: '出现异常，如何申请售后或退款？', answer: '在原订单查看状态并申请售后，保留订单号与问题说明。是否支持退款、退款金额和处理方式，以商品售后规则及审核结果为准。不要在备注中提交密码、Session 或验证码。', keywords: '退款 售后 退钱 质保 refund after-sales warranty', action: 'orders' },
   ],
   en: [
+    { id: 'apple-login', title: 'Can I top up a ChatGPT account that uses Sign in with Apple?', answer: 'We have handled top-ups for ChatGPT accounts using Sign in with Apple. Contact support before buying to confirm your account and selected plan; not every account is guaranteed to be eligible. This concerns a ChatGPT subscription, not an Apple account balance.', keywords: 'Apple apple id 苹果 登录 隐藏邮箱 hide my email relay ChatGPT', action: 'support' },
     { id: 'recovery', title: 'Closed the payment page? Find your order.', answer: 'Open My orders and verify the email used at checkout. Existing records also appear in the original browser. Continue in the same order instead of buying again.', keywords: '查单 找回 邮箱 recovery email closed lost', action: 'orders' },
     { id: 'pending', title: 'Paid, but the service is not active yet?', answer: 'Check payment and processing status in the original order. Account top-ups may still need you to connect an account and submit. Waiting or a timeout does not mean failure. Do not pay again; contact support through the order if needed.', keywords: '支付 没到账 延迟 pending payment failure top-up', action: 'orders' },
     { id: 'manual', title: 'What do I need to do for manual delivery?', answer: 'Read the product description first. After payment, follow the order instructions to contact support with your order number. Delivery time depends on the product and support confirmation; manual delivery is not automatic dispatch.', keywords: '人工 客服 manual support time', action: 'support' },
@@ -54,33 +56,75 @@ export function searchHomeQuestions(locale: StorefrontLocale, query = '') {
 
 const helpCopy = {
   'zh-CN': {
-    help: '选购帮助', cases: '售后案例', helpTitle: '先把疑问问清楚。', helpIntro: '账号要求、订单找回与交付方式，购买前就能了解。',
+    help: '选购帮助', cases: '用户反馈', helpTitle: '先把疑问问清楚。', helpIntro: '账号要求、订单找回与交付方式，购买前就能了解。',
     allQuestions: '搜索全部问题', search: '搜索购买问题', searchPlaceholder: '搜索问题，例如「退款」', clear: '清除搜索',
     noResults: '没有找到相关问题。试试其他关键词，或联系支持。', questionTitle: '购买前后，都能找到答案',
     questionIntro: '这里只提供操作说明。价格、账号条件与售后范围，以所选商品为准。',
     orders: '查看我的订单', support: '联系支持', resultCount: '个相关问题',
-    caseTitle: '出问题，可以这样处理。', caseDisclaimer: '以下为处理流程示例，并非真实客户案例。',
-    caseBadge: '流程示例', situation: '遇到的情况', nextStep: '接下来怎么做',
-    scenarios: [
-      { id: 'pending', label: '付款后未开通', situation: '已付款，但账号还没有显示会员。', nextStep: '先查原订单，确认是否需要连接账号或继续提交；不要重复付款。仍有异常，再从原订单申请售后。' },
-      { id: 'email', label: '没有收到邮件', situation: '订单已交付，邮箱里却找不到邮件。', nextStep: '先在原订单查看交付内容，再检查收件箱和垃圾邮件；仍有问题时，携订单号联系支持。' },
-      { id: 'manual', label: '需要人工交付', situation: '买的是人工商品，付款后没有自动发货。', nextStep: '按原订单指引联系客服并提供订单号，确认所需信息和处理时间；交付进度在原订单查看。' },
-    ],
   },
   en: {
-    help: 'Buying help', cases: 'Support examples', helpTitle: 'Get your questions answered.', helpIntro: 'Check account requirements, order recovery and delivery before you buy.',
+    help: 'Buying help', cases: 'User feedback', helpTitle: 'Get your questions answered.', helpIntro: 'Check account requirements, order recovery and delivery before you buy.',
     allQuestions: 'Search all questions', search: 'Search purchase questions', searchPlaceholder: 'Search a question, e.g. refund', clear: 'Clear search',
     noResults: 'No matching questions. Try another keyword or contact support.', questionTitle: 'Answers before and after buying',
     questionIntro: 'These are operating instructions. Check your selected product for prices, account conditions and support terms.',
     orders: 'View my orders', support: 'Contact support', resultCount: 'matching questions',
-    caseTitle: 'Know what to do if something goes wrong.', caseDisclaimer: 'These are workflow examples, not real customer cases.',
-    caseBadge: 'Workflow example', situation: 'The situation', nextStep: 'What to do next',
-    scenarios: [
-      { id: 'pending', label: 'Paid, not active', situation: 'Payment is complete but membership is not showing.', nextStep: 'Check the original order for account connection or submission steps. Do not pay again. Request support from that order if the issue persists.' },
-      { id: 'email', label: 'Missing email', situation: 'The order is delivered, but the email is missing.', nextStep: 'Check the delivery in the original order, then your inbox and spam folder. Contact support with your order number if needed.' },
-      { id: 'manual', label: 'Manual delivery', situation: 'A manual product did not dispatch automatically after payment.', nextStep: 'Follow the order instructions to contact support with the order number. Confirm the required information and timing, then check progress in the original order.' },
-    ],
   },
 } as const
 
 export function homeHelpCopy(locale: StorefrontLocale) { return helpCopy[locale] }
+
+
+// User-provided conversation excerpts. Context stays with each image so a
+// pre-purchase recommendation is never represented as completed fulfillment.
+export type HomeFeedbackItem = {
+  id: string; title: string; category: string; quote: string; description: string
+  image: string; alt: string; context: string
+}
+type HomeFeedbackCopy = {
+  title: string; intro: string; open: string; close: string; languageNote: string
+  items: readonly HomeFeedbackItem[]
+}
+const feedbackCopy: Record<StorefrontLocale, HomeFeedbackCopy> = {
+  'zh-CN': {
+    title: '看看他们怎么说。', intro: '微信沟通节选 · 个人信息已遮挡',
+    open: '查看聊天记录', close: '关闭图片', languageNote: '',
+    items: [
+      {
+        id: 'subscription-confirmed', title: '订阅开通确认', category: '开通反馈', quote: '可以了可以了',
+        description: '询问订阅状态后，用户确认已开通并表达感谢。',
+        image: '/feedback/subscription-confirmed.png',
+        alt: '脱敏微信聊天记录：客服询问订阅是否开通，用户回复“可以了可以了”“靠谱！”“感谢”。',
+        context: '',
+      },
+      {
+        id: 'consultation-referral', title: '咨询后，推荐给朋友', category: '咨询后推荐', quote: '我就先把你推给我朋友',
+        description: '咨询后向朋友推荐，尚未购买；对话含转介绍返现说明。',
+        image: '/feedback/consultation-referral.png',
+        alt: '脱敏微信聊天记录：咨询者表示暂不需要充值并推荐朋友；商家随后提出朋友下单返现五元。',
+        context: '该次对话中，商家随后提出朋友下单返现 5 元，相关内容保留在截图中。',
+      },
+    ],
+  },
+  en: {
+    title: 'In their own words.', intro: 'WeChat excerpts · Personal information redacted',
+    open: 'View conversation', close: 'Close image', languageNote: 'The original screenshots and quotations are in Chinese.',
+    items: [
+      {
+        id: 'subscription-confirmed', title: 'Subscription confirmed', category: 'Activation feedback', quote: '可以了可以了',
+        description: 'After being asked about the subscription, the customer confirmed activation and thanked support.',
+        image: '/feedback/subscription-confirmed.png',
+        alt: 'Redacted WeChat conversation in Chinese: support asks whether the subscription is active; the customer confirms and says thank you.',
+        context: '',
+      },
+      {
+        id: 'consultation-referral', title: 'A recommendation after asking', category: 'Pre-purchase recommendation', quote: '我就先把你推给我朋友',
+        description: 'The person had not purchased this top-up. The conversation includes a referral reward offer.',
+        image: '/feedback/consultation-referral.png',
+        alt: 'Redacted WeChat conversation in Chinese: a person does not need a top-up yet and refers a friend; the merchant then offers CNY 5 if the friend orders.',
+        context: 'In this conversation, the merchant then offered CNY 5 for a friend’s order. This context remains in the screenshot.',
+      },
+    ],
+  },
+}
+
+export function homeFeedbackCopy(locale: StorefrontLocale) { return feedbackCopy[locale] }

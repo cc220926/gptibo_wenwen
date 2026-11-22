@@ -32,6 +32,7 @@ const allowed = new Set([
   'tests/home-guidance.test.ts', 'scripts/verify-homepage-scope.mjs', 'docs/homepage-guidance.md',
   'scripts/verify-storefront-scope.mjs', 'public/storefront-startup.css',
   'tests/storefront-first-paint.test.ts', 'docs/combined-storefront-preview.md',
+  'public/feedback/subscription-confirmed.png', 'public/feedback/consultation-referral.png',
 ])
 const changed = [...new Set([
   ...git('diff', '--name-only', base).trim().split('\n'),
@@ -158,8 +159,29 @@ for (const node of guideSource.statements) if (ts.isImportDeclaration(node)) {
   if (node.moduleSpecifier.text === '@/lib/api') assert.equal(node.importClause?.isTypeOnly, true, 'Guidance may import API types but not transaction functions')
 }
 
-const scanner = readFileSync('scripts/scan-public-source.py', 'utf8').replace("    # XML sitemap namespace, not an outbound service integration.\n    'www.sitemaps.org',\n", '')
-assert.equal(scanner, git('show', `${base}:scripts/scan-public-source.py`), 'Only the public sitemap XML namespace may be added to the source scanner')
+let scanner = readFileSync('scripts/scan-public-source.py', 'utf8')
+function restoreScannerSnippet(expected, original = '') {
+  assert.equal(scanner.split(expected).length, 2, 'Each reviewed scanner change must appear exactly once')
+  scanner = scanner.replace(expected, original)
+}
+restoreScannerSnippet("    # XML sitemap namespace, not an outbound service integration.\n    'www.sitemaps.org',\n")
+restoreScannerSnippet('import hashlib\n')
+restoreScannerSnippet(`# Reviewed testimonial pixels; changed files must be reviewed again.
+REVIEWED_BINARY_ASSETS = {
+    'public/feedback/subscription-confirmed.png': 'f737fb42cf5642a6e3572f768bdc1e69ef8499d1c976bec4e93a1acc64690543',
+    'public/feedback/consultation-referral.png': '2fcb8210ae2edba2ae30e8b8d90b4f849870f5d88f34db2771667f4d9ae1dea9',
+}
+`)
+restoreScannerSnippet(`        if name in REVIEWED_BINARY_ASSETS:
+            if hashlib.sha256(data).hexdigest() != REVIEWED_BINARY_ASSETS[name] or not data.startswith(b'\\x89PNG\\r\\n\\x1a\\n'):
+                findings.append((name, 0, 'reviewed binary asset changed'))
+            continue
+`)
+restoreScannerSnippet(`                # Existing public storefront URL in the historical release record only.
+                documented_storefront = name == 'docs/seo-production-release.md' and host == 'gptpay1688.com'
+`)
+restoreScannerSnippet('not allowed_host(host) and not documented_storefront', 'not allowed_host(host)')
+assert.equal(scanner, git('show', `${base}:scripts/scan-public-source.py`), 'Only the sitemap namespace, two hash-pinned reviewed images and the existing release-document storefront URL may be added to the source scanner')
 console.log(JSON.stringify({
   base, scope: 'combined-homepage-and-seo', protectedFilesIdentical: protectedCount,
   originalWorkerIdentical: true, appBusinessAstIdentical: true,

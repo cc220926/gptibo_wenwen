@@ -5,6 +5,7 @@ This is a release guard for private artifacts and unexpected outbound hosts.
 Run Gitleaks as well; neither check is a guarantee against all disclosures.
 """
 import argparse
+import hashlib
 import ipaddress
 import re
 import subprocess
@@ -26,6 +27,11 @@ PUBLIC_HOSTS = {
     'www.duolingo.com', 'www.duolingo.cn', 'd35aaqx5ub95lt.cloudfront.net',
 }
 BINARY_ASSETS = {'public/email-logo.png', 'public/email-shop.png', 'src/assets/hero.png'}
+# Reviewed testimonial pixels; changed files must be reviewed again.
+REVIEWED_BINARY_ASSETS = {
+    'public/feedback/subscription-confirmed.png': 'f737fb42cf5642a6e3572f768bdc1e69ef8499d1c976bec4e93a1acc64690543',
+    'public/feedback/consultation-referral.png': '2fcb8210ae2edba2ae30e8b8d90b4f849870f5d88f34db2771667f4d9ae1dea9',
+}
 FORBIDDEN_PARTS = {'.git', '.secrets', '.imports', '.admin-auth', '.xgift-private',
                    'node_modules', 'dist', '.preview', '.wrangler', 'artifacts', '__pycache__'}
 FORBIDDEN_SUFFIXES = {'.pem', '.key', '.p12', '.pfx', '.sqlite', '.db', '.dump',
@@ -70,6 +76,10 @@ def scan(root, files):
             findings.append((name, 0, 'private/runtime artifact'))
             continue
         data = path.read_bytes()
+        if name in REVIEWED_BINARY_ASSETS:
+            if hashlib.sha256(data).hexdigest() != REVIEWED_BINARY_ASSETS[name] or not data.startswith(b'\x89PNG\r\n\x1a\n'):
+                findings.append((name, 0, 'reviewed binary asset changed'))
+            continue
         try:
             source = data.decode('utf-8')
         except UnicodeDecodeError:
@@ -94,7 +104,9 @@ def scan(root, files):
                 # Ignore templates and incomplete expression/regex fragments.
                 if '.' not in host or host.endswith('.'):
                     continue
-                if not allowed_host(host):
+                # Existing public storefront URL in the historical release record only.
+                documented_storefront = name == 'docs/seo-production-release.md' and host == 'gptpay1688.com'
+                if not allowed_host(host) and not documented_storefront:
                     findings.append((name, line, 'unexpected external host'))
     return sorted(set(findings))
 
