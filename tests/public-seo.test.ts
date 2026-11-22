@@ -87,6 +87,15 @@ test('help pages provide standalone answers and no transactional scripts', async
   assert.doesNotMatch(html, /<script[^>]+src=|aggregateRating|ratingValue/)
 })
 
+test('related questions reuse help-center rows and only link to other articles in the category', async t => {
+  const s = await fixture(); t.after(() => s.db.close())
+  const html = await (await s.get('/help/recharge-or-account')).text()
+  const related = html.match(/<section class="help-topic" aria-labelledby="related-help-title"[^>]*>([^]*?)<\/section>/)?.[1]
+  assert.ok(related)
+  assert.deepEqual([...related.matchAll(/<a href="([^"]+)">/g)].map(match => match[1]), ['/help/codex-credits', '/help/renewal-before-expiry'])
+  assert.equal((related.match(/aria-hidden="true">›<\/span>/g) ?? []).length, 2)
+})
+
 test('help center renders category headings and direct article links before search script runs', async t => {
   const s = await fixture(); t.after(() => s.db.close())
   const response = await s.get('/help/')

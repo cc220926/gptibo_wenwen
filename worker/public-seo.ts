@@ -88,10 +88,11 @@ const assetPath = (path: string) => /^\/(?:assets|brands|fonts|images)\//.test(p
 // product document. The unchanged React entry replaces it when it commits.
 // Recovery links remain usable when the application bundle cannot execute.
 const startupShell = (brand: string) => `<main class="storefront-startup" data-storefront-startup aria-labelledby="storefront-startup-title"><p class="storefront-startup-brand">${escape(brand)}</p><p id="storefront-startup-title" class="storefront-startup-title" role="status">正在加载页面…</p><div class="storefront-startup-skeleton" aria-hidden="true"><span></span><div><i></i><i></i><i></i><i></i></div></div><p class="storefront-startup-recovery">如果页面没有继续打开，可以<a href="">重新加载</a>，或<a href="/help/">查看购买指南</a>。</p><noscript><p>当前浏览器未启用 JavaScript，启用后即可选购。</p></noscript></main>`
+const helpArticleLink = ({ slug, title }: PublicArticle) => `<a href="/help/${slug}">${escape(title)}<span aria-hidden="true">›</span></a>`
 function relatedHelpArticles(article: PublicArticle) {
   const links = publicArticles.filter(item => item.category === article.category && item.slug !== article.slug)
   if (!links.length) return ''
-  return `<aside><h2>相关问题</h2><ul>${links.map(item => `<li><a href="/help/${item.slug}">${escape(item.title)}</a></li>`).join('')}</ul></aside>`
+  return `<section class="help-topic" aria-labelledby="related-help-title" style="margin-block-start:22px"><h2 id="related-help-title">相关问题</h2><ul>${links.map(item => `<li>${helpArticleLink(item)}</li>`).join('')}</ul></section>`
 }
 function helpArticle(article: PublicArticle, productHref?: string) {
   const sections = article.sections.map(section =>
@@ -127,7 +128,7 @@ function helpCenter(query: string) {
     count += visibleCount
     return `<section class="help-topic" data-help-group aria-labelledby="help-${category.id}"${visibleCount ? '' : ' hidden'}>
       <h2 id="help-${category.id}">${escape(category.title)}</h2>
-      <ul>${articles.map(({ article, search, visible }) => `<li data-help-article${visible ? '' : ' hidden'} data-search="${escape(search)}"><a href="/help/${article.slug}">${escape(article.title)}<span aria-hidden="true">›</span></a></li>`).join('')}</ul>
+      <ul>${articles.map(({ article, search, visible }) => `<li data-help-article${visible ? '' : ' hidden'} data-search="${escape(search)}">${helpArticleLink(article)}</li>`).join('')}</ul>
     </section>`
   }).join('')
   const result = count ? `找到 ${count} 个相关问题` : '没找到相关问题。试试「查单」「付款」或「Session」。'
