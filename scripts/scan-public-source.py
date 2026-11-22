@@ -115,7 +115,8 @@ def scan(root, files):
                 # Public buyer-facing link. Scoping this to the mail template and its fixture
                 # leaves every other reference to that host subject to the normal guard.
                 codex_redemption = parsed_url.scheme == 'https' and (name, parsed_url.netloc, parsed_url.path) in (
-                    ('worker/fulfillment/service.ts', 'ai.aikm.workers.dev', '/'),
+                    ('shared/codex-sms-redemption.ts', 'ai.aikm.workers.dev', '/'),
+                    ('tests/muse-native.test.ts', 'ai.aikm.workers.dev', '/'),
                     ('tests/muse-native.test.ts', 'ai.aikm.workers.dev', '/guide'),
                     ('tests/muse-native.test.ts', 'sms.llvi.de', '/'),
                 )

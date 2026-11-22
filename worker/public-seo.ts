@@ -93,6 +93,26 @@ function relatedHelpArticles(article: PublicArticle) {
   if (!links.length) return ''
   return `<aside><h2>相关问题</h2><ul>${links.map(item => `<li><a href="/help/${item.slug}">${escape(item.title)}</a></li>`).join('')}</ul></aside>`
 }
+function helpArticle(article: PublicArticle, productHref?: string) {
+  const sections = article.sections.map(section =>
+    `<section><h2>${escape(section.title)}</h2>${section.paragraphs.map(paragraph => `<p>${escape(paragraph)}</p>`).join('')}</section>`,
+  ).join('')
+  return `<article class="help-article" aria-labelledby="help-article-title">
+    <nav class="help-article-breadcrumb" aria-label="当前位置"><a href="/help/"><span aria-hidden="true">‹</span> 帮助中心</a></nav>
+    <header>
+      <h1 id="help-article-title">${escape(article.title)}</h1>
+      <p class="help-article-answer">${escape(article.answer)}</p>
+    </header>
+    <div class="help-article-body">${sections}</div>
+    <nav class="help-article-actions" aria-label="后续入口">
+      <a class="help-article-primary" href="/orders">查看或找回订单 <span aria-hidden="true">→</span></a>
+      ${productHref ? `<a href="${escape(productHref)}">查看商品与教程</a>` : ''}
+    </nav>
+    ${relatedHelpArticles(article)}
+    <p class="public-date">内容核对日期 <time datetime="${publicHelpUpdated}">${publicHelpUpdated}</time></p>
+  </article>`
+}
+
 function helpCenter(query: string) {
   const normalize = (text: string) => text.normalize('NFKC').toLowerCase()
   const terms = normalize(query).split(/[\s,，、。？！?!：:]+/).filter(Boolean)
@@ -135,8 +155,8 @@ function htmlResponse(request: Request, body: string, status = 200, index = true
   } })
   return secureResponse(request, response)
 }
-function document(title: string, description: string, canonical: string, body: string, brand: string, index: boolean) {
-  return `<!doctype html><html lang="zh-CN" data-public-document><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title><meta name="description" content="${escape(description)}"><meta name="robots" content="${index ? 'index, follow' : 'noindex, nofollow'}"><link rel="canonical" href="${escape(canonical)}"><link rel="icon" href="/brands/shop.svg"><link rel="stylesheet" href="/help-center-v2.css"></head><body><header class="public-document-header"><a class="public-store-back" href="/"><span aria-hidden="true">‹</span>返回商店</a><nav aria-label="页面导航"><a href="/orders">我的订单</a></nav></header><main class="public-document">${body}</main>${brand ? `<footer class="public-document-footer">${escape(brand)} · 独立服务商</footer>` : ''}</body></html>`
+function document(title: string, description: string, canonical: string, body: string, brand: string, index: boolean, articleLayout: boolean) {
+  return `<!doctype html><html lang="zh-CN" data-public-document><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title><meta name="description" content="${escape(description)}"><meta name="robots" content="${index ? 'index, follow' : 'noindex, nofollow'}"><link rel="canonical" href="${escape(canonical)}"><link rel="icon" href="/brands/shop.svg"><link rel="stylesheet" href="/help-center-v2.css">${articleLayout ? '<link rel="stylesheet" href="/help-article-v1.css">' : ''}</head><body><header class="public-document-header"><a class="public-store-back" href="/"><span aria-hidden="true">‹</span>返回商店</a><nav aria-label="页面导航"><a href="/orders">我的订单</a></nav></header><main class="public-document">${body}</main>${brand ? `<footer class="public-document-footer">${escape(brand)} · 独立服务商</footer>` : ''}</body></html>`
 }
 function notFound(request: Request) {
   return htmlResponse(request, '<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="robots" content="noindex, nofollow"><title>页面不存在</title></head><body><main><h1>页面不存在</h1><p>商品可能已下架，或链接有误。</p><a href="/">返回商店</a> <a href="/orders">查询已有订单</a></main></body></html>', 404, false)
@@ -163,9 +183,10 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
     if (path !== canonicalPath) return secureResponse(request, new Response(null, { status: 308, headers: { Location: canonicalPath + url.search, 'Cache-Control': 'no-store' } }))
     const query = article ? '' : (url.searchParams.get('q') ?? '').trim().slice(0, 120)
     const index = !query
-    const body = article ? `<nav aria-label="当前位置"><a href="/help/">帮助中心</a></nav><h1>${escape(article.title)}</h1><p class="public-answer">${escape(article.answer)}</p><p class="public-date">内容核对日期：<time datetime="${publicHelpUpdated}">${publicHelpUpdated}</time> · ${escape(brand || '本站')} 服务说明</p>${article.sections.map(s => `<section><h2>${escape(s.title)}</h2>${s.paragraphs.map(p => `<p>${escape(p)}</p>`).join('')}</section>`).join('')}${article.related && products.some(p => p.path === article.related) ? `<p><a href="${article.related}">查看对应商品与现有教程</a></p>` : ''}<p><a href="/orders">查看或找回订单</a></p>${relatedHelpArticles(article)}` : helpCenter(query)
+    const productHref = products.find(product => product.path === article?.related)?.path
+    const body = article ? helpArticle(article, productHref) : helpCenter(query)
     const title = article?.title ?? '帮助中心'
-    return htmlResponse(request, document(brand ? title + ' · ' + brand : title, article?.answer ?? '商品选择、付款后操作、订单找回及售后说明。', origin + canonicalPath, body, brand, index), 200, index)
+    return htmlResponse(request, document(brand ? title + ' · ' + brand : title, article?.answer ?? '商品选择、付款后操作、订单找回及售后说明。', origin + canonicalPath, body, brand, index, Boolean(article)), 200, index)
   }
   const { catalog, fetchedAt, fresh } = await publicCatalog(env, origin)
   const branding = catalog.platformBranding!, products = publicProducts(catalog)

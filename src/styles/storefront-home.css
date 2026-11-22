@@ -151,3 +151,5 @@
 @media (hover:hover) { .store-product:hover .store-sms-art { transform:translateY(-3px) scale(1.04); } }
 .store-product:focus-within .store-sms-art { transform:translateY(-3px) scale(1.04); }
 @media (prefers-reduced-motion:reduce) { .store-sms-code span,.store-sms-card { animation:none; } .store-sms-art { transition:none; } .store-product:hover .store-sms-art,.store-product:focus-within .store-sms-art { transform:none; } }
+
+.codex-sms-redeem-link { color:var(--primary); text-decoration:underline; text-underline-offset:3px; overflow-wrap:anywhere; }

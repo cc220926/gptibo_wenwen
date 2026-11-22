@@ -6,10 +6,12 @@ import { deliveryMailReady } from '../email-delivery.ts'
 import { servicePaymentConfigured } from '../payments/providers.ts'
 import { emailPayload, mailBrand, sendFrozenEmail } from '../email.ts'
 import { isServicePlan, type DeliveryKind, type ServiceTask } from '../../shared/fulfillment.ts'
+import { CODEX_SMS_REDEEM_URL, updateCodexSmsRedeemAddress } from '../../shared/codex-sms-redemption.ts'
 import { seal, unseal, vaultReady } from './vault.ts'
 
 export type Task = { order_id: string; kind: DeliveryKind; state: string; product_id: string; product_name: string; instructions: string; stock_id: string | null; encrypted_value: string | null; expires_at: number; delivered_at: number | null; mail_state: string; encrypted_mail: string | null; mail_first_attempt_at: number | null; mail_next_attempt_at: number; lease_token: string | null; lease_until: number }
 export const taskFor = (env: Env, id: string) => env.INTEREST_DB.prepare('SELECT * FROM fulfillment_tasks WHERE order_id=?').bind(id).first<Task>()
+const isCodexSmsDelivery = (productId: string, supplierCode?: string) => productId === 'codex-sms' || supplyKind(supplierCode ?? null) === 'codex-sms'
 const eligible = "mode='live' AND is_test=0 AND payment_status='paid' AND refund_hold=0 AND refunded_cents=0 AND redemption_blocked=0"
 // A completed, partly refunded delivery remains the buyer's property. New
 // dispatches still require zero refunds, but its pending notice may be sent.
@@ -117,12 +119,11 @@ export async function serviceOrderSummary(env: Env, order: Order, reveal = true)
   const serviceDelivery: ServiceTask = { ...(supplier ? { provider: 'muse' as const, supplierState: supplier.state } : {}), kind: task.kind, state: task.state, productId: task.product_id, productName: task.product_name, expiresAt: task.expires_at, mailState: task.mail_state }
   const visible = reveal && task.state === 'delivered' && order.mode === 'live' && !order.is_test && order.payment_status === 'paid' && !order.refund_hold && order.refunded_cents < order.price_cents && !order.redemption_blocked
   const value = visible && task.encrypted_value ? await unseal(env, task.encrypted_value, task.stock_id ? 'stock:' + task.stock_id : 'task:' + order.id) : undefined
-  return { serviceDelivery, manualFulfillment: true, delivery: { kind: 'cdk' as const, automatic: task.kind === 'stock' || Boolean(supplier), status: task.mail_state === 'sent' ? 'sent' as const : task.mail_state === 'sending' ? 'sending' as const : 'waiting' as const, sentAt: null, ...(visible ? { value, instructions: task.instructions } : {}) } }
+  const redemptionUrl = value && isCodexSmsDelivery(task.product_id, supplier?.product_code) ? CODEX_SMS_REDEEM_URL : undefined
+  return { serviceDelivery, manualFulfillment: true, delivery: { kind: 'cdk' as const, automatic: task.kind === 'stock' || Boolean(supplier), status: task.mail_state === 'sent' ? 'sent' as const : task.mail_state === 'sending' ? 'sending' as const : 'waiting' as const, sentAt: null, ...(visible ? { value, instructions: task.instructions, redemptionUrl } : {}) } }
 }
 
 const escape = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!)
-const codexSmsMailRedeemUrl = 'https://ai.aikm.workers.dev/'
-const legacySmsRedeemAddress = /(?<![\w@./-])(?:https?:\/\/)?sms\.llvi\.de\/?(?![\w./:?#-])/gi
 /** Notification failure never reallocates inventory or undoes a visible delivery. */
 export async function sendServiceMail(env: Env, id: string) {
   let task = await taskFor(env, id)
@@ -138,12 +139,12 @@ export async function sendServiceMail(env: Env, id: string) {
     const order = await getOrder(env, id)
     if (!task.encrypted_mail) {
       const value = await unseal(env, task.encrypted_value!, task.stock_id ? 'stock:' + task.stock_id : 'task:' + id), brand = mailBrand(env)
-      const codexSms = task.product_id === 'codex-sms' || supplyKind((await musePurchase(env, id))?.product_code ?? null) === 'codex-sms'
+      const codexSms = isCodexSmsDelivery(task.product_id, (await musePurchase(env, id))?.product_code)
       const delivery = `${value}\n\n${task.instructions}`
-      const introduction = `${brand.name} · ${task.product_name} · ${order.plan_name}\n订单号：${id}\n\n交付内容\n${codexSms ? delivery.replace(legacySmsRedeemAddress, codexSmsMailRedeemUrl) : delivery}\n\n`
+      const introduction = `${brand.name} · ${task.product_name} · ${order.plan_name}\n订单号：${id}\n\n交付内容\n${codexSms ? updateCodexSmsRedeemAddress(delivery) : delivery}\n\n`
       const footer = `请妥善保管。已交付不代表已激活或兑换。\n订单查询：${brand.origin}/orders`
-      const redeemText = codexSms ? `接码兑换：${codexSmsMailRedeemUrl}\n\n` : ''
-      const redeemLink = codexSms ? `接码兑换：<a href="${codexSmsMailRedeemUrl}">${codexSmsMailRedeemUrl}</a>\n\n` : ''
+      const redeemText = codexSms ? `接码兑换：${CODEX_SMS_REDEEM_URL}\n\n` : ''
+      const redeemLink = codexSms ? `接码兑换：<a href="${CODEX_SMS_REDEEM_URL}">${CODEX_SMS_REDEEM_URL}</a>\n\n` : ''
       const text = introduction + redeemText + footer
       const htmlBody = escape(introduction) + redeemLink + escape(footer)
       const payload = emailPayload(env, order.customer_email!, { subject: `${brand.name} · ${task.product_name}已交付`, text, html: `<div style="font-family:system-ui;max-width:600px;margin:auto"><h1>商品已交付</h1><p>${escape(task.product_name)} · ${escape(order.plan_name)}</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${htmlBody}</pre></div>` })

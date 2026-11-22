@@ -106,6 +106,7 @@ test('confirmed payment buys once, encrypts original delivery, records actual co
   const result = await s.read(o.id)
   assert.equal(result.status, 'success'); assert.equal(result.delivery.value, content)
   assert.equal(result.serviceDelivery.provider, 'muse'); assert.equal(result.delivery.automatic, true)
+  assert.equal(result.delivery.redemptionUrl, undefined)
   assert.equal(s.posted, 1); assert.equal(s.assigned, 1)
   assert.equal(s.db.prepare('SELECT cost_cents FROM accounting_candidates WHERE order_id=?').get(o.id)!.cost_cents, 800)
   assert.doesNotMatch(JSON.stringify(s.db.prepare('SELECT * FROM fulfillment_tasks').all()), /PRIVATE-PASSWORD/)
@@ -363,6 +364,7 @@ test('Codex SMS delivery mail uses the new redemption site with or without a leg
       const s = await setup(t, 'zpay', { productCode: 'codex-sms-once', deliveryContent, instructions })
       s.env.GPTIBO_SUPPLY_ENABLED = 'codex-sms-once'
       const order = await s.order()
+      assert.equal((await s.read(order.id)).delivery.redemptionUrl, undefined)
       await s.pay(order.id)
       await sendServiceMail(s.env, order.id)
       assert.equal(s.posted, 1)
@@ -379,6 +381,7 @@ test('Codex SMS delivery mail uses the new redemption site with or without a leg
       const delivered = await s.read(order.id)
       assert.equal(delivered.delivery.value, deliveryContent)
       assert.equal(delivered.delivery.instructions, instructions)
+      assert.equal(delivered.delivery.redemptionUrl, 'https://ai.aikm.workers.dev/')
     })
   }
 })
