@@ -12,7 +12,7 @@ import '@/styles/session-precheck-preview.css'
 
 const cases: { id: string; label: string; note: string; state: SessionPrecheck['state']; code: string }[] = [
   { id: 'saved-retry', label: '使用原资料重试', note: '订阅未到期，保留原订单', state: 'wait', code: 'web_wait_expiry' },
-  { id: 'saved-opt-in', label: '选择保存资料', note: '首次提交时可勾选加密保存', state: 'eligible', code: 'web_wait_expiry' },
+  { id: 'saved-opt-in', label: '选择保存资料', note: '默认勾选，可取消加密保存', state: 'eligible', code: 'web_wait_expiry' },
   { id: 'saved-unknown', label: '核对原提交', note: '结果未确认，只核对同一笔提交', state: 'unknown', code: 'check_unavailable' },
   { id: 'saved-expired', label: '保存资料已失效', note: '仍可提交新的 Session', state: 'expired', code: 'locally_expired' },
   { id: 'replacement-failed', label: '重新提交 Session', note: '失败后重新粘贴资料', state: 'wait', code: 'web_wait_expiry' },

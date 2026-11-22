@@ -25,7 +25,7 @@ type Props = { order: ServerOrder; open: boolean; onUpdated?: () => void; onOrde
 export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders, error, refreshTarget, refreshDisabled, transport = api, initialSession = '' }: Props) {
   const [session, setSession] = useState(initialSession)
   const [confirmed, setConfirmed] = useState(false)
-  const [retainCredential, setRetainCredential] = useState(false)
+  const [retainCredential, setRetainCredential] = useState(true)
   const [showReplacement, setShowReplacement] = useState(false)
   const [touched, setTouched] = useState(false)
   const [busy, setBusy] = useState<'' | 'query' | 'check' | 'submit' | 'retry-saved'>('')
@@ -117,7 +117,7 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
             action, key, sourceAttemptId: saved.attemptId, customerConfirmedEmail: true,
           })
           savedAttemptKey.current = null
-          setSession(''); setConfirmed(false); setRetainCredential(false); setShowReplacement(false)
+          setSession(''); setConfirmed(false); setShowReplacement(false)
           callbacks.current.onOrderUpdated?.(result.order)
         } else if (action === 'submit') {
           if (['rejected', 'failed', 'cancelled'].includes(info.rechargeStatus ?? '')) attemptKey.current = undefined
@@ -137,7 +137,7 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
               return
             } finally { if (checkAbort.current === controller) checkAbort.current = null }
           }
-          setBusy('submit'); setSession(''); setConfirmed(false); setRetainCredential(false)
+          setBusy('submit'); setSession(''); setConfirmed(false)
           const submittedAt = performance.now()
           const result = await transport<{ order: ServerOrder }>(`/api/orders/${order.id}/fulfillment`, { action: 'submit', key: attemptKey.current, customerConfirmedEmail: true, credential, precheckReceipt, retainCredential: retentionAvailable && retainCredential })
           // Dispatch immediately; only the visual handoff has a brief minimum dwell.
