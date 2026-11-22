@@ -1,15 +1,53 @@
 # SEO production release
 
-**Current status: the merged homepage and first-paint fix was published on
-2026-11-21 at 16:30:32 UTC (2026-11-22 00:30:32 Asia/Shanghai).**
-Active version: `15a92bbc-5a69-46c3-9ced-e2c894bf5933`.
-Current compatible rollback: `5e5085e6-4036-40b1-9088-d5a13e122ba2`, retaining
-three asset generations. See the current release record below.
-The records under “Previous release procedure and history” are historical.
-The earlier `c955856c` rollback
-does not contain the merged homepage assets and must not replace the new target.
+**当前正式版本：客户反馈与选购帮助修复，2026-11-22 10:04:56 Asia/Shanghai 发布。**
 
-## 首页与首屏修复正式发布记录
+- 运行源码：`abe82acc29d406a695551956a4fa7b0d0bb71d5e`，分支 `codex/customer-feedback-preview`。
+- Worker：`6908b099-a207-4185-870a-a627b6fdf336`；deployment：`afc50df8-73f2-4dca-a79a-358858b1da07`。
+- 源码标签：`release-2026-11-22-feedback-help`。
+- 当前兼容回退：`d6170e1f-9d1e-4311-b284-672543f0fc0a`；deployment：`f403b02a-e307-4b63-b726-c18ac5fdc220`；2026-11-22 10:00:10 Asia/Shanghai 生效。
+- 回退源码：`31975c9be06570705d84c915436c24f34f495319`；标签：`release-2026-11-22-feedback-rollback`。
+
+下方旧首页和 SEO 发布记录为历史。旧回退 `5e5085e6`、`c955856c` 不含本轮反馈图片及脚本，不能作为本次兼容回退目标。
+
+## 客户反馈与选购帮助正式发布记录
+
+用户明确要求“上线”。本轮将七段真实微信沟通记录、Apple 登录和 Session 帮助、短窗口滚动及报错搜索修复发布到主站。首页仍只显示两张反馈卡，点击“查看全部反馈 (7)”选择完整记录；保留头像，续费截图中 130 元金额遮挡。商品详情、下单、支付和履约处理代码不变。
+
+### 配置与回退保护
+
+先发布兼容回退版本，再发布新版；每个包 58 个文件，均包含此前所有静态资源和新反馈资源。116 个文件逐一验证字节及 SHA256；两包只有 `index.html` 使用各自版本内容，所有同名资源均一致。新版和兼容版在生产域名各核对 55 个公开静态文件，含全部七张反馈 PNG。发布前已打开的旧页面跨两次部署后仍能进入原订单页。
+
+最终云端审计于 02:11:06 UTC 确认 57 个绑定、27 项业务变量、23 个密钥绑定名、D1、每分钟 Cron、域名、四项限流、Worker 优先入口和安全头保持原值。部署使用 `--keep-vars`；未读取云端密钥值，验证的是密钥绑定名及既有保留机制。私有生产配置文件未修改，SHA256 仍为 `f2aba589e36de3ed4bd68b6c1cc51c147a4e55a2c9d0225a7c7e34f57e3f03fc`。未执行数据库迁移、数据重置或支付/供应商配置变更。
+
+本机归档位于主检出目录忽略路径 `artifacts/releases/2026-11-22-feedback-abe82ac/`，含精确源码快照、双资源包、完整清单、配置和验收证据。若确认本版本引入下单/履约错误、资源缺失、业务配置漂移或新增运行异常，应立即回退；执行前必须再次确认线上仍为本轮候选版本，不能覆盖之后的其他发布。回退不运行迁移、不还原数据库：
+
+```sh
+WRANGLER_WRITE_LOGS=false node_modules/.bin/wrangler rollback d6170e1f-9d1e-4311-b284-672543f0fc0a \
+  --config artifacts/releases/2026-11-22-feedback-abe82ac/rollback-only.json \
+  --yes --message 'Restore compatible homepage after confirmed feedback release regression'
+```
+
+### 验证与实际观察
+
+- 配置中的真实 Worker 入口回归 737/737；生产业务开关下的隔离协议、共享数据库和回退演练 3/3。供应商及支付服务采用隔离模拟，不访问真实外部履约接口。首次演练漏传 fixture 文件导致设置错误，已保留日志，补齐配置后 3/3 通过。
+- 812 个受保护文件及交易相关 AST 与基线一致，构建、源码扫描和差异检查通过。公开源码扫描 861 路径、0 发现；此前 lint 仅原有五条警告。
+- 兼容版和候选版各 20 项 HTTP 检查通过：目录价格和业务开关、首屏与入口哈希、四类商品页、买家初始化、订单与找回配置、空下单请求返回 400 且没有创建订单。
+- 生产浏览器验证桌面和 390×844 手机布局；七条反馈都能选择并加载，仅挂载一张大图，金额遮挡有效。十项帮助可展开/收起，“Session 已失效”能找到重新登录后在原订单重试的方法。390×350 短窗口内滚动和原订单跳转正常，关闭后没有残留弹窗或滚动锁。此为浏览器视口模拟，不等同真机系统键盘验证。
+- ChatGPT Pro 10×、Codex 500 点、Plus 成品号表单分别显示 ¥1350、¥199、¥85，空邮箱不能继续付款。未填写真实邮箱、提交付款、发送验证码或账号凭据，也未操作 CAPTCHA。
+- 02:05:29.493、02:10:29.493 UTC 两个对账周期均 `ok`、异常 0、队列错误 0。实际 Cron 每分钟触发，按 `worker/index.ts` 中 `Math.floor(scheduledTime / 60000) % 5 === 0` 判定五分钟对账，而不是匹配 Cron 字符串。整个候选有界观察共 213 个事件、7 次调度，HTTP 为 189×200、16×304、1×预期空单 400，没有 5xx、运行异常、资源超限、队列失败或断流。观察结束后主动关闭监控，退出码 0。
+- 最终聚合窗口 02:04:56.795—02:11:02.065 UTC：无新订单、支付回执、充值提交或验签回调；出现一次 `payment-closed → cancelled` 历史订单事件，未见与候选关联的新业务异常。原有 1 笔等待 Session 的已付订单、22 条充值记录均不变。通知与验证积压、租约、资金保留、采购和交付队列均为 0；已付款回执与订单不一致和金额不匹配均为 0。
+- 独立复核源码与资源包、线上配置、HTTP、聚合记录以及全部六张生产截图，未发现新增阻断项，未触发回退。
+
+### 证据边界
+
+没有新的真实付款/履约样本，不能宣称真实支付回调、供应商和邮件已完成端到端联调。浏览器有 8 条来自 Cloudflare Turnstile iframe 的隐藏诊断日志，未见主站来源脚本错误；未完成挑战，不据此宣称 CAPTCHA 验证通过或这些第三方日志绝对无害。此前独立 Go 后端 CI 的基线失败仍不在本次 Workers 发布范围，本轮未重跑或修复它。
+
+早期 `shortHelp` 与 `gallery` 记录分别处于视口调整和图片加载过渡；最终验收使用 `shortHelpStable` 与 `galleryFinal`。资产审计初次将两份 LICENSE 和一份 README 错按字体/图片 MIME 校验，失败证据已保留；仅对三个精确文本路径修正规则，200 状态、字节和 SHA 校验未放宽，独立复核后两包各 55 项全部通过。
+
+证据索引为 `evidence/acceptance-matrix.json`、`final-active.json`、`http-candidate.json`、`candidate-remote-assets.json`、`browser-production-checks.json`、`final.json`、`comparison-before-final.json`、`tail-summary.json`、`resource-manifest.json` 和 `screenshots/`，均保存在本机忽略归档，不提交私有配置、凭据、客户数据、构建输出或临时验收文件。本轮是有界上线观察，不建立持续后台监控。
+
+## 此前首页与首屏修复发布历史
 
 2026-11-22，用户明确要求“发布”。已发布首页改版及 SEO 首屏修复，并完成两个五分钟对账周期的观察。未发现新增回退触发项，当前保持新版。此前“暂不上线”的预览记录为历史阶段。
 
