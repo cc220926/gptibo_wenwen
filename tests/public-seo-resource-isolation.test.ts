@@ -36,6 +36,49 @@ test('all guides remain standalone without a catalog, limiter or database',async
  }
 })
 
+test('all four product guides link to the right product when opened cold without a catalog read', async t => {
+  const guides = [
+    ['recharge-or-account', '/product/chatgpt'],
+    ['codex-credits', '/product/codex-credits'],
+    ['renewal-before-expiry', '/product/chatgpt'],
+    ['apple-login', '/product/chatgpt'],
+  ]
+  for (const [slug, path] of guides) {
+    const s = await setup(); t.after(() => s.db.close())
+    let buyerLimits = 0
+    s.env.API_LIMITER.limit = async () => { buyerLimits++; return { success: false } }
+    const article = '/help/' + slug
+    const landing = await s.get(article)
+    assert.equal(landing.status, 200)
+    const html = await landing.text()
+    const link = html.match(/<a href="([^"]+)">查看商品与教程<\/a>/)?.[1]
+    assert.equal(link, path + '?from=help', slug)
+    assert.deepEqual(s.stats(), { reads: 0, limits: 0 })
+    const product = await s.get(link)
+    assert.equal(product.status, 200)
+    const productHtml = await product.text()
+    assert.ok(productHtml.includes(`rel="canonical" href="${origin + path}"`))
+    assert.match(productHtml, /id="storefront-public-catalog"/)
+    assert.match(await (await s.get(article)).text(), new RegExp(`href="${path}">查看商品与教程`))
+    assert.equal(s.stats().limits, 1)
+    assert.equal(buyerLimits, 0)
+  }
+})
+
+test('a cold guide remains readable and its product uses the storefront fallback when the catalog is denied', async t => {
+  const s = await setup(false); t.after(() => s.db.close())
+  const article = '/help/apple-login'
+  const html = await (await s.get(article)).text()
+  const link = html.match(/<a href="([^"]+)">查看商品与教程<\/a>/)?.[1]
+  assert.equal(link, '/product/chatgpt?from=help')
+  assert.deepEqual(s.stats(), { reads: 0, limits: 0 })
+  const product = await s.get(link)
+  assert.equal(product.status, 200)
+  assert.match(product.headers.get('X-Robots-Tag') ?? '', /noindex/)
+  assert.match(await product.text(), /data-public-help="true"/)
+  assert.deepEqual(s.stats(), { reads: 0, limits: 1 })
+})
+
 test('missing SEO binding and denied refreshes never borrow buyer API quota or start D1 work',async t=>{
  const s=await setup();t.after(()=>s.db.close());Reflect.deleteProperty(s.env,'SEO_CATALOG_LIMITER')
  let api=0;s.env.API_LIMITER={limit:async()=>{api++;return{success:true}}}

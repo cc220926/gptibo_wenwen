@@ -207,12 +207,16 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   if (isHelp) {
     const cached = cachedCatalog(env, origin)
     const brand = cached?.platformBranding?.name ?? ''
-    const products = cached ? publicProducts(cached) : []
     const canonicalPath = article ? '/help/' + article.slug : '/help/'
     if (path !== canonicalPath) return secureResponse(request, new Response(null, { status: 308, headers: { Location: canonicalPath + url.search, 'Cache-Control': 'no-store' } }))
     const query = article ? '' : (url.searchParams.get('q') ?? '').trim().slice(0, 120)
     const index = !query
-    const productHref = products.find(product => product.path === article?.related)?.path
+    // A direct article load must stay independent of the catalog. The product
+    // page checks visibility when the reader follows a link without a snapshot.
+    const related = article?.related
+    const productHref = related
+      ? cached ? publicProducts(cached).find(product => product.path === related)?.path : `${related}?from=help`
+      : undefined
     const body = article ? helpArticle(article, productHref) : helpCenter(query)
     const title = article?.title ?? '帮助中心'
     return htmlResponse(request, document(brand ? title + ' · ' + brand : title, article?.answer ?? '商品选择、付款后操作、订单找回及售后说明。', origin + canonicalPath, body, brand, index, Boolean(article)), 200, index)
@@ -221,7 +225,15 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   const branding = catalog.platformBranding!, products = publicProducts(catalog)
   const brand = branding.name || '商店'
   const product = products.find(p => p.path === normalized)
-  if (normalized.startsWith('/product/') && !product) return notFound(request)
+  if (normalized.startsWith('/product/') && !product) {
+    if (url.searchParams.get('from') === 'help' && publicArticles.some(item => item.related === normalized)) {
+      return secureResponse(request, new Response(null, {
+        status: 302,
+        headers: { Location: '/', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' },
+      }))
+    }
+    return notFound(request)
+  }
   const canonicalPath = normalized === '/index.html' ? '/' : normalized === '/help' ? '/help/' : normalized
   if (path !== canonicalPath) return secureResponse(request, new Response(null, { status: 308, headers: { Location: canonicalPath + url.search, 'Cache-Control': 'no-store' } }))
   if (path === '/sitemap.xml') {

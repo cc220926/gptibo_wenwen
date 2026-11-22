@@ -201,10 +201,19 @@ test('current price and paused state reach bootstrap; visibility changes invalid
   assert.ok(settings.hiddenProductIds)
   const saved = await worker.fetch(new Request(origin + '/api/admin/product-visibility', { method: 'POST', headers: { Origin: origin, Cookie: s.admin, 'Content-Type': 'application/json' }, body: JSON.stringify({ hiddenProductIds: ['chatgpt'], version: settings.version, note: '本地 SEO 验收下架测试' }) }), s.env)
   assert.equal(saved.status, 200, await saved.clone().text())
+  const coldGuide = await (await s.get('/help/recharge-or-account')).text()
+  const productLink = coldGuide.match(/<a href="([^"]+)">查看商品与教程<\/a>/)?.[1]
+  assert.ok(productLink)
   assert.ok(bootstrap(await (await s.get('/')).text()).hiddenProductIds.includes('chatgpt'))
   assert.equal((await s.get('/product/chatgpt')).status, 404)
   const sitemap = await (await s.get('/sitemap.xml')).text()
   assert.doesNotMatch(sitemap, /\/product\/chatgpt</)
+  const hiddenProductJump = await s.get(productLink + '&next=https://external.example.invalid')
+  assert.equal(hiddenProductJump.status, 302)
+  assert.equal(hiddenProductJump.headers.get('Location'), '/')
+  assert.equal(hiddenProductJump.headers.get('Cache-Control'), 'no-store')
+  assert.equal((await s.get('/product/nonexistent?from=help')).status, 404)
+  assert.doesNotMatch(await (await s.get('/help/recharge-or-account')).text(), /查看商品与教程/)
 })
 
 test('SEO errors do not prevent the legacy app and do not expose internal failures', async t => {
