@@ -26,8 +26,11 @@ test('both locales cover the same questions and feedback with stable destination
   assert.equal(new Set(zh.map(q => q.id)).size, zh.length)
   assert.deepEqual(homeFeedbackCopy('en').items.map(item => [item.id, item.image]), homeFeedbackCopy('zh-CN').items.map(item => [item.id, item.image]))
   assert.match(homeFeedbackCopy('en').languageNote, /Chinese/)
-  assert.match(homeFeedbackCopy('en').items[1].description, /had not purchased/)
-  assert.match(homeFeedbackCopy('en').items[1].context, /CNY 5/)
+  assert.match(homeFeedbackCopy('en').items[0].description, /interest in recommending/)
+  assert.doesNotMatch(homeFeedbackCopy('en').items[0].context, /redacted/)
+  assert.match(homeFeedbackCopy('en').items[1].description, /asked about renewing/)
+  assert.match(homeFeedbackCopy('en').items[1].context, /renewal inquiry/)
+  assert.match(homeFeedbackCopy('en').items[1].context, /amount is redacted/)
   assert.equal(searchHomeQuestions('en', '退款')[0].id, 'refund')
 })
 
@@ -56,15 +59,19 @@ test('Apple login questions are searchable and route account eligibility to supp
   assert.match(answer, /不保证.*所有账号/)
 })
 
-test('feedback separates activation confirmation from an unpurchased referral and keeps reward context', () => {
+test('feedback preserves service praise and renewal inquiry without implying completed referral or renewal orders', () => {
   const feedback = homeFeedbackCopy('zh-CN')
   assert.equal(feedback.items.length, 2)
-  const completed = feedback.items.find(item => item.id === 'subscription-confirmed')!
-  const referral = feedback.items.find(item => item.id === 'consultation-referral')!
-  assert.equal(completed.quote, '可以了可以了')
-  assert.match(referral.description, /尚未购买/)
-  assert.match(referral.context, /朋友下单.*返现.*5 元/)
-  assert.equal(completed.image, '/feedback/subscription-confirmed.png')
-  assert.equal(referral.image, '/feedback/consultation-referral.png')
-  assert.ok(feedback.items.every(item => !/星|好评率|400|退款成功|秒到/.test([item.title, item.description, item.context].join(' '))))
+  const service = feedback.items.find(item => item.id === 'service-feedback')!
+  const renewal = feedback.items.find(item => item.id === 'renewal-inquiry')!
+  assert.equal(service.quote, '你这个服务太棒了。')
+  assert.equal(renewal.quote, '哈喽我想续费一下！')
+  assert.match(service.description, /讲解操作.*认可服务.*推荐意向/)
+  assert.doesNotMatch(service.context, /遮挡/)
+  assert.match(renewal.description, /再次联系.*询问续费/)
+  assert.match(renewal.context, /续费咨询/)
+  assert.match(renewal.context, /转账金额已遮挡/)
+  assert.equal(service.image, '/feedback/service-feedback.png')
+  assert.equal(renewal.image, '/feedback/renewal-inquiry.png')
+  assert.ok(feedback.items.every(item => !/星|好评率|400|退款成功|秒到|已带来|已成交|续费成功|多次复购/.test([item.title, item.description, item.context].join(' '))))
 })

@@ -74,8 +74,8 @@ const helpCopy = {
 export function homeHelpCopy(locale: StorefrontLocale) { return helpCopy[locale] }
 
 
-// User-provided conversation excerpts. Context stays with each image so a
-// pre-purchase recommendation is never represented as completed fulfillment.
+// User-provided conversation excerpts. Service praise and renewal inquiries
+// are not represented as completed referral orders or repeat purchases.
 export type HomeFeedbackItem = {
   id: string; title: string; category: string; quote: string; description: string
   image: string; alt: string; context: string
@@ -90,18 +90,18 @@ const feedbackCopy: Record<StorefrontLocale, HomeFeedbackCopy> = {
     open: '查看聊天记录', close: '关闭图片', languageNote: '',
     items: [
       {
-        id: 'subscription-confirmed', title: '订阅开通确认', category: '开通反馈', quote: '可以了可以了',
-        description: '询问订阅状态后，用户确认已开通并表达感谢。',
-        image: '/feedback/subscription-confirmed.png',
-        alt: '微信聊天记录：客服询问订阅是否开通，用户回复“可以了可以了”“靠谱！”“感谢”。',
-        context: '',
+        id: 'service-feedback', title: '服务反馈', category: '服务反馈', quote: '你这个服务太棒了。',
+        description: '讲解操作后，用户认可服务，并表达推荐意向。',
+        image: '/feedback/service-feedback.png',
+        alt: '微信聊天记录：讲解操作后，用户说“你这个服务太棒了。”并表达推荐意向。',
+        context: '历史微信沟通记录。',
       },
       {
-        id: 'consultation-referral', title: '咨询后，推荐给朋友', category: '咨询后推荐', quote: '我就先把你推给我朋友',
-        description: '咨询后向朋友推荐，尚未购买；对话含转介绍返现说明。',
-        image: '/feedback/consultation-referral.png',
-        alt: '微信聊天记录：咨询者表示暂不需要充值并推荐朋友；商家随后提出朋友下单返现五元。',
-        context: '该次对话中，商家随后提出朋友下单返现 5 元，相关内容保留在截图中。',
+        id: 'renewal-inquiry', title: '续费咨询', category: '续费咨询', quote: '哈喽我想续费一下！',
+        description: '用户后来再次联系，询问续费。',
+        image: '/feedback/renewal-inquiry.png',
+        alt: '微信聊天记录：用户后来再次询问续费，原话为“哈喽我想续费一下！”；转账金额已遮挡。',
+        context: '历史沟通记录，展示后续的续费咨询；转账金额已遮挡。',
       },
     ],
   },
@@ -110,18 +110,18 @@ const feedbackCopy: Record<StorefrontLocale, HomeFeedbackCopy> = {
     open: 'View conversation', close: 'Close image', languageNote: 'The original screenshots and quotations are in Chinese.',
     items: [
       {
-        id: 'subscription-confirmed', title: 'Subscription confirmed', category: 'Activation feedback', quote: '可以了可以了',
-        description: 'After being asked about the subscription, the customer confirmed activation and thanked support.',
-        image: '/feedback/subscription-confirmed.png',
-        alt: 'WeChat conversation in Chinese: support asks whether the subscription is active; the customer confirms and says thank you.',
-        context: '',
+        id: 'service-feedback', title: 'Service feedback', category: 'Service feedback', quote: '你这个服务太棒了。',
+        description: 'After guidance on the steps, the customer praised the service and expressed interest in recommending it.',
+        image: '/feedback/service-feedback.png',
+        alt: 'WeChat conversation in Chinese: after guidance, the customer praises the service and expresses interest in recommending it.',
+        context: 'A past WeChat conversation.',
       },
       {
-        id: 'consultation-referral', title: 'A recommendation after asking', category: 'Pre-purchase recommendation', quote: '我就先把你推给我朋友',
-        description: 'The person had not purchased this top-up. The conversation includes a referral reward offer.',
-        image: '/feedback/consultation-referral.png',
-        alt: 'WeChat conversation in Chinese: a person does not need a top-up yet and refers a friend; the merchant then offers CNY 5 if the friend orders.',
-        context: 'In this conversation, the merchant then offered CNY 5 for a friend’s order. This context remains in the screenshot.',
+        id: 'renewal-inquiry', title: 'Renewal inquiry', category: 'Renewal inquiry', quote: '哈喽我想续费一下！',
+        description: 'The customer later got in touch again and asked about renewing.',
+        image: '/feedback/renewal-inquiry.png',
+        alt: 'WeChat conversation in Chinese: the customer later asks about renewing, saying “哈喽我想续费一下！”. The transfer amount is redacted.',
+        context: 'A past conversation showing a later renewal inquiry; the transfer amount is redacted.',
       },
     ],
   },

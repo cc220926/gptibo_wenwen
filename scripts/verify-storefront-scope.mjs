@@ -32,7 +32,7 @@ const allowed = new Set([
   'tests/home-guidance.test.ts', 'scripts/verify-homepage-scope.mjs', 'docs/homepage-guidance.md',
   'scripts/verify-storefront-scope.mjs', 'public/storefront-startup.css',
   'tests/storefront-first-paint.test.ts', 'docs/combined-storefront-preview.md',
-  'public/feedback/subscription-confirmed.png', 'public/feedback/consultation-referral.png',
+  'public/feedback/service-feedback.png', 'public/feedback/renewal-inquiry.png',
 ])
 const changed = [...new Set([
   ...git('diff', '--name-only', base).trim().split('\n'),
@@ -168,8 +168,8 @@ restoreScannerSnippet("    # XML sitemap namespace, not an outbound service inte
 restoreScannerSnippet('import hashlib\n')
 restoreScannerSnippet(`# Reviewed testimonial pixels; changed files must be reviewed again.
 REVIEWED_BINARY_ASSETS = {
-    'public/feedback/subscription-confirmed.png': '5fdbf3ea4a570410cad401bf0a0ff100df25bb2db805155f3d3050cadb37f470',
-    'public/feedback/consultation-referral.png': 'b06bf4018e7bf68ad667bd23c17fbd4d9d614a86c501043073838ac4a0a9d778',
+    'public/feedback/service-feedback.png': '2bfb81c197fb9831c07cc6fad0637c94b60f9f5a371c3bdec32f0608f1e15505',
+    'public/feedback/renewal-inquiry.png': '24ed5dbbfd311321edfabc5eea53c097c9345a8b3c298e040ce0e95045b1009e',
 }
 `)
 restoreScannerSnippet(`        if name in REVIEWED_BINARY_ASSETS:
