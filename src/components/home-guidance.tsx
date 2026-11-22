@@ -1,5 +1,5 @@
-import { lazy, Suspense, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { ArrowRight, Check, ChevronRight, CircleHelp, ClipboardList, Maximize2, MessageCircle, Play, Search, X } from 'lucide-react'
+import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { ArrowRight, Check, ChevronRight, CircleHelp, ClipboardList, Gift, Maximize2, MessageCircle, Play, Search, X } from 'lucide-react'
 import { useStorefrontI18n } from '@/lib/storefront-i18n'
 import type { CatalogPlan } from '@/lib/api'
 import { RechargeGuide } from './recharge-guide'
@@ -7,9 +7,7 @@ import { homeFeedbackCopy, homeGuideCopy, homeHelpCopy, searchHomeQuestions } fr
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog'
-const ReferralPreviewEntry = import.meta.env.MODE === 'referral-preview'
-  ? lazy(() => import('./referral-preview').then(module => ({ default: module.ReferralPreviewEntry })))
-  : null
+const showFriendRecommendation = import.meta.env.MODE === 'wechat-note-preview'
 
 function GuideScene() {
   const { locale } = useStorefrontI18n()
@@ -32,7 +30,7 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
   const helpCopy = homeHelpCopy(locale)
   const feedbackCopy = homeFeedbackCopy(locale)
   const id = useId()
-  const [tab, setTab] = useState(import.meta.env.MODE === 'referral-preview' && location.hash === '#feedback' ? 2 : 0)
+  const [tab, setTab] = useState(showFriendRecommendation && location.hash === '#feedback' ? 2 : 0)
   const [feedbackIndex, setFeedbackIndex] = useState<number | null>(null)
   const [demoOpen, setDemoOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
@@ -95,7 +93,11 @@ export function HomeGuidance({ offers, onOrders, onSupport }: { offers: CatalogP
       <div role="tabpanel" id={`${id}-panel-2`} aria-labelledby={`${id}-tab-2`} hidden={tab !== 2}>
         {tab === 2 && <div className="home-guide-feedback-panel">
           <div className="home-guide-copy"><span className="home-guide-topic-icon" aria-hidden="true"><MessageCircle size={24} strokeWidth={1.5} /></span><h3>{feedbackCopy.title}</h3><p>{feedbackCopy.intro}</p>{feedbackCopy.languageNote && <p>{feedbackCopy.languageNote}</p>}<Button variant="link" className="home-guide-link home-guide-feedback-more" aria-haspopup="dialog" onClick={event => { feedbackTrigger.current = event.currentTarget; setFeedbackIndex(0) }}>{feedbackCopy.more}<ArrowRight size={15} aria-hidden="true" /></Button>
-            {ReferralPreviewEntry && <Suspense fallback={null}><ReferralPreviewEntry /></Suspense>}
+            {showFriendRecommendation && <div className="home-guide-wechat-note">
+              <Gift size={16} aria-hidden="true" />
+              <p>{locale === 'en' ? 'Recommend us to a friend and ask them to add our support team on WeChat. Get ¥5 cashback after their order succeeds.' : '推荐朋友加客服微信，下单成功返现五元。'}</p>
+              <Button variant="link" className="home-guide-wechat-contact" onClick={onSupport}>{locale === 'en' ? 'Contact support' : '联系支持'}<ArrowRight size={13} aria-hidden="true" /></Button>
+            </div>}
           </div>
           <div className="home-guide-feedback-cards">
             {feedbackCopy.items.slice(0, 2).map((item, index) => <button type="button" className="home-guide-feedback-card" key={item.id} aria-label={`${feedbackCopy.open}：${item.title}`} aria-haspopup="dialog" onClick={event => { feedbackTrigger.current = event.currentTarget; setFeedbackIndex(index) }}>

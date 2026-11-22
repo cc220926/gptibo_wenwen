@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useState } from 'react'
 import { ArrowRight, CircleHelp, LoaderCircle, LockKeyhole, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -87,7 +87,7 @@ export function LiveRechargeProcessing({ progressStage, progressUpdatedAt, recha
   </div>
 }
 
-export function LiveRechargeSuccess({ credits = false, accountEmailMasked, finishedAt, onOrders, supportContacts, partnerName, children }: { credits?: boolean; accountEmailMasked?: string | null; finishedAt?: number | null; onOrders: () => void; supportContacts?: SupportContacts; partnerName?: string | null; children?: ReactNode }) {
+export function LiveRechargeSuccess({ credits = false, accountEmailMasked, finishedAt, onOrders, supportContacts, partnerName }: { credits?: boolean; accountEmailMasked?: string | null; finishedAt?: number | null; onOrders: () => void; supportContacts?: SupportContacts; partnerName?: string | null }) {
   const hasContacts = Boolean(partnerName && supportContacts && Object.values(supportContacts).some(value => value.trim()))
   return <div className={`result-body${hasContacts ? ' live-success-with-contacts' : ''}`}>
     <div className="live-success-layout">
@@ -99,6 +99,5 @@ export function LiveRechargeSuccess({ credits = false, accountEmailMasked, finis
     </div>
     {finishedAt && <div className="result-receipt"><span>完成时间</span><span>{new Date(finishedAt).toLocaleString('zh-CN')}</span></div>}
     <Button className="primary-action" onClick={onOrders}>查看我的订单 <ArrowRight size={16} /></Button>
-    {children}
   </div>
 }
