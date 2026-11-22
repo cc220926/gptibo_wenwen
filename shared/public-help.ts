@@ -1,7 +1,8 @@
 export const publicHelpCategories = [
   { id: 'buying', title: '选套餐' },
   { id: 'order', title: '查付款与订单' },
-  { id: 'activation', title: '连接账号与到账' },
+  { id: 'account', title: '账号与安全' },
+  { id: 'activation', title: '充值与到账' },
   { id: 'support', title: '申请售后' },
 ] as const
 
@@ -67,12 +68,57 @@ export const publicArticles: readonly PublicArticle[] = [
     ], related: '/product/chatgpt',
   },
   {
-    slug: 'session-expired', category: 'activation', title: 'Session 已过期或无权访问，怎么办？',
+    slug: 'account-credentials', category: 'account', title: '充值时，需要把账号密码发给客服吗？',
+    answer: '无需把 ChatGPT 密码或验证码发给客服。若所购套餐要求提交 Session，只在原订单的账号连接步骤提交。',
+    keywords: '账号安全 密码 验证码 token Access Token 凭据 隐私 如何获取 Session',
+    sections: [
+      { title: '在订单页查看获取说明', paragraphs: ['付款后打开原订单。如果页面要求连接账号，先确认当前登录的是要充值的 ChatGPT 账号，再按订单里「获取 Session 说明」操作。'] },
+      { title: '联系支持时提供订单号', paragraphs: ['遇到问题可以发订单号和报错文字。提交截图前遮住密码、Session、验证码和完整卡密。'] },
+    ],
+  },
+  {
+    slug: 'session-expired', category: 'account', title: 'Session 已过期或无权访问，怎么办？',
     answer: '在 chatgpt.com 退出登录，再登录同一个 ChatGPT 账号。重新获取完整 Session 后，回原订单提交。',
     keywords: '重新获取完整Session后重试 请重新获取完整Session后重试 session无效 凭据失效 连接账号 session expired access denied',
     sections: [
       { title: '先确认是要充值的账号', paragraphs: ['重新登录后核对账号。换了浏览器或登录方式时，通过账号设置确认是同一个 ChatGPT 账号。'] },
       { title: '回到原订单重试', paragraphs: ['按原订单里的获取说明操作。如果订单可以重新提交，就把新获取的完整 Session 填在账号连接步骤里。仍有问题时，给客服提供订单号和报错文字，Session 留在订单页内。'] },
+    ],
+  },
+  {
+    slug: 'save-session', category: 'account', title: '加密保存 Session 有什么用？可以取消吗？',
+    answer: '如果原订单提供加密保存选项，勾选后可在资料仍有效且订单允许时，用原资料重试同一笔订单。你可以在提交前取消勾选。',
+    keywords: '默认勾选 取消保存 不保存 保留资料 保存期限 留存 账号资料 数据安全',
+    sections: [
+      { title: '保存只用于这笔订单', paragraphs: ['页面出现「加密保存 Session」时，提交前可以自行选择。取消勾选后仍可继续提交；如果之后需要重试，再按订单提示提供资料。'] },
+      { title: '保存后资料也可能失效', paragraphs: ['原资料能否继续使用，以订单上显示的状态和按钮为准。如果页面提示资料不可用，请在原订单提交新的 Session。'] },
+    ],
+  },
+  {
+    slug: 'apple-login', category: 'account', title: '用 Apple 登录的 ChatGPT 账号可以充值吗？',
+    answer: '本站有通过 Apple 登录的账号充值案例。购买前，请联系客服确认你的账号和所选套餐是否适用。',
+    keywords: 'Apple ID 苹果登录 隐藏邮箱 Apple 账户',
+    sections: [
+      { title: '确认要充值的 ChatGPT 账号', paragraphs: ['用原来登录 ChatGPT 的方式，进入账户设置核对账号。使用了隐藏邮件地址时，ChatGPT 显示的邮箱可能和你平时使用的邮箱不同。'] },
+      { title: '核对要买的服务', paragraphs: ['这里的充值指 ChatGPT 订阅。确认套餐适用后，在原订单按提示连接已核对的 ChatGPT 账号。'] },
+    ], related: '/product/chatgpt',
+  },
+  {
+    slug: 'recharge-in-progress', category: 'activation', title: '订单显示充值中，还要等多久？',
+    answer: '打开原订单查看最新进度。不同套餐和处理状态的用时可能不同，以商品说明和订单状态为准。',
+    keywords: '到账时间 什么时候到账 刷新进度 等多久 转圈 提交待确认 超时',
+    sections: [
+      { title: '看订单上显示的进度', paragraphs: ['如果页面提示先连接账号，请按订单指引提交。已经提交、页面显示「正在充值」时，可以稍后回原订单查看。'] },
+      { title: '页面提示提交待确认', paragraphs: ['先点「刷新进度」，并按订单提示核对这一次提交。仍有疑问时，带订单号联系支持。'] },
+    ],
+  },
+  {
+    slug: 'confirm-recharge', category: 'activation', title: '怎么确认订阅或 Codex 点数已经到账？',
+    answer: '先在原订单确认显示「充值已完成」，再登录该订单对应的 ChatGPT 账号，查看订阅套餐或 Codex 点数。',
+    keywords: '怎么确认开通 到账确认 充值结果 查看订阅 查看点数 购买完成',
+    sections: [
+      { title: '先核对原订单', paragraphs: ['打开「我的订单」，对照商品名称和页面显示的账号线索，确认查看的是这次要核对的订单。付款确认后还可能需要连接账号。'] },
+      { title: '再到账户里确认', paragraphs: ['购买会员就查看 ChatGPT 的订阅套餐；购买点数就查看对应账号里的 Codex 用量或点数。若订单已完成但权益显示不一致，从原订单联系支持。'] },
     ],
   },
   {
@@ -82,6 +128,15 @@ export const publicArticles: readonly PublicArticle[] = [
     sections: [
       { title: '核对账号和订阅', paragraphs: ['在原订单确认开通结果，再到 ChatGPT 的账户设置核对账号及订阅。如果设备上登录过多个账号，切换回这次充值的那个。刷新页面或重开 App 后再查看。'] },
       { title: '仍然显示免费版', paragraphs: ['从原订单联系支持，附上订单号和订阅页面截图，遮住账号及其他个人信息。客服核对期间，保留原订单即可。'] },
+    ],
+  },
+  {
+    slug: 'retry-original-order', category: 'activation', title: '充值未完成，可以在原订单重试吗？',
+    answer: '已付款的订单如果提供重试入口，可以在同一笔订单继续，无需再次付款。先看页面提示的原因和可用按钮。',
+    keywords: '充值失败 充值未完成 原订单 原资料 重试 换 Session 再付一次 补发',
+    sections: [
+      { title: '仍可使用上次的资料', paragraphs: ['如果显示「使用原资料重试」，核对账号后再操作。若显示「核对原提交」，就按提示查询这一次提交的结果。'] },
+      { title: '订单提示换资料或联系支持', paragraphs: ['如果原资料已失效且页面允许重新提交，按指引提供新的 Session。如果订单处于售后处理、退款或关闭状态，按页面提示查看进度或带订单号联系支持。'] },
     ],
   },
 ]
