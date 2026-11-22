@@ -1,0 +1,19 @@
+.referral-preview-entry { margin-top:9px; }
+.referral-preview-pill { display:inline-flex; align-items:center; gap:8px; min-height:38px; max-width:100%; padding:5px 11px 5px 6px; border:1px solid #a6cdbc; border-radius:999px; background:#e8f5ed; color:#16523d; font-size:13px; cursor:pointer; text-align:left; }
+.referral-preview-pill:hover { background:#dcf0e4; }
+.referral-preview-pill:focus-visible { outline:2px solid var(--ring); outline-offset:3px; }
+.referral-preview-pill strong { font-weight:700; white-space:nowrap; }
+.referral-preview-pill>svg { flex-shrink:0; }
+.referral-preview-gift { display:grid; place-items:center; width:25px; height:25px; flex-shrink:0; border-radius:50%; background:#cce9d9; }
+.dark .referral-preview-pill { border-color:#3a6955; background:#19372c; color:#c1ebd5; }
+.dark .referral-preview-pill:hover { background:#214638; }
+.dark .referral-preview-gift { background:#2b5241; }
+.referral-preview-text-link { display:inline-flex; align-items:center; gap:7px; color:var(--primary); font-size:13px; width:fit-content; }
+.referral-preview-text-link:hover { text-decoration:underline; }
+.referral-preview-order { max-width:560px; padding:44px 0; }
+.referral-preview-order-card { margin-top:20px; border:1px solid var(--border); border-radius:20px; background:var(--card); box-shadow:0 20px 60px -42px #183f56a0; }
+.referral-preview-order-card>header { display:flex; justify-content:space-between; gap:12px; padding:16px 22px; border-bottom:1px solid var(--border); font-size:13px; }
+.referral-preview-order-card>header>span:last-child,.referral-preview-order-action>small { color:var(--muted-foreground); }
+.referral-preview-order-card .result-body { padding:26px 22px; }
+.referral-preview-order-action { display:grid; justify-items:center; gap:8px; margin-top:16px; padding-top:16px; border-top:1px solid var(--border); font-size:13px; }
+.referral-preview-order-action>small { font-size:11px; }
