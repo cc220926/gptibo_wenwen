@@ -121,12 +121,6 @@
 .home-guide-feedback-panel { display:grid; grid-template-columns:minmax(0,.58fr) minmax(0,1.42fr); align-items:center; gap:24px; min-height:220px; }
 .home-guide-feedback-panel .home-guide-copy p { margin-top:10px; }
 .home-guide-feedback-more { max-width:100%; white-space:normal; text-align:left; }
-.home-guide-wechat-note { display:grid; grid-template-columns:auto minmax(0,1fr); gap:2px 8px; align-items:start; margin-top:10px; padding:10px 11px; border:1px solid #b9d9cb; border-radius:12px; background:#edf7f0; color:#205740; }
-.home-guide-wechat-note>svg { margin-top:2px; }
-.home-guide-feedback-panel .home-guide-wechat-note p { margin:0; color:inherit; font-size:12px; line-height:1.6; }
-.home-guide-wechat-contact { justify-self:start; grid-column:2; min-height:32px; height:auto; padding:0; color:inherit; font-size:12px; }
-.dark .home-guide-wechat-note { border-color:#3a6955; background:#19372c; color:#c1ebd5; }
-
 .home-guide-feedback-cards { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; min-width:0; }
 .home-guide-feedback-card { display:grid; grid-template-columns:90px minmax(0,1fr); gap:13px; min-width:0; padding:14px; text-align:left; border:1px solid var(--border); border-radius:15px; background:var(--card); cursor:pointer; transition:border-color .15s,box-shadow .15s; }
 .home-guide-feedback-card:focus-visible { outline:2px solid var(--ring); outline-offset:3px; }

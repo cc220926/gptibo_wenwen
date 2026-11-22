@@ -4,7 +4,7 @@ import { isGptAccountOffer, isMuseOffer } from '../shared/service-presentation'
 import type { CatalogPlan } from '@/lib/api'
 import { useStorefrontI18n } from '@/lib/storefront-i18n'
 import { useEffect, useState } from 'react'
-import { ArrowRight, Check, ChevronRight, Clock3, CreditCard, FileKey2, LifeBuoy, Monitor, Moon, Search, ShieldCheck, Sparkles, Sun, X } from 'lucide-react'
+import { ArrowRight, Check, ChevronRight, Clock3, CreditCard, FileKey2, Gift, LifeBuoy, Monitor, Moon, Search, ShieldCheck, Sparkles, Sun, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
@@ -169,7 +169,13 @@ function App() {
       {page === 'store' ? <><section className="store-intro page-width reveal-in">
         <div><h1>{branding?.headline || t('找到适合你的服务。')}</h1><p>{description}</p></div>
         <div className="store-intro-support"><Button variant="ghost" onClick={() => navigate('orders')}><Clock3 size={15} />{t('继续我的订单')}<ArrowRight size={14} /></Button></div>
-        </section><HomeGuidance offers={store.catalog} onOrders={() => navigate('orders')} onSupport={openSupport} /><ProductCatalog catalogReady={store.catalogReady} error={store.error} hiddenProductIds={store.hiddenProductIds} productOrder={store.productOrder} offers={store.catalog} onHelp={help} onOrders={() => navigate('orders')} onNavigate={navigate} /></> : serviceProductId ? <ServiceProductPage key={serviceProductId} productId={serviceProductId} offers={store.catalog} ready={store.catalogReady} busy={store.busy} checkoutEnabled={store.checkoutEnabled} onBuy={beginServicePurchase} onNavigate={navigate} onSupport={openSupport} /> : isDetail && productHidden ? <section className="empty-orders page-width"><h1>{t('该商品已下架')}</h1><p>{t('商店暂不销售此商品，已有订单可在「我的订单」中继续处理。')}</p><Button onClick={() => navigate('store')}>{t('返回商店')}</Button></section> : isDetail ? <>
+        </section>
+        {import.meta.env.MODE === 'wechat-note-preview' && <aside className="store-wechat-note page-width">
+          <span className="store-wechat-note-icon"><Gift size={19} aria-hidden="true" /></span>
+          <p>{locale === 'en' ? 'Recommend us to a friend and ask them to add support on WeChat. Get ¥5 after their order succeeds.' : <>推荐朋友加客服微信，<span className="store-wechat-note-reward">下单成功返现五元。</span></>}</p>
+          <Button variant="link" className="store-wechat-note-contact" onClick={openSupport}>{t('联系支持')}<ArrowRight size={14} aria-hidden="true" /></Button>
+        </aside>}
+        <HomeGuidance offers={store.catalog} onOrders={() => navigate('orders')} onSupport={openSupport} /><ProductCatalog catalogReady={store.catalogReady} error={store.error} hiddenProductIds={store.hiddenProductIds} productOrder={store.productOrder} offers={store.catalog} onHelp={help} onOrders={() => navigate('orders')} onNavigate={navigate} /></> : serviceProductId ? <ServiceProductPage key={serviceProductId} productId={serviceProductId} offers={store.catalog} ready={store.catalogReady} busy={store.busy} checkoutEnabled={store.checkoutEnabled} onBuy={beginServicePurchase} onNavigate={navigate} onSupport={openSupport} /> : isDetail && productHidden ? <section className="empty-orders page-width"><h1>{t('该商品已下架')}</h1><p>{t('商店暂不销售此商品，已有订单可在「我的订单」中继续处理。')}</p><Button onClick={() => navigate('store')}>{t('返回商店')}</Button></section> : isDetail ? <>
         <section className="detail-intro page-width reveal-in"><nav className="product-breadcrumb" aria-label="当前位置"><a href={storefrontHref('store')} onClick={event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigate('store') }}>全部商品</a><ChevronRight size={13} /><span aria-current="page">{product.name}</span></nav><h1>{product.name}</h1><p>{product.tagline}</p></section>
         {product.id === 'chatgpt' && showChatGPTActivity && <CustomerHistory key={partnerSlug} partner={partnerSlug} />}
         <PurchaseWorkspace marketingMetric={product.id === 'chatgpt' ? marketingMetric : null} presenceOthers={product.id === 'chatgpt' ? presenceOthers : null} product={product} plans={plans} plan={plan} selected={selected} store={store} setSelected={setSelected} beginPurchase={beginPurchase} help={help} onGuide={() => document.getElementById('how-it-works')?.scrollIntoView({ behavior: 'auto' })} />
