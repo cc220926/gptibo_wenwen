@@ -70,7 +70,7 @@ npm run security:scan
 
 迁移 `0058_recharge_saved_credentials.sql` 新增专用加密表和删除触发器。使用既有 `CDK_ENCRYPTION_KEY` 的 AES-GCM 资料库，加密上下文同时绑定本站订单号和本地尝试编号；加密密钥缺失或与原库不匹配时，界面不提供保存能力，服务端拒绝要求保存的提交，不降级成明文。
 
-`RECHARGE_SAVED_CREDENTIALS_ENABLED` 默认关闭，现有生产配置保持 `false`。关闭时前台只提供重新提交 Session；即使旧页面提交 `retainCredential:true`，也只执行普通充值而不保存资料。`retry-saved` 请求被拒绝，不联系上游；每分钟任务在活跃提交结束后清除旧快照，不修改支付、尝试记录或订单状态。
+`RECHARGE_SAVED_CREDENTIALS_ENABLED` 在未配置时默认关闭。主站本次已显式开启，兼容回退版设为 `false`。部署及回退记录见 [原订单重试上线记录](recharge-retry-production-release.md)。关闭时前台只提供重新提交 Session；即使旧页面提交 `retainCredential:true`，也只执行普通充值而不保存资料。`retry-saved` 请求被拒绝，不联系上游；每分钟任务在活跃提交结束后清除旧快照，不修改支付、尝试记录或订单状态。
 
 开启开关且加密库可用时，已付款订单的 Session 表单默认勾选加密保存，客户可以取消。同一个订单表单打开期间保留客户的选择。`submit` 在 `retainCredential:true` 且账号已确认时，事务内保存尝试、审计与密文，再转发上游。保存的新资料覆盖旧资料；不保存的新提交清除旧快照。接口只返回元数据。若加密阶段失败，接口返回 `recharge_retention_unavailable`，此时尚未转发充值。订单弹窗保留本次输入，客户可以取消保存后继续。
 

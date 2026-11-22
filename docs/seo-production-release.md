@@ -1,11 +1,13 @@
 # SEO production release
 
-**当前正式版本：客户反馈与选购帮助修复，2026-11-22 10:04:56 Asia/Shanghai 发布。**
+**当前正式版本见 [原订单重试上线记录](recharge-retry-production-release.md)。**
+
+客户反馈与选购帮助修复于 2026-11-22 10:04:56 Asia/Shanghai 发布，以下为当时的版本记录。
 
 - 运行源码：`abe82acc29d406a695551956a4fa7b0d0bb71d5e`，分支 `codex/customer-feedback-preview`。
 - Worker：`6908b099-a207-4185-870a-a627b6fdf336`；deployment：`afc50df8-73f2-4dca-a79a-358858b1da07`。
 - 源码标签：`release-2026-11-22-feedback-help`。
-- 当前兼容回退：`d6170e1f-9d1e-4311-b284-672543f0fc0a`；deployment：`f403b02a-e307-4b63-b726-c18ac5fdc220`；2026-11-22 10:00:10 Asia/Shanghai 生效。
+- 当时兼容回退：`d6170e1f-9d1e-4311-b284-672543f0fc0a`；deployment：`f403b02a-e307-4b63-b726-c18ac5fdc220`；2026-11-22 10:00:10 Asia/Shanghai 生效。
 - 回退源码：`31975c9be06570705d84c915436c24f34f495319`；标签：`release-2026-11-22-feedback-rollback`。
 
 下方旧首页和 SEO 发布记录为历史。旧回退 `5e5085e6`、`c955856c` 不含本轮反馈图片及脚本，不能作为本次兼容回退目标。
