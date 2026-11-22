@@ -7,7 +7,8 @@ export const publicHelpCategories = [
 ] as const
 
 type PublicHelpCategory = typeof publicHelpCategories[number]['id']
-export type PublicArticle = { slug: string; category: PublicHelpCategory; title: string; answer: string; keywords?: string; sections: { title: string; paragraphs: string[] }[]; related?: string }
+export type HelpParagraph = string | (string | { code: string })[]
+export type PublicArticle = { slug: string; category: PublicHelpCategory; title: string; answer: string; keywords?: string; sections: { title: string; paragraphs: HelpParagraph[] }[]; related?: string }
 // Operational guidance is checked against this repository's storefront and order UI.
 // No promises of supplier entitlement, delivery time, refund outcome or invented reviews.
 export const publicHelpUpdated = '2026-11-22'
@@ -82,7 +83,11 @@ export const publicArticles: readonly PublicArticle[] = [
     keywords: '重新获取完整Session后重试 请重新获取完整Session后重试 session无效 凭据失效 核验失败 账号校验失败 JSON 复制不完整 浏览器翻译 连接账号 session expired access denied',
     sections: [
       { title: '1. 重新登录要充值的账号', paragraphs: ['保留原订单页面，在同一个浏览器另开标签页，到 chatgpt.com 退出并重新登录。用原来的登录方式，在 ChatGPT 的账户设置核对账号，尤其是用 Apple 登录或有多个账号时。'] },
-      { title: '2. 确认复制了完整的 Session', paragraphs: ['按订单里的「获取 Session 说明」打开获取页。如果只看到空对象，先确认已在同一浏览器登录，再刷新获取页。复制整段内容，手机上可以用「全选」避免漏掉开头或结尾。', '如果仍提示核验失败，关闭获取页的自动翻译，暂时停用可能改写页面内容的插件，再刷新并重新复制。也可以换个浏览器重新登录并获取，两步都在同一浏览器完成。'] },
+      { title: '2. 确认复制了完整的 Session', paragraphs: [
+        ['按订单里的「获取 Session 说明」打开获取页。如果只显示 ', { code: '{}' }, '，表示页面返回的是空对象。先确认已在同一浏览器登录，再刷新获取页。'],
+        ['复制时，从开头的 ', { code: '{' }, ' 到结尾的 ', { code: '}' }, ' 都要包含。手机上可以用「全选」，保留页面返回的完整内容。'],
+        '如果仍提示核验失败，关闭获取页的自动翻译，暂时停用可能改写页面内容的插件，再刷新并重新复制。也可以换个浏览器重新登录并获取，两步都在同一浏览器完成。',
+      ] },
       { title: '3. 回原订单按提示重试', paragraphs: ['打开「我的订单」，找到已付款的原订单，进入「连接你的账号」。如果显示「更换 Session 后重试」，先点它打开表单。如果表单已展开，直接粘贴新获取的 Session，核对表单显示的账号，再按页面提示提交。', '如果显示「提交待确认」，先点「刷新进度」。仍待确认时，按提示用原资料核对同一次提交，等订单允许更换资料时再提交新的 Session。'] },
       { title: '4. 这些情况请联系客服', paragraphs: ['重新登录并完整复制后仍报错、已付款却找不到重试入口，或刷新后一直显示提交待确认时，在原订单点「联系客服」。提供订单号和报错文字即可。请把 Session 留在订单表单内，截图中也要遮住登录凭据。'] },
     ],

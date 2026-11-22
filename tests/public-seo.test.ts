@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { customerFixture } from './customer-fixture.ts'
 import type { Env } from '../worker/platform.ts'
+import { publicArticles } from '../shared/public-help.ts'
 
 // Resolve the configured production entry rather than testing an unused helper.
 const config = JSON.parse(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8'))
@@ -94,6 +95,36 @@ test('related questions reuse help-center rows and only link to other articles i
   assert.ok(related)
   assert.deepEqual([...related.matchAll(/<a href="([^"]+)">/g)].map(match => match[1]), ['/help/codex-credits', '/help/renewal-before-expiry'])
   assert.equal((related.match(/aria-hidden="true">›<\/span>/g) ?? []).length, 2)
+})
+
+test('every help article has category navigation, reading time and existing order support', async t => {
+  const s = await fixture(); t.after(() => s.db.close())
+  for (const article of publicArticles) {
+    const response = await s.get('/help/' + article.slug)
+    assert.equal(response.status, 200, article.slug)
+    const html = await response.text()
+    assert.ok(html.includes('href="/help/#help-' + article.category + '"'), article.slug)
+    assert.match(html, /约 \d+ 分钟读完/, article.slug)
+    assert.match(html, /aria-label="浏览帮助分类"/, article.slug)
+    assert.match(html, /<section[^>]*aria-labelledby="help-article-support-title"/, article.slug)
+    assert.match(html, /href="\/orders">查看或找回订单/, article.slug)
+    const sameCategory = publicArticles.filter(item => item.category === article.category)
+    const position = sameCategory.indexOf(article)
+    const previous = sameCategory[position - 1]
+    const next = sameCategory[position + 1]
+    assert.equal(html.includes('rel="prev"'), Boolean(previous), article.slug)
+    assert.equal(html.includes('rel="next"'), Boolean(next), article.slug)
+    if (previous) assert.ok(html.includes(`rel="prev" href="/help/${previous.slug}"`), article.slug)
+    if (next) assert.ok(html.includes(`rel="next" href="/help/${next.slug}"`), article.slug)
+    assert.doesNotMatch(html, /<script[^>]+src=|payforchat\.com/, article.slug)
+  }
+})
+
+test('Session troubleshooting distinguishes an empty response from JSON boundaries', async t => {
+  const s = await fixture(); t.after(() => s.db.close())
+  const html = await (await s.get('/help/session-expired')).text()
+  assert.match(html, /只显示 <code>\{\}<\/code>/)
+  assert.match(html, /从开头的 <code>\{<\/code> 到结尾的 <code>\}<\/code>/)
 })
 
 test('help center renders category headings and direct article links before search script runs', async t => {

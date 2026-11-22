@@ -3,7 +3,7 @@ import { commerce } from './commerce.ts'
 import { secureResponse } from './security.ts'
 import type { Database, Env, Statement } from './platform.ts'
 import { publicProducts, type PublicCatalog } from '../shared/public-storefront.ts'
-import { publicArticles, publicHelpCategories, publicHelpUpdated, type PublicArticle } from '../shared/public-help.ts'
+import { publicArticles, publicHelpCategories, publicHelpUpdated, type HelpParagraph, type PublicArticle } from '../shared/public-help.ts'
 
 export type SeoEnv = Env & { STOREFRONT_SEO_ORIGIN?: string; SEO_CATALOG_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> } }
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
@@ -89,29 +89,57 @@ const assetPath = (path: string) => /^\/(?:assets|brands|fonts|images)\//.test(p
 // Recovery links remain usable when the application bundle cannot execute.
 const startupShell = (brand: string) => `<main class="storefront-startup" data-storefront-startup aria-labelledby="storefront-startup-title"><p class="storefront-startup-brand">${escape(brand)}</p><p id="storefront-startup-title" class="storefront-startup-title" role="status">正在加载页面…</p><div class="storefront-startup-skeleton" aria-hidden="true"><span></span><div><i></i><i></i><i></i><i></i></div></div><p class="storefront-startup-recovery">如果页面没有继续打开，可以<a href="">重新加载</a>，或<a href="/help/">查看购买指南</a>。</p><noscript><p>当前浏览器未启用 JavaScript，启用后即可选购。</p></noscript></main>`
 const helpArticleLink = ({ slug, title }: PublicArticle) => `<a href="/help/${slug}">${escape(title)}<span aria-hidden="true">›</span></a>`
-function relatedHelpArticles(article: PublicArticle) {
-  const links = publicArticles.filter(item => item.category === article.category && item.slug !== article.slug)
-  if (!links.length) return ''
-  return `<section class="help-topic" aria-labelledby="related-help-title" style="margin-block-start:22px"><h2 id="related-help-title">相关问题</h2><ul>${links.map(item => `<li>${helpArticleLink(item)}</li>`).join('')}</ul></section>`
+function helpParagraph(paragraph: HelpParagraph) {
+  const spans = typeof paragraph === 'string' ? [paragraph] : paragraph
+  return spans.map(span => typeof span === 'string' ? escape(span) : `<code>${escape(span.code)}</code>`).join('')
 }
 function helpArticle(article: PublicArticle, productHref?: string) {
+  const category = publicHelpCategories.find(group => group.id === article.category)!
+  const categoryArticles = publicArticles.filter(item => item.category === article.category)
+  const position = categoryArticles.indexOf(article)
+  const related = categoryArticles.filter(item => item !== article)
+  const previous = categoryArticles[position - 1]
+  const next = categoryArticles[position + 1]
+  const characterCount = article.answer.length + article.sections.reduce((total, section) =>
+    total + section.paragraphs.reduce((sum, paragraph) => sum + helpParagraph(paragraph).length, 0), 0)
+  const readingMinutes = Math.ceil(characterCount / 350)
   const sections = article.sections.map(section =>
-    `<section><h2>${escape(section.title)}</h2>${section.paragraphs.map(paragraph => `<p>${escape(paragraph)}</p>`).join('')}</section>`,
+    `<section><h2>${escape(section.title)}</h2>${section.paragraphs.map(paragraph => `<p>${helpParagraph(paragraph)}</p>`).join('')}</section>`,
   ).join('')
-  return `<article class="help-article" aria-labelledby="help-article-title">
-    <nav class="help-article-breadcrumb" aria-label="当前位置"><a href="/help/"><span aria-hidden="true">‹</span> 帮助中心</a></nav>
-    <header>
-      <h1 id="help-article-title">${escape(article.title)}</h1>
-      <p class="help-article-answer">${escape(article.answer)}</p>
-    </header>
-    <div class="help-article-body">${sections}</div>
-    <nav class="help-article-actions" aria-label="后续入口">
-      <a class="help-article-primary" href="/orders">查看或找回订单 <span aria-hidden="true">→</span></a>
-      ${productHref ? `<a href="${escape(productHref)}">查看商品与教程</a>` : ''}
-    </nav>
-    ${relatedHelpArticles(article)}
-    <p class="public-date">内容核对日期 <time datetime="${publicHelpUpdated}">${publicHelpUpdated}</time></p>
-  </article>`
+  return `<div class="help-article-layout">
+    <article class="help-article" aria-labelledby="help-article-title">
+      <nav class="help-article-breadcrumb" aria-label="当前位置">
+        <a href="/help/">帮助中心</a><span aria-hidden="true">›</span>
+        <a href="/help/#help-${category.id}">${escape(category.title)}</a>
+      </nav>
+      <header>
+        <h1 id="help-article-title">${escape(article.title)}</h1>
+        <p class="help-article-reading-time">约 ${readingMinutes} 分钟读完</p>
+        <p class="help-article-answer">${escape(article.answer)}</p>
+      </header>
+      <div class="help-article-body">${sections}</div>
+      ${previous || next ? `<nav class="help-article-pagination" aria-label="同分类文章翻页">
+        ${previous ? `<a rel="prev" href="/help/${previous.slug}"><small>‹ 上一篇</small>${escape(previous.title)}</a>` : ''}
+        ${next ? `<a rel="next" href="/help/${next.slug}"><small>下一篇 ›</small>${escape(next.title)}</a>` : ''}
+      </nav>` : ''}
+      <section class="help-article-support" aria-labelledby="help-article-support-title">
+        <h2 id="help-article-support-title">订单问题还没解决？</h2>
+        <p>打开原订单，按页面提示联系支持或查看售后进度。联系客服时请提供订单号和报错文字。</p>
+        <div class="help-article-actions">
+          <a class="help-article-primary" href="/orders">查看或找回订单 <span aria-hidden="true">→</span></a>
+          ${productHref ? `<a href="${escape(productHref)}">查看商品与教程</a>` : ''}
+        </div>
+      </section>
+      <p class="public-date">内容核对日期 <time datetime="${publicHelpUpdated}">${publicHelpUpdated}</time></p>
+    </article>
+    <aside class="help-article-rail" aria-label="帮助导航">
+      <nav class="help-topic" aria-label="浏览帮助分类">
+        <h2>帮助分类</h2>
+        <ul>${publicHelpCategories.map(group => `<li><a href="/help/#help-${group.id}"${group.id === category.id ? ' aria-current="true"' : ''}>${escape(group.title)}<span aria-hidden="true">›</span></a></li>`).join('')}</ul>
+      </nav>
+      ${related.length ? `<section class="help-topic" aria-labelledby="related-help-title"><h2 id="related-help-title">相关问题</h2><ul>${related.map(item => `<li>${helpArticleLink(item)}</li>`).join('')}</ul></section>` : ''}
+    </aside>
+  </div>`
 }
 
 function helpCenter(query: string) {
