@@ -82,12 +82,15 @@ export type HomeFeedbackItem = {
 }
 type HomeFeedbackCopy = {
   title: string; intro: string; open: string; close: string; languageNote: string
+  all: string; galleryTitle: string; galleryIntro: (count: number) => string
   items: readonly HomeFeedbackItem[]
 }
 const feedbackCopy: Record<StorefrontLocale, HomeFeedbackCopy> = {
   'zh-CN': {
     title: '看看他们怎么说。', intro: '微信沟通节选',
     open: '查看聊天记录', close: '关闭图片', languageNote: '',
+    all: '查看全部反馈', galleryTitle: '全部反馈与服务记录',
+    galleryIntro: count => `共 ${count} 段微信沟通，选择标题查看原记录。`,
     items: [
       {
         id: 'service-feedback', title: '服务反馈', category: '服务反馈', quote: '你这个服务太棒了。',
@@ -103,11 +106,48 @@ const feedbackCopy: Record<StorefrontLocale, HomeFeedbackCopy> = {
         alt: '微信聊天记录：用户后来再次询问续费，原话为“哈喽我想续费一下！”；转账金额已遮挡。',
         context: '历史沟通记录，展示后续的续费咨询；转账金额已遮挡。',
       },
+      {
+        id: 'refund-conversation', title: '退款沟通', category: '退款沟通', quote: '好',
+        description: '订阅尚未到期，客服引导申请退款，随后告知已退。',
+        image: '/feedback/refund-conversation.png',
+        alt: '微信聊天记录：订阅未到期时客服引导退款，用户回复“好”，客服随后告知已退。',
+        context: '截图展示退款沟通，未展示用户确认到账。',
+      },
+      {
+        id: 'friend-referral', title: '朋友转介绍', category: '朋友转介绍', quote: '我今天又给你介绍了一个',
+        description: '用户表示当天再次向朋友推荐。',
+        image: '/feedback/friend-referral.png',
+        alt: '微信聊天记录：用户说“我今天又给你介绍了一个”；对话包含转介绍返现说明。',
+        context: '对话包含转介绍返现说明，未展示朋友成交。',
+      },
+      {
+        id: 'activation-followup', title: '处理后的开通反馈', category: '开通反馈', quote: '可以了，可以了，谢谢',
+        description: '经过沟通处理后，用户确认可以使用并致谢。',
+        image: '/feedback/activation-followup.png',
+        alt: '微信聊天记录：用户回复“可以了，可以了，谢谢”，双方也提到开通过程曲折。',
+        context: '截图包含用户确认可用，以及双方对开通过程曲折的反馈。',
+      },
+      {
+        id: 'early-renewal', title: '到期前续费咨询', category: '续费咨询', quote: '是等中午到期后我再重试吗',
+        description: '用户在订阅到期前，询问何时再尝试续费。',
+        image: '/feedback/early-renewal.png',
+        alt: '微信聊天记录：用户在订阅到期前询问“是等中午到期后我再重试吗”。',
+        context: '这是续费时机的咨询，未展示续费完成。',
+      },
+      {
+        id: 'recharge-confirmed', title: '充值完成确认', category: '充值反馈', quote: '没事了刚充好',
+        description: '用户确认刚充好，并在后续沟通中提到 Session 问题。',
+        image: '/feedback/recharge-confirmed.png',
+        alt: '微信聊天记录：用户说“没事了刚充好”，客服追问后，用户反馈 Session 不对。',
+        context: '客服在用户确认完成后继续追问情况。',
+      },
     ],
   },
   en: {
     title: 'In their own words.', intro: 'WeChat excerpts',
     open: 'View conversation', close: 'Close image', languageNote: 'The original screenshots and quotations are in Chinese.',
+    all: 'View all feedback', galleryTitle: 'Feedback and service conversations',
+    galleryIntro: count => `${count} WeChat conversations. Select a title to view the original record.`,
     items: [
       {
         id: 'service-feedback', title: 'Service feedback', category: 'Service feedback', quote: '你这个服务太棒了。',
@@ -122,6 +162,41 @@ const feedbackCopy: Record<StorefrontLocale, HomeFeedbackCopy> = {
         image: '/feedback/renewal-inquiry.png',
         alt: 'WeChat conversation in Chinese: the customer later asks about renewing, saying “哈喽我想续费一下！”. The transfer amount is redacted.',
         context: 'A past conversation showing a later renewal inquiry; the transfer amount is redacted.',
+      },
+      {
+        id: 'refund-conversation', title: 'Refund conversation', category: 'Refund conversation', quote: '好',
+        description: 'The subscription had not expired. Support suggested requesting a refund and later said it had been refunded.',
+        image: '/feedback/refund-conversation.png',
+        alt: 'WeChat conversation in Chinese: support suggests a refund before subscription expiry, the customer replies “好”, and support later says it was refunded.',
+        context: 'The screenshot shows the refund discussion, without the customer confirming receipt.',
+      },
+      {
+        id: 'friend-referral', title: 'A friend referral', category: 'Friend referral', quote: '我今天又给你介绍了一个',
+        description: 'The customer says they recommended another friend that day.',
+        image: '/feedback/friend-referral.png',
+        alt: 'WeChat conversation in Chinese: the customer says “我今天又给你介绍了一个”. The discussion includes a referral cashback offer.',
+        context: 'A referral cashback offer is included; the screenshot does not show the friend completing a purchase.',
+      },
+      {
+        id: 'activation-followup', title: 'Activation follow-up', category: 'Activation feedback', quote: '可以了，可以了，谢谢',
+        description: 'After discussing the issue with support, the customer confirmed it worked and thanked them.',
+        image: '/feedback/activation-followup.png',
+        alt: 'WeChat conversation in Chinese: the customer replies “可以了，可以了，谢谢”, and both sides mention that activation was difficult.',
+        context: 'The screenshot includes confirmation that it works and both sides discussing a difficult activation process.',
+      },
+      {
+        id: 'early-renewal', title: 'Renewal question before expiry', category: 'Renewal inquiry', quote: '是等中午到期后我再重试吗',
+        description: 'Before the subscription expired, the customer asked when to try renewing again.',
+        image: '/feedback/early-renewal.png',
+        alt: 'WeChat conversation in Chinese: before the subscription expires, the customer asks “是等中午到期后我再重试吗”.',
+        context: 'This is a question about renewal timing; a completed renewal is not shown.',
+      },
+      {
+        id: 'recharge-confirmed', title: 'Top-up completion confirmed', category: 'Top-up feedback', quote: '没事了刚充好',
+        description: 'The customer confirmed the top-up had just completed, then mentioned a Session issue.',
+        image: '/feedback/recharge-confirmed.png',
+        alt: 'WeChat conversation in Chinese: the customer says “没事了刚充好”. Support then asks what happened, and the customer mentions an incorrect Session.',
+        context: 'Support asked for details after the customer had confirmed completion.',
       },
     ],
   },

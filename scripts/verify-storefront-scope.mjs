@@ -33,6 +33,11 @@ const allowed = new Set([
   'scripts/verify-storefront-scope.mjs', 'public/storefront-startup.css',
   'tests/storefront-first-paint.test.ts', 'docs/combined-storefront-preview.md',
   'public/feedback/service-feedback.png', 'public/feedback/renewal-inquiry.png',
+  'public/feedback/refund-conversation.png',
+  'public/feedback/friend-referral.png',
+  'public/feedback/activation-followup.png',
+  'public/feedback/early-renewal.png',
+  'public/feedback/recharge-confirmed.png',
 ])
 const changed = [...new Set([
   ...git('diff', '--name-only', base).trim().split('\n'),
@@ -170,6 +175,11 @@ restoreScannerSnippet(`# Reviewed testimonial pixels; changed files must be revi
 REVIEWED_BINARY_ASSETS = {
     'public/feedback/service-feedback.png': '2bfb81c197fb9831c07cc6fad0637c94b60f9f5a371c3bdec32f0608f1e15505',
     'public/feedback/renewal-inquiry.png': '24ed5dbbfd311321edfabc5eea53c097c9345a8b3c298e040ce0e95045b1009e',
+    'public/feedback/refund-conversation.png': 'd83f6e8d2baf5c77941036a8d5fbc4023ac6ea2018045fec1785891085ab7c75',
+    'public/feedback/friend-referral.png': 'badbf0db08cdcb58a5529195feaba4cb8853d1dc26143eb27744fcd57d699bdd',
+    'public/feedback/activation-followup.png': 'f7a036cbdceeab1881500dd05012bd151bd8ea1f492ba2837360d45be222c653',
+    'public/feedback/early-renewal.png': 'd0c8081305b9dee2c28be2cc6311b68801df03a4ff88689d8496b2510c68e622',
+    'public/feedback/recharge-confirmed.png': '5aae4f41151039f8f2d1056dca37af8559352cdfe8f2d08248ce78f2de04d3ac',
 }
 `)
 restoreScannerSnippet(`        if name in REVIEWED_BINARY_ASSETS:
@@ -181,7 +191,7 @@ restoreScannerSnippet(`                # Existing public storefront URL in the h
                 documented_storefront = name == 'docs/seo-production-release.md' and host == 'gptpay1688.com'
 `)
 restoreScannerSnippet('not allowed_host(host) and not documented_storefront', 'not allowed_host(host)')
-assert.equal(scanner, git('show', `${base}:scripts/scan-public-source.py`), 'Only the sitemap namespace, two hash-pinned reviewed images and the existing release-document storefront URL may be added to the source scanner')
+assert.equal(scanner, git('show', `${base}:scripts/scan-public-source.py`), 'Only the sitemap namespace, hash-pinned reviewed feedback images and the existing release-document storefront URL may be added to the source scanner')
 console.log(JSON.stringify({
   base, scope: 'combined-homepage-and-seo', protectedFilesIdentical: protectedCount,
   originalWorkerIdentical: true, appBusinessAstIdentical: true,
