@@ -1,7 +1,12 @@
 import { storefrontScopeHeaders } from './storefront-routing.ts'
 export class RequestError extends Error {
   status: number
-  constructor(message: string, status: number) { super(message); this.status = status }
+  readonly code?: string
+  constructor(message: string, status: number, code?: string) {
+    super(message)
+    this.status = status
+    this.code = code
+  }
 }
 export async function api<T>(path: string, data?: unknown, signal?: AbortSignal): Promise<T> {
   const admin = path.startsWith('/api/admin/')
@@ -26,7 +31,7 @@ export async function api<T>(path: string, data?: unknown, signal?: AbortSignal)
     if (response.status === 401 && scope && typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('ymx-session-expired', { detail: scope }))
     }
-    throw new RequestError(result?.error ?? '请求失败，请稍后重试。', response.status)
+    throw new RequestError(result?.error ?? '请求失败，请稍后重试。', response.status, typeof result?.code === 'string' ? result.code : undefined)
   }
   if (!result) throw new RequestError('服务返回异常，请稍后重试。', 503)
   return result as T

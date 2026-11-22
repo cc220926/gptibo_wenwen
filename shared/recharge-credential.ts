@@ -1,3 +1,5 @@
+export const RECHARGE_RETENTION_UNAVAILABLE = 'recharge_retention_unavailable'
+
 // Validate the extracted token while retaining the caller's exact bytes for
 // idempotent recovery. Any retained request must use the order-scoped encrypted vault.
 export function rechargeCredentialToken(raw: string, mode: 'session' | 'access_token'): { token: string; expires?: unknown } {

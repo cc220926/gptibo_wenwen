@@ -223,7 +223,8 @@ test('channel two full_session_required is a definitive non-submission and permi
   assert.equal(current.status,'failed');assert.equal(current.fulfillment.canSubmit,true)
   assert.equal(current.fulfillment.failureCode,'full_session_required')
   assert.equal(s.db.prepare('SELECT status FROM recharge_redemptions').get()!.status,'rejected')
-  assert.equal(current.fulfillment.savedCredential.canReuse, false)
+  assert.equal(current.fulfillment.savedCredential, null)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_saved_credentials').get()!.n, 0)
   const retry = await s.call(endpoint, { action: 'retry-saved', key: crypto.randomUUID(), sourceAttemptId: key, customerConfirmedEmail: true }, buyer)
   assert.equal(retry.status, 409)
   assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 1)
@@ -275,6 +276,35 @@ test('202 preflight_pending never becomes a successful result and carries a safe
   s.override(path=>path.endsWith('/preflight')?Response.json({error:{code:'preflight_pending',retryable:true}},{status:202}):undefined)
   await assert.rejects(supplierRequest(s.env,'/products/demo_plus/preflight',JSON.stringify({credential:{mode:'session',session}}),'preflight:'+crypto.randomUUID()),e=>e instanceof RechargeError&&e.code==='preflight_pending'&&e.retryable&&e.retryAfter!>=5)
   assert.equal(s.calls.filter(c=>c.path==='/v1/redemptions'||c.path==='/v1/orders').length,0)
+})
+
+test('encryption failure before dispatch permits canceling retention on the same paid order', async t => {
+  const s = setup(t)
+  s.env.RECHARGE_SAVED_CREDENTIALS_ENABLED = 'true'
+  s.env.CDK_ENCRYPTION_KEY = Buffer.alloc(32, 51).toString('base64')
+  const buyer = await s.buyer(), order = await s.create(buyer), key = crypto.randomUUID()
+  await s.query(order.id, buyer)
+  s.setPayment('paid')
+  const paid = (await (await s.query(order.id, buyer)).json()).order
+  assert.equal(paid.fulfillment.canRetainCredential, true)
+  s.env.CDK_ENCRYPTION_KEY = ''
+  const submit = (retainCredential: boolean) => s.call(`/api/orders/${order.id}/fulfillment`, {
+    action: 'submit', key, customerConfirmedEmail: true, retainCredential, credential: { mode: 'session', session },
+  }, buyer)
+
+  const unavailable = await submit(true)
+  assert.equal(unavailable.status, 503)
+  assert.equal((await unavailable.json()).code, 'recharge_retention_unavailable')
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_redemptions').get()!.n, 0)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 0)
+  assert.equal((await getOrder(s.env, order.id)).payment_status, 'paid')
+
+  const retried = await submit(false)
+  assert.equal(retried.status, 200)
+  assert.equal((await retried.json()).order.id, order.id)
+  assert.equal(s.calls.filter(c => c.path === '/v1/orders').length, 1)
+  assert.equal(s.calls.filter(c => c.path === '/v1/redemptions').length, 1)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_saved_credentials').get()!.n, 0)
 })
 
 test('disabled Session retention ignores old client opt-ins while allowing ordinary paid submission', async t => {
@@ -427,16 +457,24 @@ test('known-expired or provider-invalid saved credentials require a fresh Sessio
   assert.equal((await s.submitSaved(session)).status, 200)
 })
 
-test('success, refund, redemption stop and retention expiry purge saved secrets', async t => {
+test('success, refund, redemption stop and retention expiry and historical rejection purge saved secrets', async t => {
   const s = await retainedSetup(t)
   s.setTask('succeeded'); await s.query(s.order.id, s.buyer)
   assert.equal(s.db.prepare('SELECT COUNT(*) n FROM recharge_saved_credentials').get()!.n, 0)
-  const cases = ['refund', 'block', 'expiry']
+  const cases = ['refund', 'block', 'expiry', 'rejected']
   for (const kind of cases) {
     const next = await retainedSetup(t)
     if (kind === 'refund') next.db.prepare('UPDATE orders SET refunded_cents=1 WHERE id=?').run(next.order.id)
     if (kind === 'block') next.db.prepare('UPDATE orders SET redemption_blocked=1 WHERE id=?').run(next.order.id)
     if (kind === 'expiry') { next.db.prepare('UPDATE recharge_saved_credentials SET saved_at=0,retain_until=1').run(); await purgeRetainedCredentials(next.env) }
+    if (kind === 'rejected') {
+      next.db.prepare("UPDATE recharge_redemptions SET status='rejected' WHERE id=?").run(next.key)
+      next.db.prepare('UPDATE recharge_orders SET lease_until=? WHERE order_id=?').run(Date.now() + 60000, next.order.id)
+      await purgeRetainedCredentials(next.env)
+      assert.equal(next.db.prepare('SELECT COUNT(*) n FROM recharge_saved_credentials').get()!.n, 1)
+      next.db.prepare('UPDATE recharge_orders SET lease_until=0 WHERE order_id=?').run(next.order.id)
+      await purgeRetainedCredentials(next.env)
+    }
     assert.equal(next.db.prepare('SELECT COUNT(*) n FROM recharge_saved_credentials').get()!.n, 0, kind)
   }
 })

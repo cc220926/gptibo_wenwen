@@ -1,5 +1,5 @@
 import { isCodexCreditsPlan } from '../../shared/codex-credits'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toString as qrToString } from 'qrcode'
 import { RefreshCw, TriangleAlert } from 'lucide-react'
@@ -18,6 +18,7 @@ import type { SessionPrecheck } from './session-precheck'
 import type { ServerOrder } from '@/lib/use-store'
 import { productForPlan } from '@/lib/products'
 import { paymentDeadline } from '../../shared/payment-window'
+import { RECHARGE_RETENTION_UNAVAILABLE } from '../../shared/recharge-credential'
 import { publicAlipayQr } from '../../shared/public-payment'
 import '@/styles/live-checkout.css'
 
@@ -31,6 +32,8 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
   const [busy, setBusy] = useState<'' | 'query' | 'check' | 'submit' | 'retry-saved'>('')
   const [precheck, setPrecheck] = useState<SessionPrecheck | null>(null)
   const checkAbort = useRef<AbortController | null>(null)
+  const draftScope = useRef(0)
+  useLayoutEffect(() => () => { draftScope.current++ }, [open])
   useEffect(() => { if (!open) checkAbort.current?.abort() }, [open])
   useEffect(() => () => { checkAbort.current?.abort() }, [])
   const [failure, setFailure] = useState('')
@@ -106,6 +109,8 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
     if (action === 'submit' && (!currentInput.credential || !confirmed)) { setTouched(true); setSubmitFailure(currentInput.problem); return }
     submitting.current = true; setBusy(action); setFailure('')
     const credential = currentInput.credential
+    const saveOnSubmit = action === 'submit' && retentionAvailable && retainCredential
+    const scope = draftScope.current
     if (action !== 'query') { setSubmitFailure(''); setPrecheck(null); setTouched(false) }
     try {
       await lane.current.run(async () => {
@@ -139,7 +144,7 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
           }
           setBusy('submit'); setSession(''); setConfirmed(false)
           const submittedAt = performance.now()
-          const result = await transport<{ order: ServerOrder }>(`/api/orders/${order.id}/fulfillment`, { action: 'submit', key: attemptKey.current, customerConfirmedEmail: true, credential, precheckReceipt, retainCredential: retentionAvailable && retainCredential })
+          const result = await transport<{ order: ServerOrder }>(`/api/orders/${order.id}/fulfillment`, { action: 'submit', key: attemptKey.current, customerConfirmedEmail: true, credential, precheckReceipt, retainCredential: saveOnSubmit })
           // Dispatch immediately; only the visual handoff has a brief minimum dwell.
           if (precheckReceipt && !matchMedia('(prefers-reduced-motion: reduce)').matches) await new Promise(resolve => setTimeout(resolve, Math.max(0, 450 - (performance.now() - submittedAt))))
           callbacks.current.onOrderUpdated?.(result.order)
@@ -151,7 +156,19 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
           if (result.order.fulfillment?.rechargeStatus !== 'unknown') setSubmitFailure('')
         }
       })
-    } catch (e) { if (action !== 'query') { setPrecheck(null); setSubmitFailure(errorMessage(e)) } else setFailure(errorMessage(e)) }
+    } catch (e) {
+      if (action === 'query') {
+        setFailure(errorMessage(e))
+      } else {
+        // Only this local pre-dispatch error confirms the draft can be offered again.
+        if (saveOnSubmit && draftScope.current === scope && e instanceof RequestError && e.status === 503 && e.code === RECHARGE_RETENTION_UNAVAILABLE) {
+          setSession(session)
+          setConfirmed(confirmed)
+        }
+        setPrecheck(null)
+        setSubmitFailure(errorMessage(e))
+      }
+    }
     finally { submitting.current = false; setBusy(''); callbacks.current.onUpdated?.() }
   }
   // Place the original refresh control in the footer while sharing the submit lock and errors.

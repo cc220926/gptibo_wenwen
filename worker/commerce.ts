@@ -25,6 +25,7 @@ import { paymentTesting } from './payments/testing.ts'
 import { supportContactsRoute, supportContactsSettings } from './support-contacts.ts'
 import { checkoutEnabled as supplierCheckoutEnabled, configured as supplierConfigured, productMap, RechargeError } from './recharge/client.ts'
 import { supplierCatalog, supplierSnapshot, snapshotStatement, syncRechargeOrder, rechargeAction, rechargeSummary, findRechargeOrder, reconcileRecharge, expireRechargeOrder, queryPlatformOrder, platformOrderStatus } from './recharge/service.ts'
+import { RechargeRetentionUnavailable } from './recharge/saved-credentials.ts'
 import type { SupportContactsSettings } from '../shared/support-contacts.ts'
 import { setRedemptionBlocked } from './order-redemption.ts'
 import { adminVisitorSummary } from './visitors.ts'
@@ -266,6 +267,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
     throw new ApiError('未找到接口或请求方法不支持。', 404)
   } catch (e) {
     if (e instanceof RechargeError) return json({ error: e.message, code: e.code, retryable: e.retryable, retryAfter: e.retryAfter }, e.status, e.retryAfter === null ? {} : { 'Retry-After': String(e.retryAfter) })
+    if (e instanceof RechargeRetentionUnavailable) return json({ error: e.message, code: e.code }, e.status)
     return json({ error: e instanceof ApiError ? e.message : '服务暂时不可用，请稍后重试。' }, e instanceof ApiError ? e.status : 503)
   }
 }

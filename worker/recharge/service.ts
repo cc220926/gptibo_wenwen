@@ -355,7 +355,6 @@ export async function rechargeAction(requestMessage: Request, env: Env, order: O
     catch { throw new ApiError('登录资料不完整或令牌过长，请重新获取完整内容。') }
     // Old open pages may still opt in; disabling retention must not block a paid submission.
     const retain = credentialRetentionEnabled(env) && (reuse || data.retainCredential === true)
-    if (retain && !await canRetainCredential(env)) throw new ApiError('资料加密保存暂不可用，请稍后重试或取消保存。', 503)
     if (new TextEncoder().encode(raw).byteLength > 256 * 1024) throw new ApiError('提交内容过长，请仅提交本次充值所需的账号资料。', 413)
     const digest = await hash(raw)
     if (attempt && attempt.id === data.key) {
@@ -391,7 +390,11 @@ export async function rechargeAction(requestMessage: Request, env: Env, order: O
       // conflict, or malformed reply remains unknown and retains the original key.
       if (e instanceof RechargeError && !e.retryable && (['invalid_request', 'session_invalid', 'invalid_credential'].includes(e.code) || (e.code === 'full_session_required' && e.upstreamStatus === 422))) {
         const failure = e.code === 'full_session_required' ? e.code : 'request_rejected'
-        await env.INTEREST_DB.prepare("UPDATE recharge_redemptions SET status='rejected',failure_code=? WHERE id=? AND status='unknown'").bind(failure, attempt.id).run()
+        await env.INTEREST_DB.batch([
+          env.INTEREST_DB.prepare("UPDATE recharge_redemptions SET status='rejected',failure_code=? WHERE id=? AND order_id=? AND status='unknown'").bind(failure, attempt.id, order.id),
+          env.INTEREST_DB.prepare(`DELETE FROM recharge_saved_credentials WHERE order_id=? AND attempt_id=?
+            AND EXISTS (SELECT 1 FROM recharge_redemptions a WHERE a.id=recharge_saved_credentials.attempt_id AND a.order_id=recharge_saved_credentials.order_id AND a.status='rejected')`).bind(order.id, attempt.id),
+        ])
         const rejectedOrder = await getOrder(env, order.id)
         if (!rejectedOrder.refund_hold && !rejectedOrder.refunded_cents && rejectedOrder.status === 'processing') await change(env, rejectedOrder, { status: 'failed' }, 'system', 'recharge-rejected', failureMessages[failure])
       }

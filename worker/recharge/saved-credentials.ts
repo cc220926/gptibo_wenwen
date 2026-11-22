@@ -1,5 +1,13 @@
 import { ApiError, hash, type Env } from '../platform.ts'
 import { seal, unseal, vaultReady } from '../fulfillment/vault.ts'
+import { RECHARGE_RETENTION_UNAVAILABLE } from '../../shared/recharge-credential.ts'
+
+export class RechargeRetentionUnavailable extends ApiError {
+  readonly code = RECHARGE_RETENTION_UNAVAILABLE
+  constructor() {
+    super('加密保存暂不可用，本次充值尚未提交。可以不保存资料，在原订单继续。', 503)
+  }
+}
 
 const RETENTION_MS = 30 * 86400000
 export type SavedCredential = { order_id: string; attempt_id: string; encrypted_request: string; saved_at: number; retain_until: number; credential_expires_at: number | null }
@@ -19,13 +27,20 @@ export async function retainedRequest(env: Env, saved: SavedCredential, expected
 }
 export async function retainedStatement(env: Env, order: string, attempt: string, raw: string, expires: number | null, previous?: SavedCredential) {
   const savedAt = previous?.saved_at ?? Date.now(), until = previous?.retain_until ?? savedAt + RETENTION_MS
-  const encrypted = await seal(env, raw, context(order, attempt))
+  let encrypted: string
+  try { encrypted = await seal(env, raw, context(order, attempt)) }
+  catch { throw new RechargeRetentionUnavailable() }
   return env.INTEREST_DB.prepare(`INSERT INTO recharge_saved_credentials(order_id,attempt_id,encrypted_request,saved_at,retain_until,credential_expires_at)
     SELECT order_id,id,?,?,?,? FROM recharge_redemptions WHERE id=? AND order_id=?
     ON CONFLICT(order_id) DO UPDATE SET attempt_id=excluded.attempt_id,encrypted_request=excluded.encrypted_request,saved_at=excluded.saved_at,retain_until=excluded.retain_until,credential_expires_at=excluded.credential_expires_at`)
     .bind(encrypted, savedAt, until, expires, attempt, order)
 }
 export async function purgeRetainedCredentials(env: Env) {
-  await env.INTEREST_DB.prepare(`DELETE FROM recharge_saved_credentials WHERE (?=1 OR retain_until<=?)
+  await env.INTEREST_DB.prepare(`DELETE FROM recharge_saved_credentials WHERE (
+      ?=1 OR retain_until<=? OR EXISTS (
+        SELECT 1 FROM recharge_redemptions a
+        WHERE a.id=recharge_saved_credentials.attempt_id AND a.order_id=recharge_saved_credentials.order_id AND a.status='rejected'
+      )
+    )
     AND NOT EXISTS(SELECT 1 FROM recharge_orders t WHERE t.order_id=recharge_saved_credentials.order_id AND t.lease_until>?)`).bind(Number(!credentialRetentionEnabled(env)), Date.now(), Date.now()).run()
 }
