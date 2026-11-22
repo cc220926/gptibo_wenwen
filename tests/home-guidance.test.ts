@@ -16,7 +16,7 @@ test('search handles whitespace, full-width English, casing, multiple terms and 
   assert.equal(searchHomeQuestions('zh-CN', '付款 延迟')[0].id, 'pending')
   assert.deepEqual(searchHomeQuestions('zh-CN', '不存在的问题' + 'x'.repeat(200)), [])
   assert.deepEqual(searchHomeQuestions('en', 'password refund xyz'), [])
-  assert.equal(searchHomeQuestions('zh-CN', ' \n\t ').length, 9)
+  assert.equal(searchHomeQuestions('zh-CN', ' \n\t ').length, 10)
 })
 
 test('both locales cover the same questions and feedback with stable destinations', () => {
