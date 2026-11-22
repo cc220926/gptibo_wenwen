@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import worker from '../worker/storefront-entry.ts'
+import { publicArticles } from '../shared/public-help.ts'
 import { customerFixture } from './customer-fixture.ts'
 const origin='https://shop.example.invalid'
 const shell=readFileSync(new URL('../index.html',import.meta.url),'utf8')
@@ -27,8 +28,10 @@ test('all guides remain standalone without a catalog, limiter or database',async
  const s=await setup();t.after(()=>s.db.close())
  s.env.INTEREST_DB={prepare(){throw new Error('D1 unavailable')},batch:async()=>{throw new Error('write')}}
  s.env.SEO_CATALOG_LIMITER.limit=async()=>{throw new Error('limit unavailable')}
- for(const path of ['/help/','/help/order-recovery','/help/after-payment','/help/after-sales','/help/recharge-or-account','/help/codex-credits']){
-  const r=await s.get(path);const html=await r.text();assert.equal(r.status,200);assert.match(html,/<h1/);assert.doesNotMatch(html,/<script[^>]+src=/)
+ for(const path of ['/help/', ...publicArticles.map(article=>'/help/'+article.slug)]){
+  const r=await s.get(path);const html=await r.text();assert.equal(r.status,200);assert.match(html,/<h1/)
+  const scripts=Array.from(html.matchAll(/<script[^>]+src="([^"]+)"/g),match=>match[1])
+  assert.deepEqual(scripts,path==='/help/'?['/help-search.js']:[])
   if(path.endsWith('order-recovery'))assert.match(html,/关闭页面后如何找回订单/)
  }
 })

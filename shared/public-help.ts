@@ -1,10 +1,18 @@
-export type PublicArticle = { slug: string; title: string; answer: string; sections: { title: string; paragraphs: string[] }[]; related?: string }
+export const publicHelpCategories = [
+  { id: 'buying', title: '选套餐' },
+  { id: 'order', title: '查付款与订单' },
+  { id: 'activation', title: '连接账号与到账' },
+  { id: 'support', title: '申请售后' },
+] as const
+
+type PublicHelpCategory = typeof publicHelpCategories[number]['id']
+export type PublicArticle = { slug: string; category: PublicHelpCategory; title: string; answer: string; keywords?: string; sections: { title: string; paragraphs: string[] }[]; related?: string }
 // Operational guidance is checked against this repository's storefront and order UI.
 // No promises of supplier entitlement, delivery time, refund outcome or invented reviews.
-export const publicHelpUpdated = '2026-11-21'
+export const publicHelpUpdated = '2026-11-22'
 export const publicArticles: readonly PublicArticle[] = [
   {
-    slug: 'recharge-or-account', title: 'ChatGPT 充值和成品账号有什么区别？',
+    slug: 'recharge-or-account', category: 'buying', title: 'ChatGPT 充值和成品账号有什么区别？',
     answer: '充值是给自己的账号购买所选套餐；成品账号属于另一个商品，按其规格交付账号资料。购买前先确认你希望继续使用自己的账号，还是购买单独交付的账号。',
     sections: [
       { title: '继续使用自己的账号', paragraphs: ['选择 ChatGPT 充值商品，确认套餐和购买须知。付款后是否需要连接账号、如何提交凭据，以原订单的指引为准。', '现有充值教程可在 ChatGPT 商品页的“如何开通”区域查看，继续使用原有示意图。'] },
@@ -13,7 +21,7 @@ export const publicArticles: readonly PublicArticle[] = [
     ], related: '/product/chatgpt',
   },
   {
-    slug: 'codex-credits', title: 'Codex 点数、订阅和接码有什么区别？',
+    slug: 'codex-credits', category: 'buying', title: 'Codex 点数、订阅和接码有什么区别？',
     answer: '本站 Codex 点数商品为一次性点数包；ChatGPT 订阅按所选套餐提供服务；Codex 接码交付接码 CDK。三类商品分别购买，不能互相替代。',
     sections: [
       { title: '先核对需要的服务', paragraphs: ['需要点数包时进入 Codex 点数商品；需要会员套餐时进入 ChatGPT 商品；需要接码时查看 Codex 接码商品。可售规格与价格以实时商品页为准。'] },
@@ -21,7 +29,8 @@ export const publicArticles: readonly PublicArticle[] = [
     ], related: '/product/codex-credits',
   },
   {
-    slug: 'after-payment', title: '付款后还需要完成哪些步骤？',
+    slug: 'after-payment', category: 'order', title: '付款后还需要完成哪些步骤？',
+    keywords: '已付钱 已付款 没到账 付款后没开通 等待充值 处理中',
     answer: '完成付款后回到原订单，先查看付款状态，再根据商品的交付指引继续操作。付款完成、账号连接和交付完成是不同步骤。',
     sections: [
       { title: '查看原订单', paragraphs: ['进入“我的订单”，找到对应订单并查看最新状态。若页面暂未更新，先刷新订单进度；请求超时本身不能证明付款或交付失败。'] },
@@ -30,7 +39,8 @@ export const publicArticles: readonly PublicArticle[] = [
     ],
   },
   {
-    slug: 'order-recovery', title: '关闭页面后如何找回订单？',
+    slug: 'order-recovery', category: 'order', title: '关闭页面后如何找回订单？',
+    keywords: '查单 查订单 找不到订单 付款后找不到订单 支付页面关了 订单丢了',
     answer: '先使用下单时的浏览器进入“我的订单”。如果换了设备或浏览器，可在订单页使用下单邮箱验证找回；该功能是否可用以页面提示为准。',
     sections: [
       { title: '原浏览器查询', paragraphs: ['保留下单浏览器的 Cookie，打开“我的订单”查看已有记录。不要先清理浏览器数据，以免丢失当前设备的订单访问凭据。'] },
@@ -39,12 +49,39 @@ export const publicArticles: readonly PublicArticle[] = [
     ],
   },
   {
-    slug: 'after-sales', title: '如何申请售后，退款范围如何确认？',
+    slug: 'after-sales', category: 'support', title: '如何申请售后，退款范围如何确认？',
     answer: '先查看所购商品的购买须知，再从原订单查看或申请售后。商品是否支持售后、可申请金额和处理方式以订单页面为准，提交申请不等于退款已经完成。',
     sections: [
       { title: '从原订单处理', paragraphs: ['在“我的订单”打开对应订单，查看可用的售后入口和当前进度。如果商品已明确说明不支持售后质保，订单会显示相应提示。'] },
       { title: '金额和进度以订单为准', paragraphs: ['订单会根据实际情况显示可申请金额、审核或自动处理状态。不要将“可申请”理解为所有情况都能无条件退款，也不要将提交时间当作到账承诺。'] },
       { title: '说明问题时保护凭据', paragraphs: ['填写发生的问题及必要截图，不填写账号密码、Session、邮箱验证码或完整卡密。申请后的服务状态和后续操作以原订单提示为准。'] },
+    ],
+  },
+  {
+    slug: 'renewal-before-expiry', category: 'buying', title: '现在的会员还没到期，可以续费吗？',
+    answer: '先查看 ChatGPT 当前套餐和到期时间，再核对所选规格的续费条件。不同规格的限制可能不同。',
+    keywords: '已有订阅 会员没到期 有效订阅 叠加 续费限制 account_has_subscription',
+    sections: [
+      { title: '购买前确认规格', paragraphs: ['在 ChatGPT 核对订阅状态，再看本站商品说明中的新开或续费条件。如果不确定该规格能否用于当前账号，从原商店联系支持确认。'] },
+      { title: '已付款，原订单提示订阅仍有效', paragraphs: ['先查看原订单显示的原因和可用操作。若订单允许重试，到满足条件时再回原订单继续。'] },
+    ], related: '/product/chatgpt',
+  },
+  {
+    slug: 'session-expired', category: 'activation', title: 'Session 已过期或无权访问，怎么办？',
+    answer: '在 chatgpt.com 退出登录，再登录同一个 ChatGPT 账号。重新获取完整 Session 后，回原订单提交。',
+    keywords: '重新获取完整Session后重试 请重新获取完整Session后重试 session无效 凭据失效 连接账号 session expired access denied',
+    sections: [
+      { title: '先确认是要充值的账号', paragraphs: ['重新登录后核对账号。换了浏览器或登录方式时，通过账号设置确认是同一个 ChatGPT 账号。'] },
+      { title: '回到原订单重试', paragraphs: ['按原订单里的获取说明操作。如果订单可以重新提交，就把新获取的完整 Session 填在账号连接步骤里。仍有问题时，给客服提供订单号和报错文字，Session 留在订单页内。'] },
+    ],
+  },
+  {
+    slug: 'completed-still-free', category: 'activation', title: '订单已完成，为什么 ChatGPT 还是免费版？',
+    answer: '先确认 ChatGPT 里登录的是这笔订单要充值的账号，再刷新网页或重开 App 查看订阅。',
+    keywords: '显示 Free 仍显示 Free 未生效 会员没显示 已完成没到账 没看到 Plus 充值成功',
+    sections: [
+      { title: '核对账号和订阅', paragraphs: ['在原订单确认开通结果，再到 ChatGPT 的账户设置核对账号及订阅。如果设备上登录过多个账号，切换回这次充值的那个。刷新页面或重开 App 后再查看。'] },
+      { title: '仍然显示免费版', paragraphs: ['从原订单联系支持，附上订单号和订阅页面截图，遮住账号及其他个人信息。客服核对期间，保留原订单即可。'] },
     ],
   },
 ]
