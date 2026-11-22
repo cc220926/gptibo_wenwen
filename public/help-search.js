@@ -1,14 +1,14 @@
-const formArea = document.querySelector('[data-help-search]')
+const form = document.querySelector('[data-help-search]')
 const input = document.querySelector('#help-search-input')
 const status = document.querySelector('[data-help-results]')
 
-if (formArea && input && status) {
+if (form && input && status) {
   const normalize = text => text.normalize('NFKC').toLowerCase()
   const groups = Array.from(document.querySelectorAll('[data-help-group]'), group => ({
     element: group,
     articles: Array.from(group.querySelectorAll('[data-help-article]'), article => ({
       element: article,
-      text: normalize(article.textContent + ' ' + article.dataset.search),
+      text: normalize(article.dataset.search ?? ''),
     })),
   }))
 
@@ -32,7 +32,10 @@ if (formArea && input && status) {
   }
 
   input.addEventListener('input', filter)
+  form.addEventListener('submit', event => {
+    event.preventDefault()
+    filter()
+  })
   window.addEventListener('pageshow', filter)
-  formArea.hidden = false
   filter()
 }

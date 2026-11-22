@@ -89,39 +89,50 @@ const assetPath = (path: string) => /^\/(?:assets|brands|fonts|images)\//.test(p
 // Recovery links remain usable when the application bundle cannot execute.
 const startupShell = (brand: string) => `<main class="storefront-startup" data-storefront-startup aria-labelledby="storefront-startup-title"><p class="storefront-startup-brand">${escape(brand)}</p><p id="storefront-startup-title" class="storefront-startup-title" role="status">正在加载页面…</p><div class="storefront-startup-skeleton" aria-hidden="true"><span></span><div><i></i><i></i><i></i><i></i></div></div><p class="storefront-startup-recovery">如果页面没有继续打开，可以<a href="">重新加载</a>，或<a href="/help/">查看购买指南</a>。</p><noscript><p>当前浏览器未启用 JavaScript，启用后即可选购。</p></noscript></main>`
 const helpLinks = () => publicArticles.map(a => `<li><a href="/help/${a.slug}">${escape(a.title)}</a></li>`).join('')
-function helpCenter() {
+function helpCenter(query: string) {
+  const normalize = (text: string) => text.normalize('NFKC').toLowerCase()
+  const terms = normalize(query).split(/[\s,，、。？！?!：:]+/).filter(Boolean)
+  let count = 0
   const groups = publicHelpCategories.map(category => {
-    const articles = publicArticles.filter(article => article.category === category.id)
-    return `<section class="help-topic" data-help-group aria-labelledby="help-${category.id}">
+    const articles = publicArticles.filter(article => article.category === category.id).map(article => {
+      const search = [category.title, article.title, article.answer, article.keywords ?? ''].join(' ')
+      const text = normalize(search)
+      return { article, search, visible: terms.every(term => text.includes(term)) }
+    })
+    const visibleCount = articles.filter(item => item.visible).length
+    count += visibleCount
+    return `<section class="help-topic" data-help-group aria-labelledby="help-${category.id}"${visibleCount ? '' : ' hidden'}>
       <h2 id="help-${category.id}">${escape(category.title)}</h2>
-      <ul>${articles.map(article => `<li data-help-article data-search="${escape([category.title, article.answer, article.keywords ?? ''].join(' '))}"><a href="/help/${article.slug}">${escape(article.title)}<span aria-hidden="true">→</span></a></li>`).join('')}</ul>
+      <ul>${articles.map(({ article, search, visible }) => `<li data-help-article${visible ? '' : ' hidden'} data-search="${escape(search)}"><a href="/help/${article.slug}">${escape(article.title)}<span aria-hidden="true">›</span></a></li>`).join('')}</ul>
     </section>`
   }).join('')
+  const result = count ? `找到 ${count} 个相关问题` : '没找到相关问题。试试「查单」「付款」或「Session」。'
   return `<div class="help-center">
     <div class="help-intro">
       <h1>帮助中心</h1>
-      <p>查找选购、付款、开通和售后问题的解决方法。</p>
-      <div class="help-search" data-help-search hidden role="search">
-        <label for="help-search-input">搜索帮助</label>
-        <input type="search" id="help-search-input" maxlength="120" autocomplete="off" placeholder="例如，付款后找不到订单" aria-controls="help-topics">
-      </div>
+      <form class="help-search" action="/help/" method="get" data-help-search role="search">
+        <label class="help-visually-hidden" for="help-search-input">搜索帮助</label>
+        <input type="search" id="help-search-input" name="q" value="${escape(query)}" maxlength="120" autocomplete="off" placeholder="搜索问题，例如 Session 过期" aria-controls="help-topics">
+        <button type="submit">搜索</button>
+      </form>
     </div>
     <nav class="help-quick-links" aria-label="常用问题"><a href="/help/order-recovery">找回订单</a><a href="/help/session-expired">Session 过期</a><a href="/help/completed-still-free">已完成但未显示会员</a></nav>
-    <p class="help-results" data-help-results role="status" hidden></p>
+    <p class="help-results" data-help-results role="status"${terms.length ? '' : ' hidden'}>${terms.length ? result : ''}</p>
     <div class="help-topics" id="help-topics">${groups}</div>
     <p class="help-order-action">已经下单？ <a href="/orders">回到我的订单</a></p>
   </div><script src="/help-search.js" defer></script>`
 }
 function htmlResponse(request: Request, body: string, status = 200, index = true) {
+  const formAction = new URL(request.url).pathname === '/help/' ? 'self' : 'none'
   const response = new Response(request.method === 'HEAD' ? null : body, { status, headers: {
     'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
     'X-Robots-Tag': index ? 'index, follow' : 'noindex, nofollow',
-    'Content-Security-Policy': "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'none'",
+    'Content-Security-Policy': `default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action '${formAction}'`,
   } })
   return secureResponse(request, response)
 }
-function document(title: string, description: string, canonical: string, body: string, brand: string) {
-  return `<!doctype html><html lang="zh-CN" data-public-document><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title><meta name="description" content="${escape(description)}"><meta name="robots" content="index, follow"><link rel="canonical" href="${escape(canonical)}"><link rel="icon" href="/brands/shop.svg"><link rel="stylesheet" href="/public-content.css"></head><body><header class="public-document-header"><a href="/">${escape(brand)}</a><nav aria-label="页面导航"><a href="/help/">帮助中心</a><a href="/orders">我的订单</a></nav></header><main class="public-document">${body}</main><footer class="public-document-footer">${escape(brand)} · 独立服务商</footer></body></html>`
+function document(title: string, description: string, canonical: string, body: string, brand: string, index: boolean) {
+  return `<!doctype html><html lang="zh-CN" data-public-document><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title><meta name="description" content="${escape(description)}"><meta name="robots" content="${index ? 'index, follow' : 'noindex, nofollow'}"><link rel="canonical" href="${escape(canonical)}"><link rel="icon" href="/brands/shop.svg"><link rel="stylesheet" href="/public-content.css"></head><body><header class="public-document-header"><a class="public-store-back" href="/"><span aria-hidden="true">‹</span>返回商店</a><nav aria-label="页面导航"><a href="/orders">我的订单</a></nav></header><main class="public-document">${body}</main>${brand ? `<footer class="public-document-footer">${escape(brand)} · 独立服务商</footer>` : ''}</body></html>`
 }
 function notFound(request: Request) {
   return htmlResponse(request, '<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="robots" content="noindex, nofollow"><title>页面不存在</title></head><body><main><h1>页面不存在</h1><p>商品可能已下架，或链接有误。</p><a href="/">返回商店</a> <a href="/orders">查询已有订单</a></main></body></html>', 404, false)
@@ -142,12 +153,15 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   if (!validRoute) return notFound(request)
   if (isHelp) {
     const cached = cachedCatalog(env, origin)
-    const brand = cached?.platformBranding?.name || '商店'
+    const brand = cached?.platformBranding?.name ?? ''
     const products = cached ? publicProducts(cached) : []
     const canonicalPath = article ? '/help/' + article.slug : '/help/'
     if (path !== canonicalPath) return secureResponse(request, new Response(null, { status: 308, headers: { Location: canonicalPath + url.search, 'Cache-Control': 'no-store' } }))
-    const body = article ? `<nav aria-label="当前位置"><a href="/help/">帮助中心</a></nav><h1>${escape(article.title)}</h1><p class="public-answer">${escape(article.answer)}</p><p class="public-date">内容核对日期：<time datetime="${publicHelpUpdated}">${publicHelpUpdated}</time> · ${escape(brand)} 服务说明</p>${article.sections.map(s => `<section><h2>${escape(s.title)}</h2>${s.paragraphs.map(p => `<p>${escape(p)}</p>`).join('')}</section>`).join('')}${article.related && products.some(p => p.path === article.related) ? `<p><a href="${article.related}">查看对应商品与现有教程</a></p>` : ''}<p><a href="/orders">查看或找回订单</a></p><aside><h2>其他购买问题</h2><ul>${helpLinks()}</ul></aside>` : helpCenter()
-    return htmlResponse(request, document(article ? article.title + ' · ' + brand : '帮助中心 · ' + brand, article?.answer ?? '商品选择、付款后操作、订单找回及售后说明。', origin + canonicalPath, body, brand))
+    const query = article ? '' : (url.searchParams.get('q') ?? '').trim().slice(0, 120)
+    const index = !query
+    const body = article ? `<nav aria-label="当前位置"><a href="/help/">帮助中心</a></nav><h1>${escape(article.title)}</h1><p class="public-answer">${escape(article.answer)}</p><p class="public-date">内容核对日期：<time datetime="${publicHelpUpdated}">${publicHelpUpdated}</time> · ${escape(brand || '本站')} 服务说明</p>${article.sections.map(s => `<section><h2>${escape(s.title)}</h2>${s.paragraphs.map(p => `<p>${escape(p)}</p>`).join('')}</section>`).join('')}${article.related && products.some(p => p.path === article.related) ? `<p><a href="${article.related}">查看对应商品与现有教程</a></p>` : ''}<p><a href="/orders">查看或找回订单</a></p><aside><h2>其他购买问题</h2><ul>${helpLinks()}</ul></aside>` : helpCenter(query)
+    const title = article?.title ?? '帮助中心'
+    return htmlResponse(request, document(brand ? title + ' · ' + brand : title, article?.answer ?? '商品选择、付款后操作、订单找回及售后说明。', origin + canonicalPath, body, brand, index), 200, index)
   }
   const { catalog, fetchedAt, fresh } = await publicCatalog(env, origin)
   const branding = catalog.platformBranding!, products = publicProducts(catalog)
