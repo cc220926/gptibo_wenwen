@@ -145,8 +145,8 @@ test('related questions reuse help-center rows and only link to other articles i
   const html = await (await s.get('/help/recharge-or-account')).text()
   const related = html.match(/<section class="help-topic" aria-labelledby="related-help-title"[^>]*>([^]*?)<\/section>/)?.[1]
   assert.ok(related)
-  assert.deepEqual([...related.matchAll(/<a href="([^"]+)">/g)].map(match => match[1]), ['/help/codex-credits', '/help/renewal-before-expiry'])
-  assert.equal((related.match(/aria-hidden="true">›<\/span>/g) ?? []).length, 2)
+  assert.deepEqual([...related.matchAll(/<a href="([^"]+)">/g)].map(match => match[1]), ['/help/codex-credits', '/help/open-plus-in-china', '/help/plus-vs-pro', '/help/renewal-before-expiry'])
+  assert.equal((related.match(/aria-hidden="true">›<\/span>/g) ?? []).length, 4)
 })
 
 test('every help article has category navigation, reading time and existing order support', async t => {
@@ -334,4 +334,50 @@ test('a stalled public catalog falls back within its deadline while buyer initia
   assert.equal(response.status, 200)
   assert.match(response.headers.get('X-Robots-Tag')!, /noindex/)
   assert.equal(await response.text(), template.replace('<html', `<html data-public-help="true" data-public-origin="${origin}"`))
+})
+
+const jsonLd = (html: string) => [...html.matchAll(/<script type="application\/ld\+json">([^]*?)<\/script>/g)].map(match => JSON.parse(match[1]))
+
+test('public pages carry structured data and share tags without ratings', async t => {
+  const s = await fixture(); t.after(() => s.db.close())
+  s.db.prepare("UPDATE catalog_plans SET price_cents=12345 WHERE id='plus'").run()
+  const home = await (await s.get('/')).text()
+  assert.deepEqual(jsonLd(home).map(item => item['@type']), ['Organization', 'WebSite'])
+  assert.match(home, /<meta property="og:url" content="https:\/\/shop\.example\.invalid\/">/)
+  const productHtml = await (await s.get('/product/chatgpt')).text()
+  assert.match(productHtml, /<title>ChatGPT Plus \/ Pro 代充 · 支付宝付款 · /)
+  const product = jsonLd(productHtml).find(item => item['@type'] === 'Product')
+  assert.ok(product)
+  assert.ok(product.offers.some((offer: { name: string; price: string; priceCurrency: string }) => offer.name === 'Plus' && offer.price === '123.45' && offer.priceCurrency === 'CNY'))
+  const article = await (await s.get('/help/plus-vs-pro')).text()
+  assert.deepEqual(jsonLd(article).map(item => item['@type']), ['FAQPage', 'BreadcrumbList'])
+  for (const html of [home, productHtml, article]) assert.doesNotMatch(html, /aggregateRating|ratingValue|"review"/i)
+})
+
+test('structured data cannot be closed by catalog text', async t => {
+  const s = await fixture(); t.after(() => s.db.close())
+  s.db.prepare("UPDATE platform_branding SET name='A</script><b>x' WHERE id=1").run()
+  const html = await (await s.get('/')).text()
+  for (const block of html.matchAll(/<script type="application\/ld\+json">([^]*?)<\/script>/g)) assert.doesNotMatch(block[1], /</)
+  assert.equal(jsonLd(html)[0].name, 'A</script><b>x')
+})
+
+test('llms.txt summarises live prices, help pages and the service boundary', async t => {
+  const s = await fixture(); t.after(() => s.db.close())
+  s.db.prepare("UPDATE catalog_plans SET price_cents=12345 WHERE id='plus'").run()
+  const response = await s.get('/llms.txt')
+  assert.equal(response.status, 200)
+  assert.match(response.headers.get('Content-Type')!, /text\/plain/)
+  const text = await response.text()
+  assert.match(text, /ChatGPT Plus：¥123\.45/)
+  assert.match(text, /与 OpenAI 没有授权/)
+  assert.match(text, /\/help\/invoice/)
+  assert.doesNotMatch(text, /\/orders|\/admin|\/api\//)
+  assert.doesNotMatch(await (await s.get('/r/ABC123/llms.txt')).text(), /与 OpenAI 没有授权/)
+})
+
+test('sitemap dates help articles and lists the new guides', async t => {
+  const s = await fixture(); t.after(() => s.db.close())
+  const xml = await (await s.get('/sitemap.xml')).text()
+  for (const slug of ['open-plus-in-china', 'plus-vs-pro', 'is-it-safe', 'invoice']) assert.match(xml, new RegExp(`/help/${slug}</loc><lastmod>\\d{4}-\\d{2}-\\d{2}</lastmod>`))
 })

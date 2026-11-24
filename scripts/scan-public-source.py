@@ -23,6 +23,8 @@ PUBLIC_HOSTS = {
     'github.com', 'raw.githubusercontent.com', 'registry.npmjs.org',
     # XML sitemap namespace, not an outbound service integration.
     'www.sitemaps.org',
+    # JSON-LD vocabulary identifier in public HTML, never fetched by the Worker.
+    'schema.org',
     'www.w3.org', 'www.apache.org', 'ui.shadcn.com', 'transitions.dev', 'vite.dev',
     'www.duolingo.com', 'www.duolingo.cn', 'd35aaqx5ub95lt.cloudfront.net',
 }

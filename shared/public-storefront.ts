@@ -38,11 +38,18 @@ export function publicProducts(catalog: PublicCatalog): PublicProduct[] {
   }
   return [...groups.values()]
 }
+// Search-facing titles for the main store; the storefront name stays unchanged.
+const productTitles: Record<string, string> = {
+  chatgpt: 'ChatGPT Plus / Pro 代充 · 支付宝付款',
+  'codex-credits': 'Codex 点数充值 · 250 / 500 点',
+  'codex-sms': 'Codex 接码 CDK',
+}
+export function publicProductTitle(product: PublicProduct, brand: string) { return (productTitles[product.id] ?? product.name) + ' · ' + brand }
 export function publicPrice(cents: number) { return (cents / 100).toFixed(cents % 100 ? 2 : 0) }
 
 export function publicPageMetadata(page: string, catalog: PublicCatalog, homeTitle: string, homeDescription: string) {
   const brand = catalog.platformBranding?.name || '商店'
   if (page === 'store') return { title: homeTitle, description: homeDescription, path: '/' }
   const product = publicProducts(catalog).find(p => 'product/' + p.path.slice('/product/'.length) === page)
-  return product ? { title: product.name + ' · ' + brand, description: product.description, path: product.path } : null
+  return product ? { title: publicProductTitle(product, brand), description: product.description, path: product.path } : null
 }

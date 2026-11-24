@@ -11,7 +11,7 @@ export type HelpParagraph = string | (string | { code: string })[]
 export type PublicArticle = { slug: string; category: PublicHelpCategory; title: string; answer: string; keywords?: string; sections: { title: string; paragraphs: HelpParagraph[] }[]; related?: string }
 // Operational guidance is checked against this repository's storefront and order UI.
 // No promises of supplier entitlement, delivery time, refund outcome or invented reviews.
-export const publicHelpUpdated = '2026-11-22'
+export const publicHelpUpdated = '2026-11-24'
 export const publicArticles: readonly PublicArticle[] = [
   {
     slug: 'recharge-or-account', category: 'buying', title: 'ChatGPT 充值和成品账号有什么区别？',
@@ -54,9 +54,48 @@ export const publicArticles: readonly PublicArticle[] = [
     slug: 'after-sales', category: 'support', title: '如何申请售后，退款范围如何确认？',
     answer: '先查看所购商品的购买须知，再从原订单查看或申请售后。商品是否支持售后、可申请金额和处理方式以订单页面为准，提交申请不等于退款已经完成。',
     sections: [
-      { title: '从原订单处理', paragraphs: ['在“我的订单”打开对应订单，查看可用的售后入口和当前进度。如果商品已明确说明不支持售后质保，订单会显示相应提示。'] },
-      { title: '金额和进度以订单为准', paragraphs: ['订单会根据实际情况显示可申请金额、审核或自动处理状态。不要将“可申请”理解为所有情况都能无条件退款，也不要将提交时间当作到账承诺。'] },
+      { title: '从原订单处理', paragraphs: ['在”我的订单”打开对应订单，查看可用的售后入口和当前进度。如果商品已明确说明不支持售后质保，订单会显示相应提示。'] },
+      { title: '金额和进度以订单为准', paragraphs: ['订单会根据实际情况显示可申请金额、审核或自动处理状态。不要将”可申请”理解为所有情况都能无条件退款，也不要将提交时间当作到账承诺。'] },
+      { title: 'ChatGPT 订阅的质保范围', paragraphs: ['ChatGPT Plus 和 Pro 订阅享有 30 天质保，从订单显示充值成功时起算。30 天内因非用户原因导致订阅中断，可从原订单联系支持处理。多人共享、反向代理、违规使用和主动拒付属于用户原因，不在质保范围内。质保订阅本身，不质保封号。'] },
       { title: '说明问题时保护凭据', paragraphs: ['填写发生的问题及必要截图，不填写账号密码、Session、邮箱验证码或完整卡密。申请后的服务状态和后续操作以原订单提示为准。'] },
+    ],
+  },
+  {
+    slug: 'open-plus-in-china', category: 'buying', title: '国内怎么开通 ChatGPT Plus？不用信用卡可以吗？',
+    answer: '可以。在本站用支付宝付款，Plus 会员开在你自己的 ChatGPT 账号上，不需要海外信用卡，也不需要把账号密码交给任何人。Plus 每月 ¥138。',
+    keywords: '国内开通 没有信用卡 支付宝 国内怎么买 Plus 国内订阅 大陆购买',
+    sections: [
+      { title: '为什么自己开通比较难', paragraphs: ['ChatGPT Plus 官方价格为每月 20 美元，只能用海外信用卡、Apple 或 Google Play 付款，不支持支付宝和微信。国内发行的银行卡经常被拒。'] },
+      { title: '在本站开通的步骤', paragraphs: ['1. 在 ChatGPT 商品页选择 Plus，核对购买须知，填写可以正常收信的邮箱，用支付宝付款。', '2. 付款后回到原订单，按页面指引获取并提交要充值账号的完整 Session。不需要提供密码或短信验证码。', '3. 在原订单查看进度。显示完成后，刷新 ChatGPT 即可看到 Plus 会员。多数订单 3 分钟内完成。'] },
+      { title: '下单前确认', paragraphs: ['如果账号当前还有未到期的订阅，充值可能失败，原订单会提示”当前订阅尚未到期”。请先在 ChatGPT 的”设置 → 我的套餐”里查看当前套餐和到期时间。还没有 ChatGPT 账号的，可以先在 chatgpt.com 免费注册。'] },
+    ], related: '/product/chatgpt',
+  },
+  {
+    slug: 'plus-vs-pro', category: 'buying', title: 'ChatGPT Plus 和 Pro 有什么区别，该怎么选？',
+    answer: '日常写作、学习和偶尔写代码，选 Plus 就够。每天大量使用 Codex、深度研究，或者 Plus 额度经常用完，再考虑 Pro。',
+    keywords: 'Plus Pro 区别 Pro 100 Pro 200 Pro 500 5x 10x 20x 25x 额度 价格',
+    sections: [
+      { title: '本站套餐与官方档位', paragraphs: ['Plus 对应官方 Plus（$20/月），本站 ¥138。Pro 有三档：Pro 5× 对应 Pro 100（$100/月），本站 ¥699；Pro 10× 对应 Pro 200（$200/月），本站 ¥1350；Pro 25× 对应 Pro 500（$500/月），本站 ¥3500。'] },
+      { title: '官方说明的主要区别', paragraphs: ['根据 OpenAI 定价页和帮助中心：Pro 包含 Plus 的全部功能，另外提供 GPT-6 Astra 专业推理、更长的 Codex 和”ChatGPT 工作”会话、更大的上下文窗口（推理模型 400K，Plus 是 256K），以及每月 API 额度。三档 Pro 中，Pro 200 的用量比 Pro 100 多，Pro 500 最多，并且只有 Pro 500 包含 Ultrafast 模式。Pro 只能按月订阅，官方没有年付。', '各档的具体额度由 OpenAI 决定，并且会调整。本站不承诺具体倍数，以 chatgpt.com/pricing 和 OpenAI 帮助中心为准。'] },
+    ], related: '/product/chatgpt',
+  },
+  {
+    slug: 'is-it-safe', category: 'account', title: '在本站充值安全吗？会不会封号？',
+    answer: '会员开在你自己的账号上，本站不需要你的密码。充值只是换了一种付款方式，不会改变 OpenAI 的使用规则，所以没有平台能保证”永不封号”。',
+    keywords: '安全 封号 代充安全吗 密码 风险 会不会被封',
+    sections: [
+      { title: '本站怎么保护你的账号', paragraphs: ['下单和充值都不需要 ChatGPT 密码或短信验证码。需要提交 Session 的套餐，只在原订单的账号连接步骤提交，不要发给任何私信联系你的人。Session 是临时登录凭证，在 chatgpt.com 退出登录后会失效。'] },
+      { title: '哪些行为容易触发风控', paragraphs: ['OpenAI 的使用条款禁止共享账号、转售访问权限和自动抓取数据。多人共用一个账号、频繁切换登录地区、使用反向代理，都更容易被限制。正常一个人使用自己的账号，风险相对较低。'] },
+      { title: '出了问题怎么办', paragraphs: ['ChatGPT Plus 和 Pro 订阅享有 30 天质保，从订单显示充值成功时起算。30 天内因非用户原因导致订阅中断，可从原订单联系支持处理。多人共享、反向代理、违规使用和主动拒付属于用户原因，不在质保范围内。质保订阅本身，不质保封号。', '本站是独立服务商，与 OpenAI 没有授权、代理或合作关系。'] },
+    ],
+  },
+  {
+    slug: 'invoice', category: 'order', title: '可以开发票吗？公司能报销吗？',
+    answer: '可以。本站可开增值税普通发票。需要开票请在付款后从原订单联系客服，提供订单号、发票抬头和税号。',
+    keywords: '发票 报销 增值税普通发票 开票 公司 抬头 税号',
+    sections: [
+      { title: '如何申请发票', paragraphs: ['在”我的订单”打开已付款的订单，点击”联系客服”，说明需要开具发票，并提供发票抬头（个人或企业名称）和纳税人识别号。客服确认后会将电子发票发送到下单邮箱。'] },
+      { title: '开票时间', paragraphs: ['提交开票申请后，客服会在工作时间内处理。具体时长以实际处理进度为准，可在原订单跟进。'] },
     ],
   },
   {
@@ -112,10 +151,10 @@ export const publicArticles: readonly PublicArticle[] = [
   },
   {
     slug: 'recharge-in-progress', category: 'activation', title: '订单显示充值中，还要等多久？',
-    answer: '打开原订单查看最新进度。不同套餐和处理状态的用时可能不同，以商品说明和订单状态为准。',
+    answer: '打开原订单查看最新进度。多数订单 3 分钟内完成，不同套餐和处理状态的用时可能不同，以商品说明和订单状态为准。',
     keywords: '到账时间 什么时候到账 刷新进度 等多久 转圈 提交待确认 超时',
     sections: [
-      { title: '看订单上显示的进度', paragraphs: ['如果页面提示先连接账号，请按订单指引提交。已经提交、页面显示「正在充值」时，可以稍后回原订单查看。'] },
+      { title: '看订单上显示的进度', paragraphs: ['如果页面提示先连接账号，请按订单指引提交。已经提交、页面显示「正在充值」时，可以稍后回原订单查看。多数订单 3 分钟内完成。'] },
       { title: '页面提示提交待确认', paragraphs: ['先点「刷新进度」，并按订单提示核对这一次提交。仍有疑问时，带订单号联系支持。'] },
     ],
   },

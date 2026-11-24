@@ -58,7 +58,7 @@ test('public model matches SMS replacement, service aliases, visibility, removal
 test('metadata is page specific; orders, hidden products and unknown routes cannot inherit public canonical', () => {
   const catalog = { plans: [offer()], platformBranding: { name: '测试店', pageTitle: '', headline: '', description: '' } }
   assert.deepEqual(publicPageMetadata('store', catalog, '首页标题', '首页说明'), { title: '首页标题', description: '首页说明', path: '/' })
-  assert.equal(publicPageMetadata('product/chatgpt', catalog, '', '')?.title, 'ChatGPT · 测试店')
+  assert.equal(publicPageMetadata('product/chatgpt', catalog, '', '')?.title, 'ChatGPT Plus / Pro 代充 · 支付宝付款 · 测试店')
   for (const page of ['orders', 'product/missing', 'admin', 'partner']) assert.equal(publicPageMetadata(page, catalog, '', ''), null)
   assert.equal(publicPageMetadata('product/chatgpt', { ...catalog, hiddenProductIds: ['chatgpt'] }, '', ''), null)
 })

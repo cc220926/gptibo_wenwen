@@ -6,11 +6,75 @@ import { ApiError } from './platform.ts'
 import { partnerCatalog, resolvePartner } from './partners.ts'
 import { platformProductVisibility } from './platform-product-visibility.ts'
 import { referralCodePattern } from '../shared/partner-link.ts'
-import { publicProducts, type PublicCatalog } from '../shared/public-storefront.ts'
+import { publicPrice, publicProductTitle, publicProducts, type PublicCatalog, type PublicProduct } from '../shared/public-storefront.ts'
 import { publicArticles, publicHelpCategories, publicHelpUpdated, type HelpParagraph, type PublicArticle } from '../shared/public-help.ts'
 
 export type SeoEnv = Env & { STOREFRONT_SEO_ORIGIN?: string; SEO_CATALOG_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> } }
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
+
+type StructuredData = { jsonLd: string; ogTags: string }
+// JSON-LD inside <script>: escape "<" so catalog text can never close the element.
+const ld = (...items: object[]) => items.map(item => `<script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', ...item }).replace(/</g, '\\u003c')}</script>`).join('')
+const og = (type: string, url: string, title: string, description: string, site: string) =>
+  `<meta property="og:type" content="${type}"><meta property="og:url" content="${escape(url)}"><meta property="og:title" content="${escape(title)}"><meta property="og:description" content="${escape(description)}">${site ? `<meta property="og:site_name" content="${escape(site)}">` : ''}<meta property="og:locale" content="zh_CN"><meta name="twitter:card" content="summary">`
+function structuredDataForHome(origin: string, brand: string, title: string, description: string): StructuredData {
+  return {
+    jsonLd: ld({ '@type': 'Organization', name: brand, url: origin + '/', description }, { '@type': 'WebSite', name: brand, url: origin + '/', inLanguage: 'zh-CN' }),
+    ogTags: og('website', origin + '/', title, description, brand),
+  }
+}
+// Only offers currently purchasable on the storefront; no ratings or reviews.
+function structuredDataForProduct(origin: string, brand: string, product: PublicProduct, title: string): StructuredData {
+  const url = origin + product.path
+  const offers = product.offers.filter(offer => offer.enabled).map(offer => ({ '@type': 'Offer', name: offer.name, price: publicPrice(offer.price_cents), priceCurrency: 'CNY', availability: 'https://schema.org/InStock', url }))
+  const breadcrumb = { '@type': 'BreadcrumbList', itemListElement: [{ '@type': 'ListItem', position: 1, name: brand, item: origin + '/' }, { '@type': 'ListItem', position: 2, name: product.name, item: url }] }
+  const items: object[] = [breadcrumb]
+  if (offers.length) items.unshift({ '@type': 'Product', name: product.name, description: product.description, url, brand: { '@type': 'Brand', name: brand }, offers })
+  return { jsonLd: ld(...items), ogTags: og('product', url, title, product.description, brand) }
+}
+function structuredDataForHelpArticle(origin: string, brand: string, article: PublicArticle): StructuredData {
+  const url = origin + '/help/' + article.slug
+  const category = publicHelpCategories.find(group => group.id === article.category)!
+  return {
+    jsonLd: ld(
+      { '@type': 'FAQPage', mainEntity: [{ '@type': 'Question', name: article.title, acceptedAnswer: { '@type': 'Answer', text: article.answer } }] },
+      { '@type': 'BreadcrumbList', itemListElement: [
+        { '@type': 'ListItem', position: 1, name: '帮助中心', item: origin + '/help/' },
+        { '@type': 'ListItem', position: 2, name: category.title, item: origin + '/help/#help-' + category.id },
+        { '@type': 'ListItem', position: 3, name: article.title, item: url },
+      ] },
+    ),
+    ogTags: og('article', url, brand ? article.title + ' · ' + brand : article.title, article.answer, brand),
+  }
+}
+// Plain-text summary for AI search engines, generated from the live catalog.
+function llmsText(origin: string, catalog: PublicCatalog, products: PublicProduct[]) {
+  const brand = catalog.platformBranding?.name || '商店'
+  const lines = products.flatMap(product => product.offers.filter(offer => offer.enabled).map(offer => `- ${product.name} ${offer.name}：¥${publicPrice(offer.price_cents)}`))
+  return `# ${brand}（${new URL(origin).host}）
+
+> ${[catalog.platformBranding?.description, '本站是独立服务商，与 OpenAI 没有授权、代理或合作关系。'].filter(Boolean).join(' ')}
+
+## 商品与价格（人民币，实时）
+
+${lines.join('\n')}
+
+ChatGPT Pro 档位对应：Pro 5× = 官方 Pro 100，Pro 10× = 官方 Pro 200，Pro 25× = 官方 Pro 500。
+
+## 购买与售后
+
+- ChatGPT 订阅充到用户自己的账号。付款后在原订单提交要充值账号的 Session，不需要密码或短信验证码。多数订单 3 分钟内完成。
+- 账号当前有未到期订阅时可能无法充值。
+- ChatGPT Plus / Pro 订阅质保 30 天，从订单显示充值成功时起算；质保订阅，不质保封号。多人共享、反向代理、违规使用和主动拒付不在质保范围内。
+- 可开增值税普通发票。
+
+## 常用页面
+
+${products.map(product => `- [${product.name}](${origin}${product.path})`).join('\n')}
+${publicArticles.map(article => `- [${article.title}](${origin}/help/${article.slug})`).join('\n')}
+`
+}
+
 export function seoOrigin(value?: string) {
   if (!value) return null
   try {
@@ -197,8 +261,9 @@ function htmlResponse(request: Request, body: string, status = 200, index = true
   } })
   return secureResponse(request, response)
 }
-function document(title: string, description: string, canonical: string, body: string, brand: string, index: boolean, articleLayout: boolean, base: string) {
-  return `<!doctype html><html lang="zh-CN" data-public-document><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title><meta name="description" content="${escape(description)}"><meta name="robots" content="${index ? 'index, follow' : 'noindex, nofollow'}">${base ? '' : `<link rel="canonical" href="${escape(canonical)}">`}<link rel="icon" href="/brands/shop.svg"><link rel="stylesheet" href="/help-center-v2.css">${articleLayout ? '<link rel="stylesheet" href="/help-article-v2.css">' : ''}</head><body><header class="public-document-header"><a class="public-store-back" href="${base || '/'}"><span aria-hidden="true">‹</span>返回商店</a><nav aria-label="页面导航"><a href="${base}/orders">我的订单</a></nav></header><main class="public-document">${body}</main>${brand ? `<footer class="public-document-footer">${escape(brand)} · 独立服务商</footer>` : ''}</body></html>`
+function document(title: string, description: string, canonical: string, body: string, brand: string, index: boolean, articleLayout: boolean, base: string, structuredData?: StructuredData) {
+  const structured = structuredData ? structuredData.jsonLd + structuredData.ogTags : ''
+  return `<!doctype html><html lang="zh-CN" data-public-document><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title><meta name="description" content="${escape(description)}"><meta name="robots" content="${index ? 'index, follow' : 'noindex, nofollow'}">${base ? '' : `<link rel="canonical" href="${escape(canonical)}">`}${structured}<link rel="icon" href="/brands/shop.svg"><link rel="stylesheet" href="/help-center-v2.css">${articleLayout ? '<link rel="stylesheet" href="/help-article-v2.css">' : ''}</head><body><header class="public-document-header"><a class="public-store-back" href="${base || '/'}"><span aria-hidden="true">‹</span>返回商店</a><nav aria-label="页面导航"><a href="${base}/orders">我的订单</a></nav></header><main class="public-document">${body}</main>${brand ? `<footer class="public-document-footer">${escape(brand)} · 独立服务商</footer>` : ''}</body></html>`
 }
 function notFound(request: Request, base = '') {
   return htmlResponse(request, `<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="robots" content="noindex, nofollow"><title>页面不存在</title></head><body><main><h1>页面不存在</h1><p>商品可能已下架，或链接有误。</p><a href="${base || '/'}">返回商店</a> <a href="${base}/orders">查询已有订单</a></main></body></html>`, 404, false)
@@ -215,6 +280,17 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   if (path === '/robots.txt') {
     const body = `User-agent: GPTBot\nDisallow: /\n\nUser-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /admin\nDisallow: /orders\nDisallow: /partner\nDisallow: /join\nDisallow: /r/\nDisallow: /s/\nDisallow: /__preview/\n\nSitemap: ${origin}/sitemap.xml\n`
     return secureResponse(request, new Response(request.method === 'HEAD' ? null : body, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } }))
+  }
+  if (path === '/llms.txt') {
+    if (scope) return notFound(request, base)
+    let text: string
+    try {
+      const { catalog } = await publicCatalog(env, origin)
+      text = llmsText(origin, catalog, publicProducts(catalog))
+    } catch {
+      return secureResponse(request, new Response('Temporarily unavailable', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'Retry-After': '30' } }))
+    }
+    return secureResponse(request, new Response(request.method === 'HEAD' ? null : text, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } }))
   }
   if (path !== '/sitemap.xml' && path !== '/index.html' && assetPath(path)) return null
   const isHelp = path === '/help' || path.startsWith('/help/')
@@ -252,7 +328,8 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
     }
     const body = article ? helpArticle(article, base, productHref) : helpCenter(query, base)
     const title = article?.title ?? '帮助中心'
-    return htmlResponse(request, document(brand ? title + ' · ' + brand : title, article?.answer ?? '商品选择、付款后操作、订单找回及售后说明。', origin + canonicalPath, body, brand, index, Boolean(article), base), 200, index)
+    const structured = article && !scope ? structuredDataForHelpArticle(origin, brand, article) : undefined
+    return htmlResponse(request, document(brand ? title + ' · ' + brand : title, article?.answer ?? '商品选择、付款后操作、订单找回及售后说明。', origin + canonicalPath, body, brand, index, Boolean(article), base, structured), 200, index)
   }
   const { catalog, fetchedAt, fresh } = await publicCatalog(env, origin)
   const branding = catalog.platformBranding!, products = publicProducts(catalog)
@@ -271,11 +348,15 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   if (path !== canonicalPath) return secureResponse(request, new Response(null, { status: 308, headers: { Location: canonicalPath + url.search, 'Cache-Control': 'no-store' } }))
   if (path === '/sitemap.xml') {
     const paths = ['/', ...products.map(p => p.path), '/help/', ...publicArticles.map(a => '/help/' + a.slug)]
-    const xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + paths.map(p => `<url><loc>${escape(origin + p)}</loc></url>`).join('') + '</urlset>'
+    const xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + paths.map(p => {
+      const lastmod = p.startsWith('/help/') ? `<lastmod>${publicHelpUpdated}</lastmod>` : ''
+      return `<url><loc>${escape(origin + p)}</loc>${lastmod}</url>`
+    }).join('') + '</urlset>'
     return secureResponse(request, new Response(request.method === 'HEAD' ? null : xml, { headers: { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'no-store' } }))
   }
-  const title = product ? product.name + ' · ' + brand : branding.pageTitle || brand
+  const title = product ? publicProductTitle(product, brand) : branding.pageTitle || brand
   const description = product?.description ?? branding.description
+  const structuredData = product ? structuredDataForProduct(origin, brand, product, title) : structuredDataForHome(origin, brand, title, description)
   const bootstrap = fresh ? `<script id="storefront-public-catalog" type="application/json">${serializePublicBootstrap(catalog, origin, fetchedAt)}</script>` : ''
   const asset = await env.ASSETS.fetch(new Request(origin + '/', { method: 'GET' }))
   if (!asset.ok) throw new Error('Storefront asset unavailable')
@@ -285,7 +366,7 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
     .replace(/<title>[^]*?<\/title>/, () => `<title>${escape(title)}</title>`)
     .replace(/<meta name="description"[^>]*>/, () => `<meta name="description" content="${escape(description)}">`)
     .replace(/<meta name="robots"[^>]*>/, '<meta name="robots" content="index, follow">')
-    .replace('</head>', () => `<link rel="canonical" href="${escape(origin + canonicalPath)}"><link rel="stylesheet" href="/storefront-startup.css">${bootstrap}</head>`)
+    .replace('</head>', () => `<link rel="canonical" href="${escape(origin + canonicalPath)}">${structuredData ? structuredData.jsonLd + structuredData.ogTags : ''}<link rel="stylesheet" href="/storefront-startup.css">${bootstrap}</head>`)
     .replace('<div id="root"></div>', () => `<div id="root">${startupShell(brand)}</div>`)
   return htmlResponse(request, html)
 }
