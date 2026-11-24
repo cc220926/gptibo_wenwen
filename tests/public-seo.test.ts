@@ -381,3 +381,13 @@ test('sitemap dates help articles and lists the new guides', async t => {
   const xml = await (await s.get('/sitemap.xml')).text()
   for (const slug of ['open-plus-in-china', 'plus-vs-pro', 'is-it-safe', 'invoice']) assert.match(xml, new RegExp(`/help/${slug}</loc><lastmod>\\d{4}-\\d{2}-\\d{2}</lastmod>`))
 })
+
+test('product offers are withheld from structured data while checkout is closed', async t => {
+  const s = await fixture(); t.after(() => s.db.close())
+  for (const key of ['ORDER_TESTING_ENABLED', 'PAYMENT_CHECKOUT_ENABLED', 'EMAIL_PRODUCTS_ENABLED', 'XGIFT_CHECKOUT_ENABLED', 'RECHARGE_CHECKOUT_ENABLED']) (s.env as Record<string, unknown>)[key] = 'false'
+  const html = await (await s.get('/product/chatgpt')).text()
+  const catalog = bootstrap(html)
+  assert.equal(catalog.checkoutEnabled, false, 'fixture must close checkout')
+  assert.equal(jsonLd(html).some(item => item['@type'] === 'Product'), false)
+  assert.ok(jsonLd(html).some(item => item['@type'] === 'BreadcrumbList'))
+})

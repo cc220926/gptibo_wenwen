@@ -24,9 +24,9 @@ function structuredDataForHome(origin: string, brand: string, title: string, des
   }
 }
 // Only offers currently purchasable on the storefront; no ratings or reviews.
-function structuredDataForProduct(origin: string, brand: string, product: PublicProduct, title: string): StructuredData {
+function structuredDataForProduct(origin: string, brand: string, product: PublicProduct, title: string, purchasable: boolean): StructuredData {
   const url = origin + product.path
-  const offers = product.offers.filter(offer => offer.enabled).map(offer => ({ '@type': 'Offer', name: offer.name, price: publicPrice(offer.price_cents), priceCurrency: 'CNY', availability: 'https://schema.org/InStock', url }))
+  const offers = purchasable ? product.offers.filter(offer => offer.enabled).map(offer => ({ '@type': 'Offer', name: offer.name, price: publicPrice(offer.price_cents), priceCurrency: 'CNY', availability: 'https://schema.org/InStock', url })) : []
   const breadcrumb = { '@type': 'BreadcrumbList', itemListElement: [{ '@type': 'ListItem', position: 1, name: brand, item: origin + '/' }, { '@type': 'ListItem', position: 2, name: product.name, item: url }] }
   const items: object[] = [breadcrumb]
   if (offers.length) items.unshift({ '@type': 'Product', name: product.name, description: product.description, url, brand: { '@type': 'Brand', name: brand }, offers })
@@ -65,8 +65,8 @@ ChatGPT Pro 档位对应：Pro 5× = 官方 Pro 100，Pro 10× = 官方 Pro 200�
 
 - ChatGPT 订阅充到用户自己的账号。付款后在原订单提交要充值账号的 Session，不需要密码或短信验证码。多数订单 3 分钟内完成。
 - 账号当前有未到期订阅时可能无法充值。
-- ChatGPT Plus / Pro 订阅质保 30 天，从订单显示充值成功时起算；质保订阅，不质保封号。多人共享、反向代理、违规使用和主动拒付不在质保范围内。
-- 可开增值税普通发票。
+- 充值到自己账号的 ChatGPT Plus / Pro 订阅质保 30 天，从订单显示充值成功时起算；质保订阅，不质保封号。多人共享、反向代理、违规使用和主动拒付不在质保范围内。
+- 可开增值税普通发票，从原订单联系客服申请。
 
 ## 常用页面
 
@@ -282,7 +282,6 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
     return secureResponse(request, new Response(request.method === 'HEAD' ? null : body, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } }))
   }
   if (path === '/llms.txt') {
-    if (scope) return notFound(request, base)
     let text: string
     try {
       const { catalog } = await publicCatalog(env, origin)
@@ -356,7 +355,7 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   }
   const title = product ? publicProductTitle(product, brand) : branding.pageTitle || brand
   const description = product?.description ?? branding.description
-  const structuredData = product ? structuredDataForProduct(origin, brand, product, title) : structuredDataForHome(origin, brand, title, description)
+  const structuredData = product ? structuredDataForProduct(origin, brand, product, title, (catalog as { checkoutEnabled?: boolean }).checkoutEnabled !== false) : structuredDataForHome(origin, brand, title, description)
   const bootstrap = fresh ? `<script id="storefront-public-catalog" type="application/json">${serializePublicBootstrap(catalog, origin, fetchedAt)}</script>` : ''
   const asset = await env.ASSETS.fetch(new Request(origin + '/', { method: 'GET' }))
   if (!asset.ok) throw new Error('Storefront asset unavailable')
