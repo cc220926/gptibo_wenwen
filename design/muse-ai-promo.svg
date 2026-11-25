@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1200" height="900" viewBox="0 0 1200 900" role="img" aria-labelledby="title description" xml:lang="zh-CN">
+  <title id="title">小怪兽 · Muse AI 成品账号</title>
+  <desc id="description">深蓝色商品宣传图。蓝色光笔绘出创作符号，宣传 Muse AI 10 亿规格、独立账号和原订单领取。</desc>
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#0A1323"/>
+      <stop offset="1" stop-color="#090C18"/>
+    </linearGradient>
+    <radialGradient id="wash" cx="70%" cy="45%" r="58%">
+      <stop stop-color="#243976" stop-opacity=".66"/>
+      <stop offset="1" stop-color="#0B1120" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="disc" cx="37%" cy="25%" r="77%">
+      <stop stop-color="#253E86"/>
+      <stop offset=".67" stop-color="#101C40"/>
+      <stop offset="1" stop-color="#0E1530"/>
+    </radialGradient>
+    <linearGradient id="rim" x1=".16" y1="0" x2=".88" y2="1">
+      <stop stop-color="#88ADFF" stop-opacity=".62"/>
+      <stop offset=".52" stop-color="#617CD2" stop-opacity=".16"/>
+      <stop offset="1" stop-color="#6E9BFF" stop-opacity=".48"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="635" y1="365" x2="995" y2="509" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A8D9FF"/>
+      <stop offset=".43" stop-color="#6395FF"/>
+      <stop offset=".8" stop-color="#4D72FF"/>
+      <stop offset="1" stop-color="#8D9AFF"/>
+    </linearGradient>
+    <pattern id="grid" width="30" height="30" patternUnits="userSpaceOnUse">
+      <path d="M30 0H0V30" fill="none" stroke="#6784C8" stroke-opacity=".09"/>
+    </pattern>
+    <filter id="bloom" x="-30%" y="-75%" width="160%" height="250%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+    <filter id="spark-glow" x="-100%" y="-100%" width="300%" height="300%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+    <path id="brush" d="M652 470 C677 440 703 401 729 385 S744 413 731 457 C721 491 722 518 741 510 C764 501 796 433 828 407 C851 389 861 407 853 435 C842 476 838 502 854 505 C879 508 913 465 942 444 C958 432 975 431 988 437"/>
+    <mask id="reveal" x="600" y="335" width="450" height="240" maskUnits="userSpaceOnUse">
+      <use href="#brush" xlink:href="#brush" id="trace" fill="none" stroke="white" stroke-width="55" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <style>
+    svg { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; }
+    .label { font-family: 'SF Mono', 'Menlo', monospace; font-weight: 600; }
+    #trace { stroke-dasharray: 850; stroke-dashoffset: 0; animation: draw 6s infinite; }
+    #light { animation: settle 6s infinite; }
+    #accent { animation: shimmer 6s infinite; }
+    @keyframes draw {
+      0%, 6% { stroke-dashoffset: 850; }
+      43%, 100% { stroke-dashoffset: 0; }
+    }
+    @keyframes settle {
+      0%, 7%, 92% { opacity: 1; }
+      100% { opacity: 0; }
+    }
+    @keyframes shimmer {
+      0%, 6% { opacity: .28; }
+      46% { opacity: 1; }
+      72% { opacity: .8; }
+      100% { opacity: .28; }
+    }
+    @media (prefers-reduced-motion: reduce) { #trace, #light, #accent { animation: none; } }
+  </style>
+
+  <path fill="url(#base)" d="M0 0h1200v900H0z"/>
+  <path fill="url(#wash)" d="M0 0h1200v900H0z"/>
+  <path fill="url(#grid)" d="M540 132h610v633H540z"/>
+  <rect x="34" y="34" width="1132" height="832" rx="30" fill="none" stroke="#A9C2FC" stroke-opacity=".15"/>
+  <path d="M84 153h1032M84 750h1032" stroke="#A9C2FC" stroke-opacity=".19"/>
+
+  <g transform="translate(84 88)">
+    <rect width="40" height="40" rx="13" fill="#B0F1CB"/>
+    <path d="M8 30V21a7 7 0 0 1 9-7 7 7 0 0 1 7 0 7 7 0 0 1 9 7v9a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2Z" fill="#10282A"/>
+    <circle cx="16" cy="21" r="1.8" fill="#B0F1CB"/>
+    <circle cx="25" cy="21" r="1.8" fill="#B0F1CB"/>
+    <path d="M18 26q2.5 2.5 5 0" fill="none" stroke="#B0F1CB" stroke-width="1.5" stroke-linecap="round"/>
+  </g>
+  <text x="140" y="117" fill="#F1F7FF" font-size="25" font-weight="700">小怪兽</text>
+  <text x="1116" y="114" text-anchor="end" class="label" fill="#9EAED2" font-size="16" letter-spacing="2.3">GPTIBO.CC</text>
+
+  <g transform="translate(84 268)">
+    <path d="M0 0h31" stroke="#A8ECCA" stroke-width="2"/>
+    <text x="45" y="6" class="label" fill="#A8ECCA" font-size="16" letter-spacing="2.1">ACCOUNT SERIES</text>
+    <text x="-6" y="123" fill="#F3F7FF" font-size="113" font-weight="700" letter-spacing="-5">Muse AI</text>
+    <text x="0" y="212" fill="#C3D4FF" font-size="66" font-weight="700" letter-spacing="2">成品账号</text>
+    <text x="2" y="279" fill="#A8B8D9" font-size="29" letter-spacing="1">独立账号 · 原订单领取</text>
+    <rect x="0" y="320" width="168" height="52" rx="26" fill="#ACF0CC"/>
+    <circle cx="25" cy="346" r="4" fill="#103833"/>
+    <text x="43" y="354" fill="#10282A" font-size="22" font-weight="700">10 亿规格</text>
+  </g>
+
+  <g aria-hidden="true">
+    <circle cx="823" cy="444" r="263" fill="none" stroke="#859DE3" stroke-opacity=".24" stroke-dasharray="1 7"/>
+    <circle cx="823" cy="444" r="226" fill="url(#disc)" stroke="url(#rim)" stroke-width="1.5"/>
+    <circle cx="823" cy="444" r="201" fill="none" stroke="#A5B9FE" stroke-opacity=".12"/>
+    <path d="M613 425c80-87 263-163 422-155m-448 235c91 19 295-30 448-127m-421 208c87 8 249-40 380-122" fill="none" stroke="#8CAAFF" stroke-opacity=".17"/>
+    <path d="M559 444h26m476 0h26M823 180v19m0 490v19" stroke="#A5B9FE" stroke-opacity=".36"/>
+    <use href="#brush" xlink:href="#brush" fill="none" stroke="#7C9BFB" stroke-opacity=".19" stroke-width="27" stroke-linecap="round" stroke-linejoin="round"/>
+    <g id="light" mask="url(#reveal)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <use href="#brush" xlink:href="#brush" stroke="#5179FF" stroke-opacity=".76" stroke-width="32" filter="url(#bloom)"/>
+      <use href="#brush" xlink:href="#brush" stroke="url(#ink)" stroke-width="29"/>
+      <use href="#brush" xlink:href="#brush" stroke="#E1F0FF" stroke-opacity=".29" stroke-width="1.5" transform="translate(0 -7)"/>
+    </g>
+    <g id="accent">
+      <circle cx="1036" cy="306" r="14" fill="#ABFFDD" filter="url(#spark-glow)"/>
+      <path d="M1036 294l2.6 9.4 9.4 2.6-9.4 2.6-2.6 9.4-2.6-9.4-9.4-2.6 9.4-2.6Z" fill="#B8FBD8"/>
+      <circle cx="641" cy="601" r="3.5" fill="#A7D4FF"/>
+      <circle cx="952" cy="637" r="3" fill="#A7D4FF"/>
+    </g>
+    <text x="823" y="622" text-anchor="middle" fill="#B9C9F6" class="label" font-size="13" letter-spacing="4">MUSE / 01</text>
+  </g>
+
+  <text x="84" y="809" fill="#C4D0E9" font-size="20">规格及库存以商品页为准</text>
+  <text x="1116" y="808" text-anchor="end" fill="#A8B8D9" class="label" font-size="15" letter-spacing="1.6">PRODUCT / MUSE</text>
+</svg>
