@@ -1,3 +1,4 @@
+import { CODEX_SMS_REDEEM_URL } from '../../shared/codex-sms-redemption.ts'
 import { isXGiftPlan } from '../../shared/xgift-products.ts'
 import { CODEX_CREDITS } from '../../shared/codex-credits.ts'
 import { emailProduct } from '../../shared/email-products.ts'
@@ -12,7 +13,7 @@ export const PLANS = [
   // Keep the existing ID for supplier mappings and historical orders.
   { id: 'pro-20x', productId: 'chatgpt', name: 'Pro 10×', price: 1400, renewalOnly: false, subtitle: '更多额度，继续你的探索。', description: 'Pro 10× 档位，支持新开与续费', features: ['Pro 10× 订阅', '支持新开与续费', '订单进度可查'] },
   { id: 'pro-25x', productId: 'chatgpt', name: 'Pro 25×', price: 4500, renewalOnly: false, subtitle: '更高额度，继续你的探索。', description: 'Pro 25× 档位，支持新开与自动充值', features: ['Pro 25× 订阅', '支持新开 · 自动充值', '订单进度可查'] },
-  { id: 'codex-sms-once', productId: 'codex-sms', name: '单次接码', price: 10, renewalOnly: false, subtitle: '一次接码，清楚明了。', description: 'CDK 兑换单次接码', features: ['CDK 自动交付', '前往 sms.llvi.de 兑换', '无需提交 Session'] },
+  { id: 'codex-sms-once', productId: 'codex-sms', name: '单次接码', price: 10, renewalOnly: false, subtitle: '一次接码，清楚明了。', description: 'CDK 兑换单次接码', features: ['CDK 自动交付', `前往 ${CODEX_SMS_REDEEM_URL} 兑换`, '无需提交 Session'] },
   { id: 'gemini-pro-18m', productId: 'gemini', name: '18 个月会员', price: 19.9, renewalOnly: false, subtitle: '让灵感，多一点时间。', description: '18 个月会员 · 领取链接邮件交付', features: ['18 个月会员', '邮件领取链接', '自动发货 · 订单页可领取'] },
   { id: 'duolingo-12m', productId: 'duolingo', name: '1 年会员', price: 19.9, renewalOnly: false, subtitle: '和 Duo 一起，把学习继续。', description: '1 年会员 · 兑换 CDK 邮件交付', features: ['1 年会员', '邮件兑换 CDK', '自动发货 · 订单页可领取'] },
   { id: 'gmail-account', productId: 'gmail', name: '美国长效白号 · 带 2FA', price: 18.8, renewalOnly: false, subtitle: '一个邮箱，让连接开始。', description: '个人 Gmail 白号 · 账号资料自动邮件交付', features: ['美国个人白号 · 带 2FA', '付款后自动邮件发货', '购买当天首次登录质保'] },

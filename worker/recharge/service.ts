@@ -38,12 +38,36 @@ function eligible(product: Product | undefined, price: number): product is Produ
   // max_sale_price is a historical compatibility field, not a retail ceiling.
   return !!product && product.available === true && product.quote_required !== true && product.currency === 'CNY' && product.max_quantity >= 1 && Array.isArray(product.delivery_modes) && product.delivery_modes.includes('auto_recharge') && amountCents(product.supply_price) > 0 && price >= amountCents(product.supply_price)
 }
-export async function supplierCatalog<T extends { id: string; price_cents: number; enabled: number }>(env: Env, plans: T[], partnerId?: string) {
-  const products = await supplierProducts(env); const map = productMap(env)
+// Catalog checks never authorize a payment: checkout still reads live supplier
+// prices. Share one short-lived request per environment/isolate, and briefly
+// cache failures to avoid turning a provider outage into a request storm.
+const catalogProducts = new WeakMap<Env, { identity: string; expiresAt: number; result: Promise<Product[]> }>()
+function cachedCatalogProducts(env: Env) {
+  const c = config(env), identity = JSON.stringify([c.account, c.key, c.secret])
+  const cached = catalogProducts.get(env)
+  if (cached && cached.identity === identity && cached.expiresAt > Date.now()) return cached.result
+  const entry = { identity, expiresAt: Date.now() + 60000, result: Promise.resolve([] as Product[]) }
+  entry.result = supplierProducts(env).catch(error => { entry.expiresAt = Date.now() + 5000; throw error })
+  catalogProducts.set(env, entry)
+  return entry.result
+}
+export async function supplierCatalog<T extends { id: string; price_cents: number; enabled: number }>(env: Env, plans: T[], partnerId?: string): Promise<(T & { saleIssue?: string })[]> {
+  const map = productMap(env)
+  if (!plans.some(plan => plan.enabled && map[plan.id])) return plans
   const costs = partnerId ? (await env.INTEREST_DB.prepare('SELECT plan,cost_cents FROM partner_prices WHERE partner_id=?').bind(partnerId).all<{ plan: string; cost_cents: number }>()).results : []
+  let products: Product[] | null
+  try { products = await cachedCatalogProducts(env) } catch { products = null }
   return plans.map(plan => {
-    const product = products.find(p => p.product_code === map[plan.id]); const cost = costs.find(c => c.plan === plan.id)?.cost_cents
-    return { ...plan, enabled: plan.enabled && eligible(product, plan.price_cents) && (!partnerId || (cost !== undefined && cost >= amountCents(product.supply_price))) ? 1 : 0 }
+    if (!map[plan.id] || !plan.enabled) return plan
+    let saleIssue: string | undefined
+    try {
+      const product = products?.find(p => p?.product_code === map[plan.id])
+      const cost = costs.find(c => c.plan === plan.id)?.cost_cents
+      if (!products) saleIssue = '供货状态暂时无法核对，请稍后刷新；已有订单仍可处理。'
+      else if (!eligible(product, plan.price_cents)) saleIssue = '套餐供货状态或售价需核对，暂停售卖。'
+      else if (partnerId && (cost === undefined || cost < amountCents(product.supply_price))) saleIssue = '代理供货价低于上游成本，请联系平台核对，暂停售卖。'
+    } catch { saleIssue = '供货信息暂时无法核对，请联系平台。' }
+    return { ...plan, enabled: saleIssue ? 0 : plan.enabled, ...(saleIssue ? { saleIssue } : {}) }
   })
 }
 // Only authorized, live orders get this immutable snapshot. No network write here.
@@ -280,7 +304,7 @@ export async function rechargeSummary(env: Env, order: Order) {
   const canSubmit = available && !completed && (!attempt || (attempt.status === 'unknown' && !unknownExpired(attempt)) || attempt.status === 'rejected' || !!attempt.fallback)
   const savedCurrent = saved && saved.attempt_id === attempt?.id && saved.retain_until > Date.now()
   const savedExpired = savedCurrent && ((saved.credential_expires_at !== null && saved.credential_expires_at <= Date.now()) || attempt?.failure_code === 'session_invalid')
-  const savedCredential = savedCurrent ? { attemptId: saved.attempt_id, savedAt: saved.saved_at, retainUntil: saved.retain_until, expired: Boolean(savedExpired), canReuse: Boolean(canSubmit && retentionReady && (attempt?.status === 'unknown' || !savedExpired)) } : null
+  const savedCredential = savedCurrent ? { attemptId: saved.attempt_id, savedAt: saved.saved_at, retainUntil: saved.retain_until, expired: Boolean(savedExpired), canReuse: Boolean(canSubmit && retentionReady && (attempt?.status === 'unknown' || (attempt?.status !== 'rejected' && !savedExpired))) } : null
   return { canRetainCredential: Boolean(retentionReady), savedCredential, financialHold: !!row.financial_hold && !!row.remote_id && order.payment_status === 'paid', paymentUrl: null, paymentQr: publicQr, paymentKind, expiresAt, paymentExpired, rechargeStatus: completed ? 'succeeded' : attempt?.status ?? null, failureCode: attempt?.failure_code ?? null, errorCategory: attempt?.error_category ?? null, resultCode: attempt?.result_code ?? null, progressStage: completed ? 'completed' : attempt?.progress_stage ?? null, progressVersion: attempt?.progress_version ?? 0, progressUpdatedAt: attempt?.progress_updated_at ?? null, attemptNo: attempt?.remote_attempt_no ?? null, retryKey: attempt?.status === 'unknown' ? attempt.id : null, retryMode: attempt?.status === 'unknown' ? attempt.credential_mode : null, canSubmit, message: row.financial_hold && order.payment_status === 'paid' ? '平台退款金额正在核对，充值与代理收益暂时冻结，请联系客服。' : attempt && unknownExpired(attempt) ? '提交结果长期未确认，请联系客服核对原任务，不要重新付款或提交新任务。' : attempt && (attempt.failure_code || (terminal(attempt.status) && attempt.status !== 'succeeded')) ? failureMessage(attempt.failure_code, attempt.error_category, attempt.subscription_expires_hint, available && !!attempt.fallback) : null, accountEmailMasked: attempt?.account_email_masked ?? null, finishedAt: attempt?.finished_at ?? null }
 }
 export async function rechargeAction(requestMessage: Request, env: Env, order: Order) {
@@ -311,6 +335,7 @@ export async function rechargeAction(requestMessage: Request, env: Env, order: O
     if (reuse) {
       saved = await retainedCredential(env, order.id)
       if (!saved || saved.attempt_id !== attempt?.id || (saved.attempt_id !== data.sourceAttemptId && attempt?.id !== data.key)) throw new ApiError('原资料已更新或未保存，请刷新订单或重新提交 Session。', 409)
+      if (attempt.id !== data.key && attempt.status === 'rejected') throw new ApiError('上次提交的资料未被受理，请重新提交 Session。', 409)
       raw = await retainedRequest(env, saved, attempt.request_hash)
       let payload
       try { payload = JSON.parse(raw) } catch { throw new ApiError('原资料暂不可用，请重新提交 Session。', 409) }
@@ -330,7 +355,6 @@ export async function rechargeAction(requestMessage: Request, env: Env, order: O
     catch { throw new ApiError('登录资料不完整或令牌过长，请重新获取完整内容。') }
     // Old open pages may still opt in; disabling retention must not block a paid submission.
     const retain = credentialRetentionEnabled(env) && (reuse || data.retainCredential === true)
-    if (retain && !await canRetainCredential(env)) throw new ApiError('资料加密保存暂不可用，请稍后重试或取消保存。', 503)
     if (new TextEncoder().encode(raw).byteLength > 256 * 1024) throw new ApiError('提交内容过长，请仅提交本次充值所需的账号资料。', 413)
     const digest = await hash(raw)
     if (attempt && attempt.id === data.key) {
@@ -366,7 +390,11 @@ export async function rechargeAction(requestMessage: Request, env: Env, order: O
       // conflict, or malformed reply remains unknown and retains the original key.
       if (e instanceof RechargeError && !e.retryable && (['invalid_request', 'session_invalid', 'invalid_credential'].includes(e.code) || (e.code === 'full_session_required' && e.upstreamStatus === 422))) {
         const failure = e.code === 'full_session_required' ? e.code : 'request_rejected'
-        await env.INTEREST_DB.prepare("UPDATE recharge_redemptions SET status='rejected',failure_code=? WHERE id=? AND status='unknown'").bind(failure, attempt.id).run()
+        await env.INTEREST_DB.batch([
+          env.INTEREST_DB.prepare("UPDATE recharge_redemptions SET status='rejected',failure_code=? WHERE id=? AND order_id=? AND status='unknown'").bind(failure, attempt.id, order.id),
+          env.INTEREST_DB.prepare(`DELETE FROM recharge_saved_credentials WHERE order_id=? AND attempt_id=?
+            AND EXISTS (SELECT 1 FROM recharge_redemptions a WHERE a.id=recharge_saved_credentials.attempt_id AND a.order_id=recharge_saved_credentials.order_id AND a.status='rejected')`).bind(order.id, attempt.id),
+        ])
         const rejectedOrder = await getOrder(env, order.id)
         if (!rejectedOrder.refund_hold && !rejectedOrder.refunded_cents && rejectedOrder.status === 'processing') await change(env, rejectedOrder, { status: 'failed' }, 'system', 'recharge-rejected', failureMessages[failure])
       }
@@ -434,6 +462,12 @@ export async function refundThroughRecharge(env: Env, order: Order, caseId: stri
   return locked(env, row, async fresh => {
     const db = env.INTEREST_DB
     let record = await db.prepare('SELECT * FROM recharge_refunds WHERE case_id=?').bind(caseId).first<{ create_body: string; remote_id: string | null; status: string }>()
+    // Also protect old refund holds created before the dispatch/refund gate was
+    // atomic. Existing upstream refunds remain queryable for reconciliation.
+    if (!record?.remote_id) {
+      const attempt = await latestAttempt(env, order.id)
+      if (attempt && !terminal(attempt.status)) throw new ApiError('充值结果尚未确认，请先刷新原任务，确认完成或失败后再退款。', 409)
+    }
     if (!record?.remote_id && fresh.refunded_cents > order.refunded_cents) throw new ApiError('平台原订单已确认退款，请使用“核对上游已退款”完成记账。', 409)
     if (!record) {
       const raw = JSON.stringify({ merchant_refund_no: caseId, type: amount === order.price_cents - order.refunded_cents ? 'full' : 'partial', amount: amountText(amount), reason: '本站售后审核通过' })

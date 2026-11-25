@@ -73,3 +73,14 @@ test('navigation can cancel an obsolete read without an authentication event', a
   await assert.rejects(pending, (e: unknown) => e instanceof DOMException && e.name === 'AbortError')
   assert.equal(requestSignal?.aborted, true)
 })
+
+test('retention-specific errors keep the public code while generic failures have none', async t => {
+  let reply = { error: '加密保存暂不可用', code: 'recharge_retention_unavailable' as unknown }
+  t.mock.method(globalThis, 'fetch', async () => Response.json(reply, { status: 503 }))
+  const submit = () => api('/api/orders/TEST/fulfillment', { action: 'submit' })
+  await assert.rejects(submit(), (error: unknown) =>
+    error instanceof RequestError && error.status === 503 && error.code === 'recharge_retention_unavailable')
+  reply = { error: '服务暂时不可用', code: { type: 'unavailable' } }
+  await assert.rejects(submit(), (error: unknown) =>
+    error instanceof RequestError && error.status === 503 && error.code === undefined)
+})

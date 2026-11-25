@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { customerFixture } from './customer-fixture.ts'
 
-test('homepage and referrals read their own current prices without supplier requests or KV', async t => {
+test('homepage keeps current prices independent of suppliers; referrals share availability checks without KV', async t => {
   const s = await customerFixture(); t.after(() => s.db.close())
   const a = await s.agent('A'), b = await s.agent('B')
   for (const [id, price] of [[a.id, 15500], [b.id, 16600]] as const) s.db.prepare("INSERT INTO partner_prices(partner_id,plan,cost_cents,price_cents) VALUES (?,'plus',12000,?)").run(id, price)
@@ -16,7 +16,8 @@ test('homepage and referrals read their own current prices without supplier requ
     assert.equal(response.headers.get('X-Catalog-Cache'), null)
     assert.match(response.headers.get('Server-Timing')!, /^catalog;dur=\d+(\.\d+)?$/)
     const value = await response.json()
-    assert.equal(value.plans[0].price_cents, price); assert.equal(value.plans[0].enabled, 1)
+    assert.equal(value.plans[0].price_cents, price); assert.equal(value.plans[0].enabled, path === '/api/catalog' ? 1 : 0)
+    if (path === '/api/catalog') assert.equal(calls, 0)
     assert.doesNotMatch(JSON.stringify(value), /cost_cents|secret|customer_email/)
   }
   s.db.prepare("UPDATE catalog_plans SET price_cents=14900,version=version+1 WHERE id='plus'").run()
@@ -29,7 +30,7 @@ test('homepage and referrals read their own current prices without supplier requ
   assert.equal((await (await s.request('/api/catalog?partner=' + a.id.slice(0,6))).json()).plans[0].enabled, 0)
   s.db.prepare('UPDATE partners SET active=0 WHERE id=?').run(a.id)
   assert.equal((await s.request('/api/catalog?partner=' + a.id.slice(0,6))).status, 404)
-  assert.equal(calls, 0); assert.equal(kvCalls, 0)
+  assert.equal(calls, 1); assert.equal(kvCalls, 0)
 })
 
 test('catalog immediately reflects checkout configuration changes and fails closed on D1 errors', async t => {

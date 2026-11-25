@@ -8,6 +8,7 @@
   "workers_dev": false,
   "preview_urls": false,
   "vars": {
+    "PARTNER_PRODUCT_IDS": "chatgpt,codex-credits",
     "ORDER_TESTING_ENABLED": "false",
     "EMAIL_PRODUCTS_ENABLED": "false",
     "XGIFT_CHECKOUT_ENABLED": "false",
@@ -16,9 +17,10 @@
     "RECHARGE_CHECKOUT_ENABLED": "false",
     "RECHARGE_SAVED_CREDENTIALS_ENABLED": "false",
     "ACCOUNT_SUPPLIER_CHECKOUT_ENABLED": "false",
-    "DELIVERY_SUPPLIER_CHECKOUT_ENABLED": "false"
+    "DELIVERY_SUPPLIER_CHECKOUT_ENABLED": "false",
+    "STOREFRONT_SEO_ORIGIN": ""
   },
-  "main": "worker/index.ts",
+  "main": "worker/storefront-entry.ts",
   "d1_databases": [
     {
       "binding": "INTEREST_DB",
@@ -51,13 +53,19 @@
         "limit": 90,
         "period": 60
       }
+    },
+    {
+      "name": "SEO_CATALOG_LIMITER",
+      "namespace_id": "1004",
+      "simple": {
+        "limit": 6,
+        "period": 60
+      }
     }
   ],
   "assets": {
     "binding": "ASSETS",
-    "run_worker_first": [
-      "/api/*"
-    ],
+    "run_worker_first": true,
     "directory": "./dist",
     "not_found_handling": "single-page-application"
   },

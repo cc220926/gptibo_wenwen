@@ -52,6 +52,24 @@ test('history rejects public mutations, unsupported products and malformed curso
   assert.equal(s.db.prepare('SELECT COUNT(*) n FROM customer_history').get()!.n, 0)
 })
 
+test('a live partner storefront can explicitly read the same public platform history', async t => {
+  const s = await customerFixture(); t.after(() => s.db.close())
+  const partner = await s.agent('shared-history')
+  const insert = s.db.prepare('INSERT INTO customer_history(shop_id,masked_email) VALUES (?,?)')
+  for (let i = 0; i < 61; i++) insert.run('platform', `main${i}***@example.invalid`)
+  insert.run(partner.id, 'partner***@example.invalid')
+  const partnerPath = path + '&scope=platform&partner=' + partner.id.slice(0, 6)
+  for (const cursor of [0, 60]) {
+    const main = await (await s.request(path + '&cursor=' + cursor)).json()
+    const response = await s.request(partnerPath + '&cursor=' + cursor)
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), main)
+  }
+  s.db.prepare('UPDATE partners SET active=0 WHERE id=?').run(partner.id)
+  assert.equal((await s.request(partnerPath)).status, 404)
+  assert.equal((await s.request(path + '&scope=arbitrary')).status, 400)
+})
+
 test('history fails closed for damaged masks, unavailable storage and rate limiting', async t => {
   const s = await customerFixture(); t.after(() => s.db.close())
   // This passes the deliberately minimal SQL guard but is not a local-part mask.

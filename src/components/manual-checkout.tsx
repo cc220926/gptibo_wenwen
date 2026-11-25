@@ -17,6 +17,7 @@ import { PaymentConfirmed, PaymentMessage } from './payment-feedback'
 import { MapayPaymentCard } from './mapay-payment-card'
 import { mapayPaymentEntry } from '../../shared/mapay-payment-entry'
 import { membershipClaimUrl } from '../../shared/membership-claim'
+import { CODEX_SMS_REDEEM_URL, updateCodexSmsRedeemAddress } from '../../shared/codex-sms-redemption.ts'
 import '@/styles/live-checkout.css'
 
 type Payment = { amountCents?: number; feeCents?: number; feeBps?: number; provider?: string; status: string; qr: string | null; expiresAt: number }
@@ -39,7 +40,10 @@ export function ManualCheckout({ order, open, onUpdated, onOrderUpdated, onOrder
   const xgift = order.xgift
   const contactDelivery = order.serviceDelivery?.kind === 'manual' && !order.serviceDelivery.provider
   const gmail = order.plan === 'gmail-account'
-  const claimUrl = gmail ? null : membershipClaimUrl(order.delivery?.value)
+  const codexSms = order.delivery?.redemptionUrl === CODEX_SMS_REDEEM_URL
+  const claimUrl = gmail || codexSms ? null : membershipClaimUrl(order.delivery?.value)
+  const deliveryValue = codexSms ? updateCodexSmsRedeemAddress(order.delivery?.value ?? '') : order.delivery?.value ?? ''
+  const deliveryInstructions = codexSms ? updateCodexSmsRedeemAddress(order.delivery?.instructions ?? '') : order.delivery?.instructions
   const emailDelivery = Boolean(order.delivery)
   const automatic = Boolean(order.delivery?.automatic)
   const paused = order.redemptionBlocked || order.refundHold || (order.refundedCents ?? 0) >= Math.round(order.price * 100)
@@ -111,13 +115,14 @@ export function ManualCheckout({ order, open, onUpdated, onOrderUpdated, onOrder
       {contactDelivery && order.paymentStatus === 'paid' && !paused && !order.delivery?.value && ['session', 'processing'].includes(order.status) && <RechargeSuccessContacts contacts={order.supportContacts} name={order.partnerName ?? 'GPTibo'} />}
       {order.delivery?.value && <section className="membership-direct-delivery" aria-label="领取资料">
         <h3>商品已发货</h3>
-        <p>{order.serviceDelivery?.kind === 'manual' ? '服务交付结果' : claimUrl ? '专属领取链接' : '兑换 CDK'}</p>
-        <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', userSelect: 'text' }}>{order.delivery.value}</pre>
+        <p>{!codexSms && order.serviceDelivery?.kind === 'manual' ? '服务交付结果' : claimUrl ? '专属领取链接' : '兑换 CDK'}</p>
+        <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', userSelect: 'text' }}>{deliveryValue}</pre>
         <div className="membership-delivery-actions">
+          {codexSms && <Button size="sm" nativeButton={false} render={<a href={CODEX_SMS_REDEEM_URL} target="_blank" rel="noopener noreferrer" />}>前往接码兑换 <ExternalLink size={13} /></Button>}
           {claimUrl && <Button size="sm" nativeButton={false} render={<a href={claimUrl} target="_blank" rel="noopener noreferrer" />}>立即领取 <ExternalLink size={13} /></Button>}
-          <CopyButton variant="outline" value={order.delivery.value} label={order.serviceDelivery?.kind === 'manual' ? '复制交付内容' : claimUrl ? '复制领取链接' : '复制 CDK'} />
+          <CopyButton variant="outline" value={deliveryValue} label={!codexSms && order.serviceDelivery?.kind === 'manual' ? '复制交付内容' : claimUrl ? '复制领取链接' : '复制 CDK'} />
         </div>
-        <p style={{ whiteSpace: 'pre-line' }}>{order.delivery.instructions}</p>
+        <p style={{ whiteSpace: 'pre-line' }}>{deliveryInstructions}</p>
         {order.serviceDelivery?.mailState === 'review' ? <p>商品已在本订单交付。邮件通知需要客服核查，请通过原订单联系支持。</p> : <p>{order.delivery.status === 'sent' ? '同一份资料已提交邮件服务，收件邮箱为' : '同一份资料正在同步发送至'} <strong>{order.customerEmail}</strong>。请妥善保管，勿转发他人。</p>}
       </section>}
       {!xgift && !order.delivery?.value && order.status === 'success' && <PaymentMessage state="success" title={emailDelivery ? '商品已邮件发货' : '人工开通已完成'}>{emailDelivery ? <>发货邮件已提交邮件服务。请在 <strong>{order.customerEmail}</strong> 查收，并按邮件说明领取。若未收到，请联系支持核对。</> : '请前往 ChatGPT 查看订阅。'}</PaymentMessage>}

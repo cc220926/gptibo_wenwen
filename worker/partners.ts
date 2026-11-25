@@ -1,6 +1,10 @@
+import { platformProductVisibility } from './platform-product-visibility.ts'
+import { partnerProductIds, partnerExcludedProducts } from './partner-product-policy.ts'
+import { handlePayout } from './payout-transfer.ts'
+import { checkoutEnabled as supplierCheckoutEnabled } from './recharge/client.ts'
 import { eligibleSql, profitSql, MIN_PAYOUT_CENTS, PAYOUT_COOLDOWN_MS } from './finance.ts'
 import { settleDue, type Order } from './order-state.ts'
-import { rechargeSummary, syncRechargeOrder } from './recharge/service.ts'
+import { rechargeSummary, syncRechargeOrder, supplierCatalog } from './recharge/service.ts'
 import { ApiError, body, json, type Env } from './platform.ts'
 import { emailValue, mailConfigured, partnerLimit, requirePartner, sendPartnerInvitation, type Partner } from './partner-auth.ts'
 import { referralCodePattern } from '../shared/partner-link.ts'
@@ -25,9 +29,11 @@ export async function resolvePartner(env: Env, slug: unknown) {
   return p
 }
 export async function partnerCatalog(env: Env, p: Partner) {
+  const allowedProducts = partnerProductIds(env)
   const rows = (await env.INTEREST_DB.prepare('SELECT c.id,c.product_id,c.name,c.purchase_note,pp.price_cents,CASE WHEN c.partner_enabled=1 THEN c.enabled ELSE 0 END enabled,c.renewal_only,pp.version FROM catalog_plans c JOIN partner_prices pp ON pp.plan=c.id WHERE pp.partner_id=? ORDER BY c.rowid').bind(p.id).all<{ product_id: string }>()).results
   const { productIds, hiddenProductIds = [] } = await productOrderSettings(env, p.id)
-  return { plans: rows.filter(row => !hiddenProductIds.some(id => id === row.product_id)), productOrder: productIds, hiddenProductIds, partner: { name: p.name, slug: p.slug }, mode: 'demo' }
+  const hidden = [...new Set([...hiddenProductIds, ...partnerExcludedProducts(env)])]
+  return { plans: rows.filter(row => allowedProducts.some(id => id === row.product_id) && !hidden.some(id => id === row.product_id)), productOrder: productIds, hiddenProductIds: hidden, partner: { name: p.name, slug: p.slug }, mode: 'demo' }
 }
 const eligible = eligibleSql()
 const profit = profitSql()
@@ -51,8 +57,12 @@ async function verifySupplierPayout(env: Env, partnerId: string, payoutId?: stri
   for (let i=0;i<rows.length;i+=5) await Promise.all(rows.slice(i,i+5).map(o => syncRechargeOrder(env,o,true)))
 }
 export async function partnerDashboard(env: Env, p: Partner) {
+  const allowedProducts = partnerProductIds(env)
   await settleDue(env, p.id)
-  const plans = (await env.INTEREST_DB.prepare('SELECT c.id,c.product_id,c.name,CASE WHEN c.partner_enabled=1 THEN c.enabled ELSE 0 END enabled,c.renewal_only,pp.cost_cents,pp.price_cents,pp.version FROM catalog_plans c JOIN partner_prices pp ON pp.plan=c.id WHERE pp.partner_id=? ORDER BY c.rowid').bind(p.id).all()).results
+  let plans = (await env.INTEREST_DB.prepare('SELECT c.id,c.product_id,c.name,CASE WHEN c.partner_enabled=1 THEN c.enabled ELSE 0 END enabled,c.renewal_only,pp.cost_cents,pp.price_cents,pp.version FROM catalog_plans c JOIN partner_prices pp ON pp.plan=c.id WHERE pp.partner_id=? ORDER BY c.rowid').bind(p.id).all<{ id: string; product_id: string; name: string; enabled: number; renewal_only: number; cost_cents: number; price_cents: number; version: number }>()).results
+  const visibility = await platformProductVisibility(env)
+  plans = plans.filter(plan => allowedProducts.some(id => id === plan.product_id) && !visibility.hiddenProductIds.some(id => id === plan.product_id))
+  if (supplierCheckoutEnabled(env)) plans = await supplierCatalog(env, plans, p.id)
   const stats = await env.INTEREST_DB.prepare(`SELECT COUNT(*) total, COALESCE(SUM(CASE WHEN mode='demo' AND status='success' THEN ${profit} ELSE 0 END),0) demo_profit, COALESCE(SUM(CASE WHEN ${eligible} AND payout_id IS NULL THEN ${profit} ELSE 0 END),0) available FROM orders WHERE partner_id=?`).bind(p.id).first<{total:number;demo_profit:number;available:number}>()
   const debts = await env.INTEREST_DB.prepare('SELECT COALESCE(SUM(amount_cents),0) amount FROM partner_debits WHERE partner_id=? AND payout_id IS NULL').bind(p.id).first<{amount:number}>()
   const held = await env.INTEREST_DB.prepare(`SELECT ${paidRefundHoldSql('?')} n`).bind(p.id).first<{n:number}>()
@@ -111,7 +121,7 @@ export async function partnerRoutes(request: Request, env: Env, url: URL) {
   if (path === '/api/partner/product-order') return productOrderRoute(request, env, p)
   if (path === '/api/partner/dashboard' && request.method === 'GET') return json(await partnerDashboard(env, p))
   if (path === '/api/partner/orders' && request.method === 'GET') return orders(env, p.id, url)
-  const orderDetail = path.match(/^\/api\/partner\/orders\/([a-f0-9-]{36})$/)
+  const orderDetail = path.match(/^\/api\/partner\/orders\/(YMX-[A-F0-9]{32}|[a-f0-9-]{36})$/)
   if (orderDetail && request.method === 'GET') return orders(env, p.id, url, orderDetail[1])
   if (path === '/api/partner/order-summary' && request.method === 'GET') {
     await settleDue(env, p.id)
@@ -187,7 +197,7 @@ export async function adminPartnerRoutes(request: Request, env: Env, url: URL) {
     try { await sendPartnerInvitation(env, p!); invitationSent = true } catch { /* Keep the account and link; the administrator can resend the invitation. */ }
     return json({ ok: true, id, slug, invitationSent, message: invitationSent ? '代理已开通，邀请邮件已发送。代理可通过邮件中的工作台入口自行获取登录验证码。' : '代理已开通，但邀请邮件发送失败。请在代理详情中重发。' }, 201)
   }
-  const orderDetail = path.match(/^\/api\/admin\/partners\/([a-f0-9-]{36})\/orders\/([a-f0-9-]{36})$/)
+  const orderDetail = path.match(/^\/api\/admin\/partners\/([a-f0-9-]{36})\/orders\/(YMX-[A-F0-9]{32}|[a-f0-9-]{36})$/)
   if (orderDetail && method === 'GET') return orders(env, orderDetail[1], url, orderDetail[2])
   const match = path.match(/^\/api\/admin\/partners\/([a-f0-9-]{36})(?:\/(prices\/([a-z0-9-]+)|orders|order-summary|preview|invitation|support-contacts|announcement|product-order))?$/)
   if (match) {
@@ -237,14 +247,7 @@ export async function adminPartnerRoutes(request: Request, env: Env, url: URL) {
         db.prepare('UPDATE partners SET name=?,email=?,active=?,version=version+1,auth_version=auth_version+?,updated_at=? WHERE id=? AND version=?').bind(name, email, Number(data.active), email !== p.email || Number(data.active) !== p.active ? 1 : 0, Date.now(), p.id, p.version),
       ])
     } else if (match[3] && method === 'POST') {
-      const cost = cents(data.costCents)
-      const row = await db.prepare('SELECT * FROM partner_prices WHERE partner_id=? AND plan=?').bind(p.id, match[3]).first<{ price_cents: number; cost_cents: number; version: number }>()
-      if (!row || data.version !== row.version) throw new ApiError('价格已更新，请刷新后重试。', 409)
-      if (cost > row.price_cents) throw new ApiError('供货价不能高于当前代理售价，请先联系代理调整售价。')
-      await db.batch([
-        db.prepare("INSERT INTO admin_audit(id,target_id,action,note,created_at) SELECT ?,partner_id,'partner-cost',?,? FROM partner_prices WHERE partner_id=? AND plan=? AND version=?").bind(id, `${env.ADMIN_USERNAME} 调整 ${planText(match[3])} 供货价：${priceText(row.cost_cents)} → ${priceText(cost)}`, Date.now(), p.id, match[3], row.version),
-        db.prepare('UPDATE partner_prices SET cost_cents=?,version=version+1 WHERE partner_id=? AND plan=? AND version=?').bind(cost, p.id, match[3], row.version),
-      ])
+      throw new ApiError('供货价已由总站统一管理，请在统一供货价中修改并同步全部代理。', 409)
     } else throw new ApiError('未找到操作。', 404)
     if (!await db.prepare('SELECT id FROM admin_audit WHERE id=?').bind(id).first()) throw new ApiError('数据已更新，请刷新后重试。', 409)
     return json({ ok: true })
@@ -265,32 +268,6 @@ export async function adminPartnerRoutes(request: Request, env: Env, url: URL) {
     const deductions = (await db.prepare('SELECT i.amount_cents,r.order_id FROM partner_payout_debit_items i JOIN partner_debits d ON d.id=i.debit_id JOIN refund_cases r ON r.id=d.refund_id WHERE i.payout_id=?').bind(payout[1]).all()).results
     return json({ items, deductions, payout: payoutRow, total: count?.total ?? 0, page: n })
   }
-  if (payout && method === 'POST') {
-    const data = await body(request); const note = text(data.note, 300, '处理说明')
-    if (!['approve', 'paid', 'rejected'].includes(String(data.action))) throw new ApiError('处理方式无效。')
-    const reference = data.action === 'paid' ? text(data.reference, 100, '线下付款流水号') : ''
-    const ps = await db.prepare('SELECT * FROM partner_payouts WHERE id=?').bind(payout[1]).first<{ id: string; version: number; status: string; reviewed_at: number | null }>()
-    if (!ps || ps.status !== 'pending' || ps.version !== data.version) throw new ApiError('结算申请已处理，请刷新。', 409)
-    if (data.action === 'paid' && !ps.reviewed_at) throw new ApiError('请先审核通过，再登记转账结果。', 409)
-    if (data.action === 'approve') {
-      await verifySupplierPayout(env,'',ps.id)
-      const event = crypto.randomUUID()
-      await db.batch([
-        db.prepare(`UPDATE partner_payouts SET review_token=?,reviewed_at=?,note=?,version=version+1 WHERE id=? AND status='pending' AND reviewed_at IS NULL AND version=? AND NOT EXISTS(SELECT 1 FROM orders o JOIN partner_payout_items i ON i.order_id=o.id AND i.payout_id=partner_payouts.id WHERE NOT (${eligibleSql('o')}) OR i.profit_cents<>${profitSql('o')}) AND NOT EXISTS(SELECT 1 FROM partner_debits WHERE partner_id=partner_payouts.partner_id AND payout_id IS NULL) AND NOT ${paidRefundHoldSql('partner_payouts.partner_id')}`).bind(event,Date.now(),note,ps.id,ps.version),
-        db.prepare("INSERT INTO admin_audit(id,target_id,action,note,created_at) SELECT ?,id,'payout-review',?,? FROM partner_payouts WHERE id=? AND status='pending' AND version=? AND review_token=?").bind(event,note,Date.now(),ps.id,ps.version+1,event),
-      ])
-      if (!await db.prepare('SELECT id FROM admin_audit WHERE id=?').bind(event).first()) throw new ApiError('申请已更新或发生退款抵扣，请先退回申请并重新核算。',409)
-      return json({ok:true})
-    }
-    const event = crypto.randomUUID()
-    await db.batch([
-      db.prepare("INSERT INTO admin_audit(id,target_id,action,note,created_at) SELECT ?,id,'payout-handle',?,? FROM partner_payouts WHERE id=? AND status='pending' AND version=?").bind(event, `${env.ADMIN_USERNAME}: ${data.action}; ${note}`, Date.now(), ps.id, ps.version),
-      db.prepare('UPDATE partner_payouts SET status=?,note=?,reference=?,handled_at=?,version=version+1 WHERE id=? AND status=\'pending\' AND version=?').bind(String(data.action), note, reference, Date.now(), ps.id, ps.version),
-      db.prepare("UPDATE partner_debits SET payout_id=NULL WHERE payout_id=? AND EXISTS(SELECT 1 FROM admin_audit WHERE id=?) AND EXISTS(SELECT 1 FROM partner_payouts WHERE id=? AND status='rejected')").bind(ps.id,event,ps.id),
-      db.prepare("UPDATE orders SET payout_id=NULL WHERE payout_id=? AND EXISTS(SELECT 1 FROM admin_audit WHERE id=?) AND EXISTS(SELECT 1 FROM partner_payouts WHERE id=? AND status='rejected')").bind(ps.id, event, ps.id),
-    ])
-    if (!await db.prepare('SELECT id FROM admin_audit WHERE id=?').bind(event).first()) throw new ApiError('结算申请已处理，请刷新。', 409)
-    return json({ ok: true })
-  }
+  if (payout && method === 'POST') return handlePayout(request, env, payout[1], () => verifySupplierPayout(env, '', payout[1]))
   throw new ApiError('未找到代理管理接口。', 404)
 }

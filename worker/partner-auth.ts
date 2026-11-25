@@ -38,8 +38,9 @@ export async function sendPartnerCode(env: Env, p: Partner) {
   let value: number
   do { value = crypto.getRandomValues(new Uint32Array(1))[0] } while (value >= 4294000000)
   const code = String(value % 1000000).padStart(6, '0')
+  // Independent sends must not invalidate another browser's unexpired challenge.
   await env.INTEREST_DB.batch([
-    env.INTEREST_DB.prepare('DELETE FROM partner_login_codes WHERE partner_id=? OR expires_at<=?').bind(p.id, now),
+    env.INTEREST_DB.prepare('DELETE FROM partner_login_codes WHERE expires_at<=? OR used=1').bind(now),
     env.INTEREST_DB.prepare('DELETE FROM partner_sessions WHERE expires_at<=?').bind(now),
     env.INTEREST_DB.prepare('INSERT INTO partner_login_codes(id,partner_id,code_hash,auth_version,expires_at) SELECT ?,id,?,auth_version,? FROM partners WHERE id=? AND active=1 AND auth_version=?').bind(id, await hash(env.PARTNER_AUTH_SECRET + ':' + id + ':' + code), now + 600000, p.id, p.auth_version),
   ])
@@ -77,15 +78,13 @@ export async function partnerAuth(request: Request, env: Env, path: string) {
     const data = await body(request)
     if (!mailConfigured(env)) throw new ApiError('邮箱登录尚未启用。', 503)
     await partnerLimit(env, 'partner-verify-ip:' + (request.headers.get('CF-Connecting-IP') ?? 'local'), 20, 900000)
-    let challengeId = data.challenge
-    if (data.email !== undefined) {
-      const email = emailValue(data.email)
-      await partnerLimit(env, 'partner-verify-email:' + email, 10, 900000)
-      const latest = await env.INTEREST_DB.prepare('SELECT c.id FROM partner_login_codes c JOIN partners p ON p.id=c.partner_id WHERE p.email=? AND p.active=1 AND c.auth_version=p.auth_version AND c.used=0 AND c.expires_at>? ORDER BY c.expires_at DESC LIMIT 1').bind(email, Date.now()).first<{ id: string }>()
-      challengeId = latest?.id
-    }
-    if (typeof challengeId !== 'string' || challengeId.length !== 36 || typeof data.code !== 'string' || !/^\d{6}$/.test(data.code)) throw new ApiError('验证码无效或已过期。', 401)
-    const challenge = await env.INTEREST_DB.prepare('UPDATE partner_login_codes SET attempts=attempts+1 WHERE id=? AND attempts<5 AND used=0 AND expires_at>? RETURNING *').bind(challengeId, Date.now()).first<{ code_hash: string; partner_id: string; auth_version: number }>()
+    const challengeId = data.challenge
+    // Never locate a private challenge by a public email address. Old open pages
+    // must refresh and request a challenge instead of consuming another login.
+    if (challengeId === undefined) throw new ApiError('登录页面已更新，请刷新页面并重新获取验证码。', 401)
+    if (typeof challengeId !== 'string' || !/^[a-f0-9-]{36}$/.test(challengeId) || typeof data.code !== 'string' || !/^\d{6}$/.test(data.code)) throw new ApiError('验证码无效或已过期。', 401)
+    const email = data.email === undefined ? null : emailValue(data.email)
+    const challenge = await env.INTEREST_DB.prepare('UPDATE partner_login_codes SET attempts=attempts+1 WHERE id=? AND attempts<5 AND used=0 AND expires_at>? AND EXISTS(SELECT 1 FROM partners p WHERE p.id=partner_id AND p.active=1 AND p.auth_version=partner_login_codes.auth_version AND (? IS NULL OR p.email=?)) RETURNING *').bind(challengeId, Date.now(), email, email).first<{ code_hash: string; partner_id: string; auth_version: number }>()
     if (!challenge || challenge.code_hash !== await hash(env.PARTNER_AUTH_SECRET + ':' + challengeId + ':' + data.code)) throw new ApiError('验证码无效或已过期。', 401)
     const claimed = await env.INTEREST_DB.prepare('UPDATE partner_login_codes SET used=1 WHERE id=? AND used=0 AND expires_at>? AND EXISTS(SELECT 1 FROM partners WHERE id=partner_id AND active=1 AND auth_version=partner_login_codes.auth_version) RETURNING partner_id').bind(challengeId, Date.now()).first()
     if (!claimed) throw new ApiError('验证码无效或已过期。', 401)

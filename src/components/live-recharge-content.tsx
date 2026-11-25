@@ -15,15 +15,16 @@ import { RECHARGE_STAGES, rechargeStage } from '../../shared/recharge-progress'
 import '@/styles/live-checkout.css'
 
 type SessionFormProps = {
-  session: string; confirmed: boolean; touched: boolean; busy?: '' | 'query' | 'check' | 'submit'
+  session: string; confirmed: boolean; touched: boolean; busy?: '' | 'query' | 'check' | 'submit' | 'retry-saved'
   precheckRequired?: boolean; precheck?: SessionPrecheck | null
   retryMode?: 'session' | 'access_token' | null; retryKey?: string | null; failed?: boolean
+  retention?: { checked: boolean; onChange: (checked: boolean) => void }
   onSessionChange: (value: string) => void; onConfirmChange: (value: boolean) => void
   onTouch: () => void; onSubmit: () => void
 }
 
 // Shared by the actual order and the isolated walkthrough, with no API side effects.
-export function LiveSessionForm({ session, confirmed, touched, busy = '', precheckRequired, precheck = null, retryMode = null, retryKey, failed, onSessionChange, onConfirmChange, onTouch, onSubmit }: SessionFormProps) {
+export function LiveSessionForm({ session, confirmed, touched, busy = '', precheckRequired, precheck = null, retryMode = null, retryKey, failed, retention, onSessionChange, onConfirmChange, onTouch, onSubmit }: SessionFormProps) {
   const input = checkoutSession(session, retryMode)
   // Submission clears the sensitive draft immediately; keep only its display email.
   const [lastEmail, setLastEmail] = useState(input.email)
@@ -46,6 +47,13 @@ export function LiveSessionForm({ session, confirmed, touched, busy = '', preche
             <Checkbox id="live-account-confirmation" checked={confirmed} onCheckedChange={onConfirmChange} disabled={Boolean(busy) || !input.credential} />
             <FieldLabel htmlFor="live-account-confirmation">我已核对账号，并授权本次充值</FieldLabel>
           </Field>
+          {retention && <Field orientation="horizontal" className="live-account-confirmation live-retention-consent">
+            <Checkbox id="live-session-retention" checked={retention.checked} onCheckedChange={retention.onChange} disabled={Boolean(busy) || !input.credential} aria-describedby="live-session-retention-note" />
+            <div>
+              <FieldLabel htmlFor="live-session-retention">加密保存 Session，便于本订单重试</FieldLabel>
+              <p id="live-session-retention-note">最多保存 30 天，仅用于本订单。资料可能提前失效。</p>
+            </div>
+          </Field>}
           <AsyncButton type="submit" className="primary-action" loading={busy === 'submit' || busy === 'check'} pendingLabel={busy === 'check' ? '正在检测账号' : retryKey ? '正在核对原提交' : '正在提交充值'} disabled={Boolean(busy) || !input.credential || !confirmed}>{retryKey ? '核对原提交' : precheckRequired ? precheck ? '重新检测并充值' : '检测账号并充值' : failed ? '重新提交 Session' : '提交并充值'} <ArrowRight size={16} /></AsyncButton>
           {precheckRequired && !precheck && !busy && !retryKey && <p className="live-session-hint">先核验账号与订阅条件，通过后自动提交充值。</p>}
           {busy === 'submit' && !precheck && <RequestNotice label="正在提交，完成后自动显示充值进度。" />}

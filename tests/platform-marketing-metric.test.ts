@@ -55,9 +55,12 @@ test('automatic total starts at the configured base and counts only new eligible
   insert('new-test', { test: 1 })
   const partner = await s.agent('independent-shop')
   insert('partner-success', { partnerId: partner.id })
-  assert.equal((await (await s.request('/api/catalog')).json()).marketingMetric.displayCount, 476)
+  const publicCount = async (slug?: string) => (await (await s.request('/api/catalog' + (slug ? '?partner=' + slug : ''))).json()).marketingMetric?.displayCount
+  assert.equal(await publicCount(), 476)
+  assert.equal(await publicCount(partner.id.slice(0, 6)), 476)
   s.db.prepare("UPDATE orders SET status='success',payment_status='paid' WHERE id=?").run(pending)
-  assert.equal((await (await s.request('/api/catalog')).json()).marketingMetric.displayCount, 477)
+  assert.equal(await publicCount(), 477)
+  assert.equal(await publicCount(partner.id.slice(0, 6)), 477)
   const current = await (await s.request(endpoint, undefined, s.admin)).json()
   assert.equal(current.baseCount, 476)
   assert.equal(current.newCompletedCount, 1)
@@ -73,14 +76,15 @@ test('automatic total starts at the configured base and counts only new eligible
   assert.equal((await (await s.request('/api/catalog')).json()).marketingMetric.displayCount, 477)
 })
 
-test('custom metric is public only in platform catalog and disabled by default', async t => {
+test('public catalogs share platform metric settings, disabled by default', async t => {
   const s = await customerFixture(); t.after(() => s.db.close())
   assert.deepEqual((await (await s.request('/api/catalog')).json()).marketingMetric, { enabled: false, displayText: '活动展示数：{count}', displayCount: 0 })
   const partner = await s.agent('independent-shop')
   const slug = String(s.db.prepare('SELECT slug FROM partners WHERE id=?').get(partner.id)!.slug)
-  assert.equal((await (await s.request('/api/catalog?partner=' + slug)).json()).marketingMetric, null)
+  const catalog = async (slug?: string) => (await (await s.request('/api/catalog' + (slug ? '?partner=' + slug : ''))).json()).marketingMetric
+  assert.deepEqual(await catalog(slug), await catalog())
   const update = { enabled: true, displayText: '活动展示数：{count}', displayCount: 12, version: 0 }
   assert.equal((await s.request(endpoint, update, s.admin)).status, 200)
   assert.deepEqual((await (await s.request('/api/catalog')).json()).marketingMetric, { enabled: true, displayText: '活动展示数：{count}', displayCount: 12 })
-  assert.equal((await (await s.request('/api/catalog?partner=' + slug)).json()).marketingMetric, null)
+  assert.deepEqual(await catalog(slug), await catalog())
 })

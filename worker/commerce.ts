@@ -1,5 +1,5 @@
 import { supplyCheckoutEnabled } from './muse/service.ts'
-import { isMuseCode, supplyKind } from './muse/client.ts'
+import { isMuseCode, museConfigured, supplyKind } from './muse/client.ts'
 import { platformBranding, platformAnnouncement, platformBrandingRoute, platformAnnouncementRoute } from './platform-store-settings.ts'
 import { verificationConfig, verifyOrderChallenge } from './turnstile.ts'
 import { inventoryAdmin } from './fulfillment/admin.ts'
@@ -24,7 +24,8 @@ import { alipayConfigured } from './payments/providers.ts'
 import { paymentTesting } from './payments/testing.ts'
 import { supportContactsRoute, supportContactsSettings } from './support-contacts.ts'
 import { checkoutEnabled as supplierCheckoutEnabled, configured as supplierConfigured, productMap, RechargeError } from './recharge/client.ts'
-import { supplierSnapshot, snapshotStatement, syncRechargeOrder, rechargeAction, rechargeSummary, findRechargeOrder, reconcileRecharge, expireRechargeOrder, queryPlatformOrder, platformOrderStatus } from './recharge/service.ts'
+import { supplierCatalog, supplierSnapshot, snapshotStatement, syncRechargeOrder, rechargeAction, rechargeSummary, findRechargeOrder, reconcileRecharge, expireRechargeOrder, queryPlatformOrder, platformOrderStatus } from './recharge/service.ts'
+import { RechargeRetentionUnavailable } from './recharge/saved-credentials.ts'
 import type { SupportContactsSettings } from '../shared/support-contacts.ts'
 import { setRedemptionBlocked } from './order-redemption.ts'
 import { adminVisitorSummary } from './visitors.ts'
@@ -37,12 +38,16 @@ import { rechargeReminderPreview } from './recharge-reminders.ts'
 import { opsNotificationsAdmin } from './ops-notifications.ts'
 import { adminGmailOrder, confirmGmailNotPurchased, fulfillGmail, gmailCheckoutEnabled, gmailProductsRoute, gmailSnapshot, gmailSnapshotStatement } from './account_supplier/service.ts'
 import { platformProductHidden, platformProductVisibility, platformProductVisibilityRoute } from './platform-product-visibility.ts'
+import { backfillPartnerPrices } from './partner-price-backfill.ts'
+import { partnerProductAllowed, partnerProductIds } from './partner-product-policy.ts'
 import { platformMarketingMetric, platformMarketingMetricRoute } from './platform-marketing-metric.ts'
 
 type Plan = { delivery_instructions: string; partner_enabled: number; id: string; product_id: string; name: string; price_cents: number; enabled: number; renewal_only: number; version: number }
 type OrderPartnerSource = { id: string; slug: string; name: string; email: string; wechat: string; qq: string }
 const statuses: Status[] = ['pending', 'session', 'processing', 'success', 'failed', 'cancelled']
-const publicOrder = (o: Order) => ({ purchaseNote: o.purchase_note ?? '', isTest: Boolean(o.is_test), customerEmail: o.customer_email, refundedCents: o.refunded_cents, refundHold: Boolean(o.refund_hold), redemptionBlocked: Boolean(o.redemption_blocked), id: o.id, plan: o.plan, planName: o.plan_name, partnerName: o.partner_name ?? undefined, price: o.price_cents / 100, mode: o.mode, paymentStatus: o.payment_status, status: o.status, createdAt: o.created_at, updatedAt: o.updated_at, startedAt: o.started_at ?? undefined, smsPhone: o.sms_phone ?? undefined, version: o.version })
+// Normalize this legacy retail label only in responses; immutable payment snapshots stay intact.
+const orderPlanName = (o: Order) => o.mode === 'live' && !o.is_test && o.plan_name === '单次接码（测试价）' ? '单次接码' : o.plan_name
+const publicOrder = (o: Order) => ({ purchaseNote: o.purchase_note ?? '', isTest: Boolean(o.is_test), customerEmail: o.customer_email, refundedCents: o.refunded_cents, refundHold: Boolean(o.refund_hold), redemptionBlocked: Boolean(o.redemption_blocked), id: o.id, plan: o.plan, planName: orderPlanName(o), partnerName: o.partner_name ?? undefined, price: o.price_cents / 100, mode: o.mode, paymentStatus: o.payment_status, status: o.status, createdAt: o.created_at, updatedAt: o.updated_at, startedAt: o.started_at ?? undefined, smsPhone: o.sms_phone ?? undefined, version: o.version })
 type AdminOrder = Order & { settlement_status: 'pending' | 'paid' | null }
 const adminOrder = async (env: Env, o: AdminOrder) => ({ ...(await customerOrder(env, o, undefined, false, false)), platformStatus: await platformOrderStatus(env, o), settlementStatus: o.settlement_status })
 const plans = async (env: Env) => (await env.INTEREST_DB.prepare('SELECT * FROM catalog_plans ORDER BY rowid').all<Plan>()).results
@@ -116,8 +121,8 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
         partner ? partnerCatalog(env, partner) : plans(env).then(plans => ({ plans })),
         supportContactsSettings(env, partner?.id),
         partner ? publicAnnouncement(env, partner.id) : platformAnnouncement(env).then(value => value.enabled ? value : null),
-        partner ? null : platformProductVisibility(env),
-        partner ? null : platformMarketingMetric(env),
+        platformProductVisibility(env),
+        platformMarketingMetric(env).catch(() => null),
         partner ? null : platformBranding(env),
       ])
       // Storefront prices are configured retail prices, independent of supplier latency.
@@ -126,10 +131,11 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
       // Each supplier SKU opens on its own gate; Muse-branded SKUs also need the Muse payment route.
       const supplyOpen = (code: string | null) => Boolean(code) && (isMuseCode(code!) ? museRoute : customOpen) && supplyCheckoutEnabled(env, code!)
       const museOpen = customOffers.some(plan => plan.delivery_provider === 'muse' && !plan.hidden && !plan.delisted && supplyOpen(plan.muse_product_code))
-      const offers = (catalog.plans as Plan[]).filter(plan => !isServicePlan(plan.id)).map(plan => ({ ...plan, enabled: plan.enabled && (
+      let offers = (catalog.plans as Plan[]).filter(plan => !isServicePlan(plan.id)).map(plan => ({ ...plan, enabled: plan.enabled && (
         isXGiftPlan(plan.id) ? xgiftCheckoutEnabled(env) : plan.id === 'gmail-account' ? gmail : isDeliverySupplierPlan(plan.id) ? delivery_supplier : emailProduct(plan.id) ? email : testing || (live && Boolean(mapped[plan.id]))
       ) ? 1 : 0 }))
-      const hiddenProductIds: readonly string[] = platformVisibility?.hiddenProductIds ?? ('hiddenProductIds' in catalog ? catalog.hiddenProductIds : [])
+      if (partner && live) offers = await supplierCatalog(env, offers, partner.id)
+      const hiddenProductIds: readonly string[] = [...new Set([...platformVisibility.hiddenProductIds, ...('hiddenProductIds' in catalog ? catalog.hiddenProductIds : [])])]
       return json({ ...catalog, platformBranding: branding, hiddenProductIds, marketingMetric: marketingMetric && { enabled: marketingMetric.enabled, displayText: marketingMetric.displayText, displayCount: marketingMetric.displayCount }, supportContacts: support.contacts, announcement, plans: [...offers, ...customOffers.filter(plan => !plan.hidden && !plan.delisted).map(({ muse_product_code: code, muse_max_cost_cents: _cost, ...plan }) => ({ ...plan, supply_kind: supplyKind(code), enabled: plan.enabled && (plan.delivery_provider === 'muse' ? supplyOpen(code) : customOpen) && (plan.delivery_type !== 'stock' || plan.stock_available > 0) ? 1 : 0 }))].filter(plan => !hiddenProductIds.includes(plan.product_id)), mode: live ? 'live' : 'demo', checkoutEnabled: testing || live || email || xgiftCheckoutEnabled(env) || customOpen || museOpen, testingEnabled: testing }, 200, { 'Server-Timing': `catalog;dur=${(performance.now() - started).toFixed(1)}` })
     }
     if (path === '/api/orders/client' && method === 'POST') {
@@ -186,10 +192,10 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
       if (emailDelivery && !live) throw new ApiError('邮件交付商品暂未开放购买。', 409)
       if (env.ORDER_TESTING_ENABLED !== 'true' && !live) throw new ApiError('该服务暂未开放购买，请稍后再来。', 409)
       const plan = await env.INTEREST_DB.prepare('SELECT * FROM catalog_plans WHERE id=? AND enabled=1').bind(data.plan).first<Plan>()
-      if (partner && plan && !plan.partner_enabled) throw new ApiError('该商品暂未开放代理销售。', 409)
+      if (partner && plan && (!plan.partner_enabled || !partnerProductAllowed(env, plan.product_id))) throw new ApiError('该商品暂未开放代理销售。', 409)
       if (!plan) throw new ApiError('该套餐已暂停销售，请选择其他套餐。', 409)
       if (partner && await env.INTEREST_DB.prepare('SELECT 1 FROM partner_product_order p,json_each(p.hidden_product_ids) h WHERE p.partner_id=? AND h.value=?').bind(partner.id, plan.product_id).first()) throw new ApiError('该商品已被商店下架，请选择其他商品。', 409)
-      if (!partner && await platformProductHidden(env, plan.product_id)) throw new ApiError('该商品已下架，请选择其他商品。', 409)
+      if (await platformProductHidden(env, plan.product_id)) throw new ApiError('该商品已下架，请选择其他商品。', 409)
       const offer = partner ? await env.INTEREST_DB.prepare('SELECT * FROM partner_prices WHERE partner_id=? AND plan=?').bind(partner.id, plan.id).first<{ price_cents: number; cost_cents: number; version: number }>() : null
       if (partner && !offer) throw new ApiError('该代理尚未开通此套餐。', 409)
       if (data.expectedPrice !== (offer?.price_cents ?? plan.price_cents)) throw new ApiError('套餐价格已更新，请刷新后重新确认。', 409)
@@ -200,8 +206,8 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
       const xgift = isXGiftPlan(plan.id) ? await xgiftSnapshot(env, ownerHash, data) : null
       const id = 'YMX-' + crypto.randomUUID().replaceAll('-', '').toUpperCase(); const eventId = crypto.randomUUID(); const now = Date.now()
       await env.INTEREST_DB.batch([
-        partner && offer ? env.INTEREST_DB.prepare("INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,status,created_at,updated_at,last_event_id,customer_email,partner_id,partner_name,cost_cents) SELECT ?,?,?,c.id,c.name,pp.price_cents,'pending',?,?,?,?,p.id,p.name,pp.cost_cents FROM catalog_plans c JOIN partner_prices pp ON pp.plan=c.id JOIN partners p ON p.id=pp.partner_id WHERE c.id=? AND c.enabled=1 AND c.version=? AND pp.version=? AND p.id=? AND p.active=1 AND p.version=? AND c.partner_enabled=1 AND NOT EXISTS(SELECT 1 FROM partner_product_order po,json_each(po.hidden_product_ids) h WHERE po.partner_id=p.id AND h.value=c.product_id) ON CONFLICT(owner_hash,idempotency_key) DO NOTHING")
-          .bind(id, ownerHash, data.key, now, now, eventId, email, plan.id, plan.version, offer.version, partner.id, partner.version)
+        partner && offer ? env.INTEREST_DB.prepare("INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,status,created_at,updated_at,last_event_id,customer_email,partner_id,partner_name,cost_cents) SELECT ?,?,?,c.id,c.name,pp.price_cents,'pending',?,?,?,?,p.id,p.name,pp.cost_cents FROM catalog_plans c JOIN partner_prices pp ON pp.plan=c.id JOIN partners p ON p.id=pp.partner_id WHERE c.id=? AND c.enabled=1 AND c.version=? AND pp.version=? AND p.id=? AND p.active=1 AND p.version=? AND c.partner_enabled=1 AND c.product_id IN (SELECT value FROM json_each(?)) AND NOT EXISTS(SELECT 1 FROM platform_product_visibility v,json_each(v.hidden_product_ids) h WHERE v.id=1 AND h.value=c.product_id) AND NOT EXISTS(SELECT 1 FROM partner_product_order po,json_each(po.hidden_product_ids) h WHERE po.partner_id=p.id AND h.value=c.product_id) ON CONFLICT(owner_hash,idempotency_key) DO NOTHING")
+          .bind(id, ownerHash, data.key, now, now, eventId, email, plan.id, plan.version, offer.version, partner.id, partner.version, JSON.stringify(partnerProductIds(env)))
         : env.INTEREST_DB.prepare("INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,status,created_at,updated_at,last_event_id,customer_email) SELECT ?,?,?,c.id,c.name,c.price_cents,'pending',?,?,?,? FROM catalog_plans c WHERE c.id=? AND c.enabled=1 AND c.version=? AND NOT EXISTS(SELECT 1 FROM platform_product_visibility v,json_each(v.hidden_product_ids) h WHERE v.id=1 AND h.value=c.product_id) ON CONFLICT(owner_hash,idempotency_key) DO NOTHING")
           .bind(id, ownerHash, data.key, now, now, eventId, email, plan.id, plan.version),
         env.INTEREST_DB.prepare('UPDATE orders SET purchase_note=(SELECT purchase_note FROM catalog_plans WHERE id=orders.plan) WHERE id=?').bind(id),
@@ -261,6 +267,7 @@ export async function commerce(request: Request, env: Env): Promise<Response> {
     throw new ApiError('未找到接口或请求方法不支持。', 404)
   } catch (e) {
     if (e instanceof RechargeError) return json({ error: e.message, code: e.code, retryable: e.retryable, retryAfter: e.retryAfter }, e.status, e.retryAfter === null ? {} : { 'Retry-After': String(e.retryAfter) })
+    if (e instanceof RechargeRetentionUnavailable) return json({ error: e.message, code: e.code }, e.status)
     return json({ error: e instanceof ApiError ? e.message : '服务暂时不可用，请稍后重试。' }, e instanceof ApiError ? e.status : 503)
   }
 }
@@ -277,7 +284,7 @@ async function admin(request: Request, env: Env, url: URL): Promise<Response> {
     const stats = await db.prepare("SELECT COUNT(*) total, SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) pending, SUM(CASE WHEN status IN ('session','processing','failed') AND refunded_cents<price_cents THEN 1 ELSE 0 END) active, SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) completed, COALESCE(SUM(CASE WHEN mode='demo' AND payment_status='simulated' THEN price_cents ELSE 0 END),0) demo_amount, COALESCE(SUM(CASE WHEN mode='live' AND payment_status='paid' THEN price_cents-MAX(refunded_cents,COALESCE((SELECT t.refunded_cents FROM recharge_orders t WHERE t.order_id=orders.id),0)) ELSE 0 END),0) paid_amount, COALESCE(SUM(CASE WHEN mode='live' THEN MAX(refunded_cents,COALESCE((SELECT t.refunded_cents FROM recharge_orders t WHERE t.order_id=orders.id),0)) ELSE 0 END),0) refund_amount FROM orders WHERE is_test=0").first()
     const interest = await db.prepare('SELECT COUNT(*) total FROM launch_interest').first()
     const recent = (await db.prepare('SELECT orders.*, (SELECT status FROM partner_payouts WHERE id=orders.payout_id) settlement_status FROM orders WHERE is_test=0 ORDER BY created_at DESC LIMIT 6').all<AdminOrder>()).results
-    return json({ stats, interest, recent: await Promise.all(recent.map(o => adminOrder(env, o))), integrations: { alipay: alipayConfigured(env), supplier: supplierConfigured(env), supplierCheckout: supplierCheckoutEnabled(env), resend: mailConfigured(env) }, mode: supplierCheckoutEnabled(env) ? 'live' : 'demo' })
+    return json({ stats, interest, recent: await Promise.all(recent.map(o => adminOrder(env, o))), integrations: { alipay: alipayConfigured(env), supplier: supplierConfigured(env), supplierCheckout: supplierCheckoutEnabled(env), resend: mailConfigured(env), codexSms: { configured: museConfigured(env), checkoutReady: supplyCheckoutEnabled(env, 'codex-sms-once') && await serviceCheckoutEnabled(env) } }, mode: supplierCheckoutEnabled(env) ? 'live' : 'demo' })
   }
   if (path === '/api/admin/orders' && method === 'GET') {
     await settleDue(env)
@@ -373,6 +380,7 @@ async function admin(request: Request, env: Env, url: URL): Promise<Response> {
     await db.batch([
       db.prepare('INSERT INTO admin_audit(id,action,target_id,note,created_at) SELECT ?,?,?,?,? FROM catalog_plans WHERE id=? AND version=?').bind(eventId, 'plan-update', plan.id, `${env.ADMIN_USERNAME}: ${plan.price_cents}→${data.priceCents}; enabled ${plan.enabled}→${Number(data.enabled)}; ${note}`, Date.now(), plan.id, plan.version),
       db.prepare('UPDATE catalog_plans SET price_cents=?,enabled=?,purchase_note=COALESCE(?,purchase_note),delivery_instructions=COALESCE(?,delivery_instructions),partner_enabled=COALESCE(?,partner_enabled),version=version+1,updated_at=? WHERE id=? AND version=?').bind(Number(data.priceCents), Number(data.enabled), typeof data.purchaseNote === 'string' ? data.purchaseNote.trim() : null, typeof data.deliveryInstructions === 'string' ? data.deliveryInstructions.trim() : null, typeof data.partnerEnabled === 'boolean' ? Number(data.partnerEnabled) : null, Date.now(), plan.id, plan.version),
+      backfillPartnerPrices(env, eventId, plan.id),
     ])
     if (!await db.prepare('SELECT id FROM admin_audit WHERE id=?').bind(eventId).first()) throw new ApiError('套餐已更新，请刷新后重试。', 409)
     return json({ ok: true })

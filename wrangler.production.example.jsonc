@@ -7,8 +7,11 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "preview_urls": false,
-  "main": "worker/index.ts",
+  "main": "worker/storefront-entry.ts",
   "vars": {
+    // Empty keeps SEO disabled. Set only the verified public main-store origin.
+    "STOREFRONT_SEO_ORIGIN": "",
+    "PARTNER_PRODUCT_IDS": "chatgpt,codex-credits",
     "ORDER_TESTING_ENABLED": "false",
     "TURNSTILE_ENABLED": "false",
     "TURNSTILE_SITE_KEY": "",
@@ -39,6 +42,7 @@
     }
   ],
   "ratelimits": [
+    { "name": "SEO_CATALOG_LIMITER", "namespace_id": "16881004", "simple": { "limit": 6, "period": 60 } },
     {
       "name": "INTEREST_LIMITER",
       "namespace_id": "16881001",
@@ -57,7 +61,7 @@
   ],
   "assets": {
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*"],
+    "run_worker_first": true,
     "directory": "./dist",
     "not_found_handling": "single-page-application"
   },

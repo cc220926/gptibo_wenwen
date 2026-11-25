@@ -1,10 +1,14 @@
+import { platformProductVisibility } from './platform-product-visibility.ts'
+import { partnerExcludedProducts } from './partner-product-policy.ts'
 import { DEFAULT_PRODUCT_ORDER, normalizeProductOrder, type ProductOrderSettings } from '../shared/product-order.ts'
 import { ApiError, body, json, type Env } from './platform.ts'
 import type { Partner } from './partner-auth.ts'
 
 export async function productOrderSettings(env: Env, partnerId: string): Promise<ProductOrderSettings> {
   const row = await env.INTEREST_DB.prepare('SELECT product_ids,hidden_product_ids,version FROM partner_product_order WHERE partner_id=?').bind(partnerId).first<{ product_ids: string; hidden_product_ids: string; version: number }>()
-  return { productIds: normalizeProductOrder(row ? JSON.parse(row.product_ids) : []), version: row?.version ?? 0, hiddenProductIds: row ? JSON.parse(row.hidden_product_ids) : [] }
+  const visibility = await platformProductVisibility(env)
+  const platformHiddenProductIds = [...new Set([...visibility.hiddenProductIds, ...partnerExcludedProducts(env)])]
+  return { ...(platformHiddenProductIds.length ? { platformHiddenProductIds } : {}), productIds: normalizeProductOrder(row ? JSON.parse(row.product_ids) : []), version: row?.version ?? 0, hiddenProductIds: row ? JSON.parse(row.hidden_product_ids) : [] }
 }
 
 export async function productOrderRoute(request: Request, env: Env, partner: Partner) {

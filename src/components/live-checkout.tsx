@@ -1,5 +1,5 @@
 import { isCodexCreditsPlan } from '../../shared/codex-credits'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toString as qrToString } from 'qrcode'
 import { RefreshCw, TriangleAlert } from 'lucide-react'
@@ -8,7 +8,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { LiveSessionForm, LiveRechargeProcessing, LiveRechargeSuccess } from './live-recharge-content'
 import { CheckoutStageTransition } from './checkout-stage-transition'
 import { PaymentCard } from './payment-card'
-import { PaymentConfirmed, PaymentMessage } from './payment-feedback'
+import { AsyncButton, PaymentConfirmed, PaymentMessage } from './payment-feedback'
 import { useOrderSupportGuide } from '@/lib/order-support-guide'
 import { api, errorMessage, RequestError } from '@/lib/api'
 import { requestLane } from '@/lib/request-lane'
@@ -18,6 +18,7 @@ import type { SessionPrecheck } from './session-precheck'
 import type { ServerOrder } from '@/lib/use-store'
 import { productForPlan } from '@/lib/products'
 import { paymentDeadline } from '../../shared/payment-window'
+import { RECHARGE_RETENTION_UNAVAILABLE } from '../../shared/recharge-credential'
 import { publicAlipayQr } from '../../shared/public-payment'
 import '@/styles/live-checkout.css'
 
@@ -25,10 +26,14 @@ type Props = { order: ServerOrder; open: boolean; onUpdated?: () => void; onOrde
 export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders, error, refreshTarget, refreshDisabled, transport = api, initialSession = '' }: Props) {
   const [session, setSession] = useState(initialSession)
   const [confirmed, setConfirmed] = useState(false)
+  const [retainCredential, setRetainCredential] = useState(true)
+  const [showReplacement, setShowReplacement] = useState(false)
   const [touched, setTouched] = useState(false)
-  const [busy, setBusy] = useState<'' | 'query' | 'check' | 'submit'>('')
+  const [busy, setBusy] = useState<'' | 'query' | 'check' | 'submit' | 'retry-saved'>('')
   const [precheck, setPrecheck] = useState<SessionPrecheck | null>(null)
   const checkAbort = useRef<AbortController | null>(null)
+  const draftScope = useRef(0)
+  useLayoutEffect(() => () => { draftScope.current++ }, [open])
   useEffect(() => { if (!open) checkAbort.current?.abort() }, [open])
   useEffect(() => () => { checkAbort.current?.abort() }, [])
   const [failure, setFailure] = useState('')
@@ -39,6 +44,7 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
   const submitting = useRef(false)
   const lane = useRef(requestLane())
   const attemptKey = useRef<string | undefined>(undefined)
+  const savedAttemptKey = useRef<{ source: string; key: string } | null>(null)
   const callbacks = useRef({ onUpdated, onOrderUpdated, transport })
   useEffect(() => { callbacks.current = { onUpdated, onOrderUpdated, transport } }, [onUpdated, onOrderUpdated, transport])
   const info = order.fulfillment!
@@ -46,6 +52,9 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
   const paused = (order.redemptionBlocked && order.status !== 'success') || order.refundHold || (order.refundedCents ?? 0) >= Math.round(order.price * 100)
   const input = checkoutSession(session, info.retryMode)
   const unknown = info.rechargeStatus === 'unknown'
+  const canSubmit = info.canSubmit && order.paymentStatus === 'paid' && !paused && !info.financialHold
+  const retentionAvailable = canSubmit && Boolean(info.canRetainCredential) && !unknown && !info.retryKey
+  const saved = canSubmit && info.canRetainCredential ? info.savedCredential : null
   const failed = order.status === 'failed' || info.rechargeStatus === 'rejected'
   const failureTitle = info.failureCode === 'account_has_subscription' ? '当前订阅尚未到期' : info.message?.includes('登录凭据已失效') ? 'Session 已失效' : '充值未完成'
   const deadline = paymentDeadline(order.createdAt, info.expiresAt)
@@ -92,16 +101,30 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
     return () => { stop(); controller.abort() }
   }, [watching, order.id])
 
-  async function run(submit = false) {
-    if (submitting.current || busy || (!submit && refreshDisabled)) return
+  async function run(action: 'query' | 'submit' | 'retry-saved' = 'query') {
+    if (!open || submitting.current || busy) return
+    if (action === 'query' ? refreshDisabled : !canSubmit) return
+    if (action === 'retry-saved' && (!saved?.canReuse || (unknown && !info.retryKey))) return
     const currentInput = checkoutSession(session, info.retryMode)
-    if (submit && (!currentInput.credential || !confirmed)) { setTouched(true); setSubmitFailure(currentInput.problem); return }
-    submitting.current = true; setBusy(submit ? 'submit' : 'query'); setFailure('')
+    if (action === 'submit' && (!currentInput.credential || !confirmed)) { setTouched(true); setSubmitFailure(currentInput.problem); return }
+    submitting.current = true; setBusy(action); setFailure('')
     const credential = currentInput.credential
-    if (submit) { setSubmitFailure(''); setPrecheck(null); setTouched(false) }
+    const saveOnSubmit = action === 'submit' && retentionAvailable && retainCredential
+    const scope = draftScope.current
+    if (action !== 'query') { setSubmitFailure(''); setPrecheck(null); setTouched(false) }
     try {
       await lane.current.run(async () => {
-        if (submit) {
+        if (action === 'retry-saved' && saved) {
+          const previous = savedAttemptKey.current
+          const key = info.retryKey ?? (previous?.source === saved.attemptId ? previous.key : crypto.randomUUID())
+          savedAttemptKey.current = { source: saved.attemptId, key }
+          const result = await transport<{ order: ServerOrder }>(`/api/orders/${order.id}/fulfillment`, {
+            action, key, sourceAttemptId: saved.attemptId, customerConfirmedEmail: true,
+          })
+          savedAttemptKey.current = null
+          setSession(''); setConfirmed(false); setShowReplacement(false)
+          callbacks.current.onOrderUpdated?.(result.order)
+        } else if (action === 'submit') {
           if (['rejected', 'failed', 'cancelled'].includes(info.rechargeStatus ?? '')) attemptKey.current = undefined
           attemptKey.current = info.retryKey ?? attemptKey.current ?? crypto.randomUUID()
           let precheckReceipt: string | undefined
@@ -121,7 +144,7 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
           }
           setBusy('submit'); setSession(''); setConfirmed(false)
           const submittedAt = performance.now()
-          const result = await transport<{ order: ServerOrder }>(`/api/orders/${order.id}/fulfillment`, { action: 'submit', key: attemptKey.current, customerConfirmedEmail: true, credential, precheckReceipt, retainCredential: false })
+          const result = await transport<{ order: ServerOrder }>(`/api/orders/${order.id}/fulfillment`, { action: 'submit', key: attemptKey.current, customerConfirmedEmail: true, credential, precheckReceipt, retainCredential: saveOnSubmit })
           // Dispatch immediately; only the visual handoff has a brief minimum dwell.
           if (precheckReceipt && !matchMedia('(prefers-reduced-motion: reduce)').matches) await new Promise(resolve => setTimeout(resolve, Math.max(0, 450 - (performance.now() - submittedAt))))
           callbacks.current.onOrderUpdated?.(result.order)
@@ -133,7 +156,19 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
           if (result.order.fulfillment?.rechargeStatus !== 'unknown') setSubmitFailure('')
         }
       })
-    } catch (e) { if (submit) { setPrecheck(null); setSubmitFailure(errorMessage(e)) } else setFailure(errorMessage(e)) }
+    } catch (e) {
+      if (action === 'query') {
+        setFailure(errorMessage(e))
+      } else {
+        // Only this local pre-dispatch error confirms the draft can be offered again.
+        if (saveOnSubmit && draftScope.current === scope && e instanceof RequestError && e.status === 503 && e.code === RECHARGE_RETENTION_UNAVAILABLE) {
+          setSession(session)
+          setConfirmed(confirmed)
+        }
+        setPrecheck(null)
+        setSubmitFailure(errorMessage(e))
+      }
+    }
     finally { submitting.current = false; setBusy(''); callbacks.current.onUpdated?.() }
   }
   // Place the original refresh control in the footer while sharing the submit lock and errors.
@@ -144,12 +179,32 @@ export function LiveCheckout({ order, open, onUpdated, onOrderUpdated, onOrders,
         {expired ? <PaymentMessage state="expired" title="订单已过期">付款有效期已结束，请重新下单。若已付款，请先核对付款结果，勿重复支付。</PaymentMessage> : qr ? <PaymentCard qr={qr} image={image} imageError={Boolean(imageError)} remaining={remaining} price={order.price} quantity={product.quantity} /> : <PaymentMessage state="loading" title="正在生成支付二维码">订单已保存，准备好后自动显示。长时间未显示，请刷新进度或联系客服。</PaymentMessage>}
       </div>}
 
-      <CheckoutStageTransition stage={info.canSubmit ? 'input' : order.status === 'processing' && !unknown ? 'processing' : 'other'}>{stage => <>
+      <CheckoutStageTransition stage={canSubmit ? 'input' : order.status === 'processing' && !unknown ? 'processing' : 'other'}>{stage => <>
       {stage === 'input' && <>
-        {unknown && busy !== 'submit' ? <Alert className="live-notice" role="status"><TriangleAlert aria-hidden="true" /><AlertTitle>提交待确认</AlertTitle><AlertDescription>{submitFailure && <>{submitFailure}<br /></>}充值服务尚未确认收到本次提交，暂不能确认已开始充值。先刷新查询；仍未确认时，粘贴原 Session 核对同一次提交。请勿重新付款。</AlertDescription></Alert>
+        {unknown && busy !== 'submit' ? <Alert className="live-notice" role="status"><TriangleAlert aria-hidden="true" /><AlertTitle>提交待确认</AlertTitle><AlertDescription>{submitFailure && <>{submitFailure}<br /></>}充值服务尚未确认收到本次提交，暂不能确认已开始充值。先刷新查询；仍未确认时，{saved?.canReuse ? '可以使用原资料核对同一次提交。' : '粘贴原 Session 核对同一次提交。'}请勿重新付款。</AlertDescription></Alert>
           : failed && busy !== 'submit' ? <Alert className="live-notice" role="status"><TriangleAlert aria-hidden="true" /><AlertTitle>{failureTitle}</AlertTitle><AlertDescription>{info.message ?? '请获取新的 Session 后重试。'}{info.failureCode !== 'account_has_subscription' && ' 本订单无需重复付款。'}</AlertDescription></Alert>
           : <PaymentConfirmed>付款已确认，请连接要充值的账号。</PaymentConfirmed>}
-        <LiveSessionForm session={session} confirmed={confirmed} touched={touched} busy={busy} precheckRequired={info.precheckRequired} precheck={precheck} retryMode={info.retryMode} retryKey={info.retryKey} failed={failed} onSessionChange={value => { setSession(value); setConfirmed(false); setTouched(false); setPrecheck(null) }} onConfirmChange={setConfirmed} onTouch={() => setTouched(true)} onSubmit={() => void run(true)} />
+        {saved && <section className="live-saved-credential" aria-label="原资料重试">
+          <p>{unknown
+            ? '上次提交的资料已加密保存，只能核对同一次提交。'
+            : !saved.canReuse
+              ? '保存的资料已不可用，请在本订单提交新的 Session。'
+              : '上次提交的资料已加密保存。使用原资料重试本订单，无需再次付款。'}
+          {info.accountEmailMasked && <> 账号 <strong>{info.accountEmailMasked}</strong>。</>}</p>
+          {saved.canReuse && <div className="live-saved-actions">
+            <AsyncButton className="primary-action" loading={busy === 'retry-saved'} pendingLabel="正在核对原资料" disabled={Boolean(busy)} onClick={() => void run('retry-saved')}>
+              <RefreshCw size={15} aria-hidden="true" />{unknown ? '核对原提交' : '使用原资料重试'}
+            </AsyncButton>
+            <Button variant="outline" disabled={Boolean(busy)} aria-expanded={showReplacement} onClick={() => setShowReplacement(shown => !shown)}>
+              {showReplacement ? '收起 Session 表单' : unknown ? '手动粘贴原 Session' : '更换 Session 后重试'}
+            </Button>
+          </div>}
+        </section>}
+        {(!saved?.canReuse || showReplacement) && <LiveSessionForm
+          session={session} confirmed={confirmed} touched={touched} busy={busy} precheckRequired={info.precheckRequired} precheck={precheck} retryMode={info.retryMode} retryKey={info.retryKey} failed={failed}
+          retention={retentionAvailable ? { checked: retainCredential, onChange: setRetainCredential } : undefined}
+          onSessionChange={value => { setSession(value); setConfirmed(false); setTouched(false); setPrecheck(null) }}
+          onConfirmChange={setConfirmed} onTouch={() => setTouched(true)} onSubmit={() => void run('submit')} />}
       </>}
 
       {stage === 'processing' && <LiveRechargeProcessing progressStage={info.progressStage} progressUpdatedAt={info.progressUpdatedAt} rechargeStatus={info.rechargeStatus} syncError={Boolean(info.syncError || failure || error)} />}

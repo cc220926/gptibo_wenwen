@@ -5,7 +5,7 @@ import { useStorefrontI18n } from '@/lib/storefront-i18n'
 import { storefrontScopeHeaders } from '@/lib/storefront-routing'
 import '@/styles/customer-history.css'
 
-export function CustomerHistory() {
+export function CustomerHistory({ partner }: { partner?: string }) {
   const { locale } = useStorefrontI18n()
   const english = locale === 'en'
   const [view, setView] = useState<CustomerHistoryView | null>(null)
@@ -26,6 +26,7 @@ export function CustomerHistory() {
       publish: setView,
       request: async cursor => {
         const query = new URLSearchParams({ product: 'chatgpt', cursor: String(cursor) })
+        if (partner) { query.set('scope', 'platform'); query.set('partner', partner) }
         const response = await fetch('/api/customer-history?' + query, {
           credentials: 'same-origin', headers: storefrontScopeHeaders(),
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]),
@@ -36,7 +37,7 @@ export function CustomerHistory() {
     })
     feed.current = session
     return () => { session.stop(); controller.abort(); feed.current = null }
-  }, [])
+  }, [partner])
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-reduced-motion: reduce)')

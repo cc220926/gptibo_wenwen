@@ -35,26 +35,36 @@ function PayoutHandler({ payout, onClose, onSaved }: { payout: Payout; onClose: 
   const [page, setPage] = useState(1)
   const [revision, setRevision] = useState(0)
   const details = usePartnerData<{ payout: Payout; items: { order_id: string; profit_cents: number; plan_name: string }[]; deductions: { order_id: string | null; domain_hostname?: string | null; amount_cents: number }[]; total: number }>('/api/admin/partner-payouts/' + payout.id + '?page=' + page, revision)
-  const [reject, setReject] = useState(false)
+  const [resolution, setResolution] = useState<'paid' | 'reject' | 'unknown'>('paid')
+  const [confirmed, setConfirmed] = useState(false)
+  const [evidence, setEvidence] = useState('')
+  const [claimed, setClaimed] = useState('')
   const [note, setNote] = useState('')
   const [reference, setReference] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const current = details.data?.payout
-  const action = reject ? 'rejected' : current?.reviewed_at ? 'paid' : 'approve'
+  const inFlight = current?.transfer_state === 'transferring' || current?.transfer_state === 'unknown'
+  const reject = resolution === 'reject'
+  const action = reject ? inFlight ? 'confirm-not-transferred' : 'rejected' : inFlight ? resolution === 'unknown' ? 'mark-unknown' : 'paid' : current?.reviewed_at ? 'start-transfer' : 'approve'
+  const actionLabel = { approve: '审核通过', 'start-transfer': '重新核验并领取转账', paid: '确认已转账并登记流水', rejected: '退回申请', 'mark-unknown': '标记结果未知，保持锁定', 'confirm-not-transferred': '确认未转出并退回' }[action]
 
   async function save() {
     if (busy || !current || details.loading) return
     setBusy(true)
     setError('')
     try {
-      await api('/api/admin/partner-payouts/' + payout.id, { action, note, reference, version: current.version })
+      const result = await api<{ attemptId?: string }>('/api/admin/partner-payouts/' + payout.id, { action, note, reference, version: current.version, attemptId: current.transfer_id, transferConfirmed: confirmed, confirmedNotTransferred: confirmed, evidence })
+      setClaimed(result.attemptId ?? '')
       onSaved()
       setRevision(v => v + 1)
       setNote('')
       setReference('')
-      setReject(false)
+      setResolution('paid')
+      setConfirmed(false)
+      setEvidence('')
     } catch (e) {
+      setClaimed('')
       setError(errorMessage(e))
       setRevision(v => v + 1)
     } finally {
@@ -65,7 +75,6 @@ function PayoutHandler({ payout, onClose, onSaved }: { payout: Payout; onClose: 
   const isPending = current?.status === 'pending'
   const isPaid = current?.status === 'paid'
   const isRejected = current?.status === 'rejected'
-  const isReviewed = Boolean(current?.reviewed_at)
 
   return (
     <Dialog open onOpenChange={v => { if (!v && !busy) onClose() }}>
@@ -73,7 +82,7 @@ function PayoutHandler({ payout, onClose, onSaved }: { payout: Payout; onClose: 
         <DialogHeader>
           <DialogTitle>提现审核与转账</DialogTitle>
           <DialogDescription>
-            {payout.partner_name || current?.partner_name || '代理商店'} · 审核后手动转账，最后登记流水。
+            {payout.partner_name || current?.partner_name || '代理商店'} · 审核后领取转账处理权，完成后登记流水。
           </DialogDescription>
         </DialogHeader>
 
@@ -90,7 +99,7 @@ function PayoutHandler({ payout, onClose, onSaved }: { payout: Payout; onClose: 
                     className="partner-order-mode-badge"
                     data-state={isPaid ? 'success' : undefined}
                   >
-                    {payoutLabel(current.status, current.reviewed_at)}
+                    {payoutLabel(current.status, current.reviewed_at, current.transfer_state)}
                   </Badge>
                   <span className="partner-order-ticket-time">
                     <Clock size={12} />
@@ -129,7 +138,7 @@ function PayoutHandler({ payout, onClose, onSaved }: { payout: Payout; onClose: 
                   <strong className="partner-finance-value partner-profit">
                     {money(current.amount_cents)}
                   </strong>
-                  <small className="partner-finance-hint">需向代理付款</small>
+                  <small className="partner-finance-hint">{isPaid ? '已登记转账' : isRejected ? '已退回，无需转账' : inFlight ? '资金锁定，请核对结果，勿重复转账' : '领取转账前将重新核验'}</small>
                 </div>
               </div>
               {current.deduction_cents > 0 && (
@@ -236,7 +245,7 @@ function PayoutHandler({ payout, onClose, onSaved }: { payout: Payout; onClose: 
                     variant={isPaid ? 'secondary' : 'destructive'}
                     data-state={isPaid ? 'success' : undefined}
                   >
-                    {payoutLabel(current.status, current.reviewed_at)}
+                    {payoutLabel(current.status, current.reviewed_at, current.transfer_state)}
                   </Badge>
                 </div>
                 <div className="partner-payout-result-body">
@@ -261,101 +270,53 @@ function PayoutHandler({ payout, onClose, onSaved }: { payout: Payout; onClose: 
               </div>
             ) : (
               <form className="partner-payout-form" onSubmit={e => { e.preventDefault(); void save() }}>
-                <div className="partner-action-picker">
-                  <span className="partner-action-picker-label">处理方式</span>
-                  <div className="partner-action-options">
-                    <button
-                      type="button"
-                      className={`partner-action-option ${!reject ? 'active' : ''}`}
-                      aria-pressed={!reject}
-                      onClick={() => setReject(false)}
-                      disabled={busy}
-                    >
-                      <div className="partner-action-option-header">
-                        <div className="partner-action-radio">
-                          {!reject && <div className="partner-action-radio-dot" />}
-                        </div>
-                        <strong>{isReviewed ? '登记转账完成' : '审核通过'}</strong>
-                      </div>
-                      <p>{isReviewed ? '已在支付宝完成打款，登记流水号' : '核验金额与收款信息，等待手动转账'}</p>
-                    </button>
-                    <button
-                      type="button"
-                      className={`partner-action-option ${reject ? 'active destructive' : ''}`}
-                      aria-pressed={reject}
-                      onClick={() => setReject(true)}
-                      disabled={busy}
-                    >
-                      <div className="partner-action-option-header">
-                        <div className="partner-action-radio">
-                          {reject && <div className="partner-action-radio-dot" />}
-                        </div>
-                        <strong>退回申请</strong>
-                      </div>
-                      <p>释放未冻结佣金，代理可修正后重新申请</p>
-                    </button>
-                  </div>
-                </div>
-
+                {inFlight && <Alert className="partner-payout-action-alert"><CircleAlert className="size-4" /><AlertDescription>
+                  {claimed === current.transfer_id
+                    ? '你已领取本次转账处理权。核对收款人和金额后，仅转账一次；完成后登记流水。'
+                    : '这笔转账已被领取，可能已经转出。请勿再次转账，先与处理人及支付宝账单核对。结果不明时资金持续锁定，不会自动解锁。'}
+                </AlertDescription></Alert>}
+                <Field>
+                  <FieldLabel htmlFor="payout-action">处理方式</FieldLabel>
+                  <select id="payout-action" className="rounded-md border p-2" value={resolution} disabled={busy} onChange={e => { setResolution(e.target.value as typeof resolution); setConfirmed(false); setEvidence(''); setReference('') }}>
+                    <option value="paid">{inFlight ? '登记已转账成功' : current.reviewed_at ? '重新核验并领取转账' : '审核通过'}</option>
+                    <option value="reject">{inFlight ? '核实未转出后退回' : '退回申请'}</option>
+                    {current.transfer_state === 'transferring' && <option value="unknown">结果未知，保持锁定</option>}
+                  </select>
+                </Field>
                 <Alert variant={reject ? 'destructive' : 'default'} className="partner-payout-action-alert">
                   {reject ? <AlertCircle className="size-4" /> : <CircleAlert className="size-4" />}
                   <AlertDescription>
-                    {action === 'approve'
-                      ? '确认收益和收款信息后审核，资金继续保留，等待你手动在支付宝转账。'
-                      : action === 'paid'
-                      ? '仅在支付宝转账成功后登记。本操作不会自动打款，需登记真实流水号。'
-                      : isReviewed
-                      ? '请先确认没有实际转账。若已转账成功，必须登记流水，不能退回。'
-                      : '退回后释放未冻结收益，代理可修正信息后重新申请。'}
+                    {action === 'approve' ? '审核不会打款。转账前必须再次核验并领取处理权。'
+                      : action === 'start-transfer' ? '将查询上游最新收益并锁定转账操作；只有领取成功的处理人可以进行一次手动转账。'
+                      : action === 'paid' ? '本操作仅登记真实转账，不会自动打款。即使随后发生退款，也应如实登记已转出的款项。'
+                      : action === 'confirm-not-transferred' ? '必须确认没有转出、没有处理中或延迟到账的交易。仅凭收款人说未到账不能释放资金。'
+                      : action === 'mark-unknown' ? '保留资金锁定，禁止再次领取转账。核实最终结果后再登记。'
+                      : '退回后释放未冻结收益，代理可修正后重新申请。'}
                   </AlertDescription>
                 </Alert>
-
                 <FieldGroup className="partner-payout-form-fields">
-                  {action === 'paid' && (
-                    <Field>
-                      <FieldLabel htmlFor="payout-reference">支付宝转账流水号</FieldLabel>
-                      <Input
-                        id="payout-reference"
-                        value={reference}
-                        onChange={e => setReference(e.target.value)}
-                        required
-                        maxLength={100}
-                        disabled={busy}
-                        placeholder="例如：DEMO_TRANSFER_REFERENCE"
-                        className="font-mono"
-                      />
-                      <FieldDescription>请从支付宝账单详情复制真实交易流水号或订单号。</FieldDescription>
-                    </Field>
-                  )}
+                  {action === 'paid' && <Field>
+                    <FieldLabel htmlFor="payout-reference">支付宝转账流水号</FieldLabel>
+                    <Input id="payout-reference" value={reference} onChange={e => setReference(e.target.value)} required maxLength={100} disabled={busy} placeholder="从支付宝账单复制真实流水号" />
+                    <FieldDescription>同一流水只能登记一次，请核对收款人和金额。</FieldDescription>
+                  </Field>}
+                  {action === 'confirm-not-transferred' && <Field>
+                    <FieldLabel htmlFor="payout-evidence">未转出核验依据</FieldLabel>
+                    <Input id="payout-evidence" value={evidence} onChange={e => setEvidence(e.target.value)} required minLength={10} maxLength={500} disabled={busy} placeholder="填写核对时间、付款账户及账单核对结果" />
+                  </Field>}
+                  {(action === 'paid' || action === 'confirm-not-transferred') && <label className="flex items-start gap-2 text-sm">
+                    <input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} disabled={busy} required />
+                    {action === 'paid' ? '已核对真实账单，转账金额及收款人正确，款项已转出成功。' : '已与处理人核对付款账单，确认未转出，且不存在处理中或延迟到账的转账。'}
+                  </label>}
                   <Field>
-                    <FieldLabel htmlFor="payout-note">{reject ? '退回原因' : '处理说明'}</FieldLabel>
-                    <Input
-                      id="payout-note"
-                      value={note}
-                      onChange={e => setNote(e.target.value)}
-                      required
-                      maxLength={300}
-                      disabled={busy}
-                      placeholder={reject ? '说明退回原因，便于代理查看并修正' : '例如：已核对无误或转账备注'}
-                    />
+                    <FieldLabel htmlFor="payout-note">处理说明</FieldLabel>
+                    <Input id="payout-note" value={note} onChange={e => setNote(e.target.value)} required maxLength={300} disabled={busy} placeholder="填写本次处理依据" />
                   </Field>
                 </FieldGroup>
-
                 <Feedback error={error} />
-
-                <Button
-                  type="submit"
-                  variant={reject ? 'destructive' : 'default'}
-                  disabled={busy || details.loading || !note.trim() || (action === 'paid' && !reference.trim())}
-                  className="partner-payout-submit"
-                >
-                  {busy
-                    ? '保存中…'
-                    : action === 'approve'
-                    ? '审核通过，等待转账'
-                    : action === 'paid'
-                    ? '确认已转账并登记流水'
-                    : '确认退回提现申请'}
+                <Button type="submit" variant={reject ? 'destructive' : 'default'} className="partner-payout-submit"
+                  disabled={busy || details.loading || !note.trim() || (action === 'paid' && (!reference.trim() || !confirmed)) || (action === 'confirm-not-transferred' && (!confirmed || evidence.trim().length < 10))}>
+                  {busy ? '保存中…' : actionLabel}
                 </Button>
               </form>
             )}
@@ -384,7 +345,7 @@ function PayoutHandler({ payout, onClose, onSaved }: { payout: Payout; onClose: 
 function Payouts({ revision, onSaved }: { revision: number; onSaved: () => void }) {
   const [page, setPage] = useState(1); const [edit, setEdit] = useState<Payout>()
   const { data, error, loading } = usePartnerData<{ rows: Payout[]; total: number }>('/api/admin/partner-payouts?page=' + page, revision)
-  return <><section className="admin-panel"><div className="admin-panel-title"><h2>代理结算</h2><span>待处理申请优先显示</span></div><Feedback error={error} loading={loading} data={data} />{data && <>{data.rows.length ? <div className="admin-table-scroll"><table className="admin-table"><thead><tr><th>代理 / 时间</th><th>金额</th><th>状态</th><th>说明 / 流水</th><th>操作</th></tr></thead><tbody>{data.rows.map(p => <tr key={p.id}><td>{p.partner_name}<small>{date(p.created_at)}</small></td><td>{money(p.amount_cents)}</td><td>{payoutLabel(p.status, p.reviewed_at)}</td><td>{p.note || '—'}<small>{p.reference}</small></td><td>{p.status === 'pending' ? <Button variant="outline" onClick={() => setEdit(p)}>处理申请</Button> : <Button variant="ghost" onClick={() => setEdit(p)}>查看明细</Button>}</td></tr>)}</tbody></table></div> : <div className="admin-empty"><h3>暂无结算申请</h3><p>代理提交的正式订单收益结算会显示在这里。</p></div>}<Pagination page={page} total={data.total} onPage={setPage} /></>}</section>{edit && <PayoutHandler payout={edit} onClose={() => setEdit(undefined)} onSaved={onSaved} />}</>
+  return <><section className="admin-panel"><div className="admin-panel-title"><h2>代理结算</h2><span>待处理申请优先显示</span></div><Feedback error={error} loading={loading} data={data} />{data && <>{data.rows.length ? <div className="admin-table-scroll"><table className="admin-table"><thead><tr><th>代理 / 时间</th><th>金额</th><th>状态</th><th>说明 / 流水</th><th>操作</th></tr></thead><tbody>{data.rows.map(p => <tr key={p.id}><td>{p.partner_name}<small>{date(p.created_at)}</small></td><td>{money(p.amount_cents)}</td><td>{payoutLabel(p.status, p.reviewed_at, p.transfer_state)}</td><td>{p.note || '—'}<small>{p.reference}</small></td><td>{p.status === 'pending' ? <Button variant="outline" onClick={() => setEdit(p)}>处理申请</Button> : <Button variant="ghost" onClick={() => setEdit(p)}>查看明细</Button>}</td></tr>)}</tbody></table></div> : <div className="admin-empty"><h3>暂无结算申请</h3><p>代理提交的正式订单收益结算会显示在这里。</p></div>}<Pagination page={page} total={data.total} onPage={setPage} /></>}</section>{edit && <PayoutHandler payout={edit} onClose={() => setEdit(undefined)} onSaved={onSaved} />}</>
 }
 function PartnerInvitation({ id, active, mailReady, notice }: { id: string; active: boolean; mailReady: boolean; notice: string }) {
   const [busy, setBusy] = useState(false); const [message, setMessage] = useState(''); const [error, setError] = useState(''); const [cooldown, setCooldown] = useState(0)
@@ -413,7 +374,7 @@ function TelegramApplicationInfo({ application }: { application: TelegramApplica
 function PartnerManagement({ id, revision, onClose, onSaved }: { id: string; revision: number; onClose: () => void; onSaved: () => void }) {
   const { data, error, loading } = usePartnerData<Dashboard & { telegramApplication: TelegramApplication | null; audit: { id: string; note: string; created_at: number }[] }>('/api/admin/partners/' + id, revision)
   const [tab, setTab] = useState('settings'); const [busy, setBusy] = useState(false)
-  return <Dialog open onOpenChange={open => { if (!open && !busy) onClose() }}><DialogContent className="motion-dialog partner-management-dialog hierarchy-admin-dialog" showCloseButton={!busy}><DialogHeader><DialogTitle>编辑代理</DialogTitle><DialogDescription>{data ? data.partner.email : '正在读取代理信息'}</DialogDescription></DialogHeader><Feedback error={error} loading={loading} data={data} shape="compact" />{data && <Tabs value={tab} onValueChange={value => setTab(String(value))} className="partner-tabs"><TabsList variant="line"><TabsTrigger value="settings">基本信息</TabsTrigger><TabsTrigger value="prices">供货价</TabsTrigger><TabsTrigger value="stores">商店与域名</TabsTrigger><TabsTrigger value="records">订单与记录</TabsTrigger><TabsTrigger value="permissions">层级与权限</TabsTrigger></TabsList><TabsContent value="settings"><TelegramApplicationInfo application={data.telegramApplication} /><PartnerSettings partner={data.partner} loading={loading} onSaved={onSaved} onBusy={setBusy} /><section className="partner-management-link"><h3>专属推广链接</h3><CopyLink url={data.partner.storefront_url || (data.partner.referralOrigin || location.origin) + partnerStorefrontPath(data.partner.slug)} /><PartnerInvitation id={id} active={Boolean(data.partner.active)} mailReady={data.mailReady} notice="邀请邮件提供工作台入口，代理登录时自行获取验证码。" /></section></TabsContent><TabsContent value="permissions"><div className="hierarchy-settings"><RecruitPermission partner={data.partner} onSaved={onSaved} disabled={loading || busy} /><ParentRelationship key={data.partner.version} partner={data.partner} onSaved={onSaved} disabled={loading || busy} /></div></TabsContent><TabsContent value="stores"><StoresWorkspace prefix={'/api/admin/partners/'+id} readOnly adminManagement onSaved={onSaved}/></TabsContent><TabsContent value="prices"><p className="partner-notice">客户售价由代理自己修改，供货价调整仅影响新订单。</p><Pricing plans={data.plans} cost endpoint={p => '/api/admin/partners/' + id + '/prices/' + p.id} onSaved={onSaved} /></TabsContent><TabsContent value="records"><PartnerOrders path={'/api/admin/partners/' + id + '/orders'} revision={revision} /><div className="admin-audit-list">{data.audit.map(a => <div key={a.id}><span>{a.note}</span><time>{date(a.created_at)}</time></div>)}</div></TabsContent></Tabs>}<a className="partner-management-preview" href={'/join?preview=' + id} target="_blank" rel="noreferrer">只读预览代理工作台 <ArrowUpRight size={14} /></a></DialogContent></Dialog>
+  return <Dialog open onOpenChange={open => { if (!open && !busy) onClose() }}><DialogContent className="motion-dialog partner-management-dialog hierarchy-admin-dialog" showCloseButton={!busy}><DialogHeader><DialogTitle>编辑代理</DialogTitle><DialogDescription>{data ? data.partner.email : '正在读取代理信息'}</DialogDescription></DialogHeader><Feedback error={error} loading={loading} data={data} shape="compact" />{data && <Tabs value={tab} onValueChange={value => setTab(String(value))} className="partner-tabs"><TabsList variant="line"><TabsTrigger value="settings">基本信息</TabsTrigger><TabsTrigger value="prices">供货价</TabsTrigger><TabsTrigger value="stores">商店与域名</TabsTrigger><TabsTrigger value="records">订单与记录</TabsTrigger><TabsTrigger value="permissions">层级与权限</TabsTrigger></TabsList><TabsContent value="settings"><TelegramApplicationInfo application={data.telegramApplication} /><PartnerSettings partner={data.partner} loading={loading} onSaved={onSaved} onBusy={setBusy} /><section className="partner-management-link"><h3>专属推广链接</h3><CopyLink url={data.partner.storefront_url || (data.partner.referralOrigin || location.origin) + partnerStorefrontPath(data.partner.slug)} /><PartnerInvitation id={id} active={Boolean(data.partner.active)} mailReady={data.mailReady} notice="邀请邮件提供工作台入口，代理登录时自行获取验证码。" /></section></TabsContent><TabsContent value="permissions"><div className="hierarchy-settings"><RecruitPermission partner={data.partner} onSaved={onSaved} disabled={loading || busy} /><ParentRelationship key={data.partner.version} partner={data.partner} onSaved={onSaved} disabled={loading || busy} /></div></TabsContent><TabsContent value="stores"><StoresWorkspace prefix={'/api/admin/partners/'+id} readOnly adminManagement onSaved={onSaved}/></TabsContent><TabsContent value="prices"><p className="partner-notice">供货价由总站「统一供货价」同步管理，客户售价由代理自行设置。历史订单与收益不变。</p><Pricing plans={data.plans} cost readOnly endpoint={p => '/api/admin/partners/' + id + '/prices/' + p.id} onSaved={onSaved} /></TabsContent><TabsContent value="records"><PartnerOrders path={'/api/admin/partners/' + id + '/orders'} revision={revision} /><div className="admin-audit-list">{data.audit.map(a => <div key={a.id}><span>{a.note}</span><time>{date(a.created_at)}</time></div>)}</div></TabsContent></Tabs>}<a className="partner-management-preview" href={'/join?preview=' + id} target="_blank" rel="noreferrer">只读预览代理工作台 <ArrowUpRight size={14} /></a></DialogContent></Dialog>
 }
 function PayoutCooldownReset({ partner, onClose, onSaved }: { partner?: Partner; onClose: () => void; onSaved: (message: string) => void }) {
   const [key] = useState(() => crypto.randomUUID())
@@ -454,7 +415,7 @@ export default function PartnersPage({ revision: externalRevision }: { revision:
       <TabsList variant="line">
         <TabsTrigger value="partners">代理列表</TabsTrigger>
         <TabsTrigger value="payouts">结算申请</TabsTrigger>
-        <TabsTrigger value="defaults">默认拿货价</TabsTrigger>
+        <TabsTrigger value="defaults">统一供货价</TabsTrigger>
       </TabsList>
       <TabsContent value="partners" className="workspace-enter">
         {notice && <Alert role={notice.failed ? 'alert' : 'status'} variant={notice.failed ? 'destructive' : 'default'} className="partner-list-result">
@@ -497,7 +458,7 @@ export default function PartnersPage({ revision: externalRevision }: { revision:
           </>}
         </section>
       </TabsContent>
-      <TabsContent value="defaults" className="workspace-enter"><PartnerDefaultPrices revision={version} /></TabsContent>
+      <TabsContent value="defaults" className="workspace-enter"><PartnerDefaultPrices revision={version} onSaved={reload} /></TabsContent>
       <TabsContent value="payouts" keepMounted={payoutsVisited} className="workspace-enter"><Payouts revision={version} onSaved={reload} /></TabsContent>
     </Tabs>
     {create && <PartnerCreator onClose={() => setCreate(false)} onSaved={(_id, message, invitationSent) => { reload(); setNotice({ message: message ?? '代理已开通', failed: invitationSent === false }); setPage(1); setSearch(''); setQ('') }} />}

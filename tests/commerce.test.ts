@@ -13,9 +13,9 @@ import { emptyAnnouncement } from '../shared/announcements.ts'
 import { provisionPartner } from '../worker/partner-provision.ts'
 
 const credential = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
-async function setup() {
+async function setup(beforeMigration?: string) {
   const db = new DatabaseSync(':memory:')
-  for (const file of readdirSync(new URL('../migrations/', import.meta.url)).filter(f => f.endsWith('.sql')).sort()) db.exec(readFileSync(new URL('../migrations/' + file, import.meta.url), 'utf8'))
+  for (const file of readdirSync(new URL('../migrations/', import.meta.url)).filter(f => f.endsWith('.sql') && (!beforeMigration || f < beforeMigration)).sort()) db.exec(readFileSync(new URL('../migrations/' + file, import.meta.url), 'utf8'))
   const bound = new WeakMap<Statement, { sql: string; values: Value[] }>()
   const env: Env = {
     ORDER_TESTING_ENABLED: 'true', ASSETS: { fetch: async () => new Response('asset') }, ADMIN_EMAIL: 'admin@example.invalid', ADMIN_USERNAME: 'tester', ADMIN_TOTP_SECRET: credential,
@@ -508,7 +508,7 @@ test('TOTP replay and concurrent logins consume a time step only once, including
 test('account-wide TOTP throttling bounds guesses spread over different IPs', async t => {
   const s = await setup(); t.after(() => s.db.close())
   for (let i = 0; i < 31; i++) {
-    const response = await worker.fetch(new Request('https://shop.example.invalid/api/admin/login', { method: 'POST', headers: { Origin: 'https://shop.example.invalid', 'Content-Type': 'application/json', 'CF-Connecting-IP': `192.0.2.${i}` }, body: JSON.stringify({ username: 'tester', code: 'invalid' }) }), s.env)
+    const response = await worker.fetch(new Request('https://shop.example.invalid/api/admin/login', { method: 'POST', headers: { Origin: 'https://shop.example.invalid', 'Content-Type': 'application/json', 'CF-Connecting-IP': `192.0.2.${i}` }, body: JSON.stringify({ username: 'tester', code: 'invalid', ...await seedAdminEmailCode(s.db, s.env) }) }), s.env)
     assert.equal(response.status, i < 30 ? 401 : 429)
   }
 })
@@ -610,7 +610,7 @@ test('admin notes, permitted cancellation and plan edits are audited; paused pla
   assert.equal((await s.request('/api/admin/plans/plus', planBody, admin, 'https://evil.test')).status, 403)
   assert.equal((await s.request('/api/admin/plans/plus', planBody, admin)).status, 200)
   assert.equal((await s.request('/api/admin/plans/plus', planBody, admin)).status, 409)
-  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM admin_audit').get()!.n, 1)
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM admin_audit WHERE action<>'partner-supply-unified'").get()!.n, 1)
   assert.equal((await s.request('/api/orders', { email: 'buyer@example.test', plan: 'plus', expectedPrice: 13950, key: crypto.randomUUID() }, buyer)).status, 409)
   assert.equal((await (await s.request('/api/catalog')).json()).plans[0].enabled, 0)
   assert.equal((await s.request('/api/admin/plans/plus', { ...planBody, enabled: true, version: 1 }, admin)).status, 200)
@@ -715,11 +715,11 @@ test('partner opening sends only a login link; the partner requests an OTP befor
   assert.doesNotMatch(mail.mails[0].text, /\b\d{6}\b|10 分钟/)
   assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_login_codes').get()!.n, 0)
   assert.equal((await s.request('/api/partner/auth/verify', { email: 'NEW@example.test', code: '001234' })).status, 401)
-  const { code } = await mail.send('new@example.test')
-  const login = await s.request('/api/partner/auth/verify', { email: 'NEW@example.test', code })
+  const { code, challenge } = await mail.send('new@example.test')
+  const login = await s.request('/api/partner/auth/verify', { email: 'NEW@example.test', code, challenge })
   assert.equal(login.status, 200, await login.clone().text())
   const cookie = login.headers.get('set-cookie')!.split(';')[0]
-  assert.equal((await s.request('/api/partner/auth/verify', { email: 'new@example.test', code })).status, 401)
+  assert.equal((await s.request('/api/partner/auth/verify', { email: 'new@example.test', code, challenge })).status, 401)
   assert.equal((await s.request('/api/partner/prices/plus', { priceCents: 15900, version: 0 }, cookie)).status, 200)
   assert.equal((await s.request('/api/partner/prices/plus', { priceCents: 13899, version: 1 }, cookie)).status, 400)
   const catalog = await (await s.request('/api/catalog?partner=' + result.slug)).json()
@@ -748,7 +748,7 @@ test('default supply prices require an administrator and same-origin writes, and
   assert.equal((await s.request(defaultPricesPath)).status, 401)
   assert.equal((await s.request(defaultPricesPath, undefined, partner)).status, 401)
   const settings: DefaultSupplySettings = await (await s.request(defaultPricesPath, undefined, admin)).json()
-  assert.equal(settings.version, 2); assert.equal(settings.plans.length, 12)
+  assert.equal(settings.version, 3); assert.equal(settings.plans.length, 12)
   for (const plan of settings.plans) assert.equal(plan.cost_cents, plan.id === 'pro-25x' ? 330000 : plan.id === 'gmail-account' ? 1000 : plan.price_cents)
   const payload = defaultPricesPayload(settings)
   assert.equal((await s.request(defaultPricesPath, payload, partner)).status, 401)
@@ -760,7 +760,7 @@ test('default supply prices require an administrator and same-origin writes, and
   }
 })
 
-test('saved defaults are copied into new partners, preserve existing partner and order prices, and keep initial retail above cost', async t => {
+test('unified prices update existing and new partners, preserve order snapshots and keep initial retail above cost', async t => {
   const s = await setup(); t.after(() => s.db.close()); const admin = await s.login(); mockPartnerMail(t, s)
   const existing = await seedPartner(s, admin); const buyer = await s.buyer()
   const existingOrder = await s.request('/api/orders', { email: 'buyer@example.test', plan: 'plus', expectedPrice: 13900, partner: 'corn-shop', key: crypto.randomUUID() }, buyer)
@@ -769,7 +769,7 @@ test('saved defaults are copied into new partners, preserve existing partner and
   const saved = await s.request(defaultPricesPath, defaultPricesPayload(settings), admin)
   assert.equal(saved.status, 200, await saved.clone().text())
   assert.equal((await saved.json()).version, settings.version + 1)
-  assert.equal(s.db.prepare('SELECT cost_cents FROM partner_prices WHERE partner_id=? AND plan=?').get(existing, 'plus')!.cost_cents, 10000)
+  assert.equal(s.db.prepare('SELECT cost_cents FROM partner_prices WHERE partner_id=? AND plan=?').get(existing, 'plus')!.cost_cents, 11300)
   assert.equal(s.db.prepare('SELECT cost_cents FROM orders WHERE id=?').get(orderId)!.cost_cents, 10000)
   const opened = await s.request('/api/admin/partners', { email: 'default-new@example.test' }, admin)
   assert.equal(opened.status, 201); const first = await opened.json()
@@ -779,7 +779,7 @@ test('saved defaults are copied into new partners, preserve existing partner and
   }
   const next = await (await s.request(defaultPricesPath, undefined, admin)).json()
   assert.equal((await s.request(defaultPricesPath, defaultPricesPayload(next, { ...defaultCosts, plus: 10500 }), admin)).status, 200)
-  assert.equal(s.db.prepare('SELECT cost_cents FROM partner_prices WHERE partner_id=? AND plan=?').get(first.id, 'plus')!.cost_cents, 11300)
+  assert.equal(s.db.prepare('SELECT cost_cents FROM partner_prices WHERE partner_id=? AND plan=?').get(first.id, 'plus')!.cost_cents, 10500)
   s.db.prepare('UPDATE catalog_plans SET price_cents=9900,version=version+1 WHERE id=?').run('plus')
   const later = await s.request('/api/admin/partners', { email: 'default-later@example.test' }, admin)
   assert.equal(later.status, 201, await later.clone().text())
@@ -818,13 +818,14 @@ test('invalid, incomplete and stale default price submissions cannot change any 
 })
 
 test('concurrent default saves select one complete set, and catalog races leave all defaults untouched', async t => {
-  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login()
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login(); await seedPartner(s, admin)
   const settings = await (await s.request(defaultPricesPath, undefined, admin)).json()
   const a = defaultPricesPayload(settings); const b = defaultPricesPayload(settings, { plus: 9900, 'pro-5x': 60000, 'pro-20x': 100000, 'pro-25x': 330000, 'codex-sms-once': 300 })
   const results = await Promise.all([s.request(defaultPricesPath, a, admin), s.request(defaultPricesPath, b, admin)])
   assert.deepEqual(results.map(response => response.status).sort(), [200, 409])
   const winner = results[0].status === 200 ? a : b
   for (const row of winner.prices) assert.equal(s.db.prepare('SELECT cost_cents FROM partner_default_prices WHERE plan=?').get(row.plan)!.cost_cents, row.costCents)
+  for (const price of s.db.prepare('SELECT plan,cost_cents FROM partner_prices').all()) assert.equal(price.cost_cents, winner.prices.find(p => p.plan===price.plan)!.costCents)
   const latest = await (await s.request(defaultPricesPath, undefined, admin)).json()
   const before = s.db.prepare('SELECT * FROM partner_default_prices ORDER BY plan').all()
   const batch = s.env.INTEREST_DB.batch.bind(s.env.INTEREST_DB)
@@ -838,13 +839,15 @@ test('concurrent default saves select one complete set, and catalog races leave 
 })
 
 test('a failed default price audit rolls back settings and all prices', async t => {
-  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login()
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login(); await seedPartner(s, admin)
   const settings = await (await s.request(defaultPricesPath, undefined, admin)).json()
+  const partnerBefore = s.db.prepare('SELECT * FROM partner_prices ORDER BY partner_id,plan').all()
   const before = s.db.prepare('SELECT * FROM partner_default_prices ORDER BY plan').all()
   s.db.exec("CREATE TRIGGER fail_default_audit BEFORE INSERT ON admin_audit WHEN NEW.action='partner-default-prices' BEGIN SELECT RAISE(ABORT,'private database detail'); END")
   const result = await s.request(defaultPricesPath, defaultPricesPayload(settings), admin)
   assert.equal(result.status, 503); assert.doesNotMatch(await result.text(), /private database detail/)
   assert.deepEqual(s.db.prepare('SELECT * FROM partner_default_prices ORDER BY plan').all(), before)
+  assert.deepEqual(s.db.prepare('SELECT * FROM partner_prices ORDER BY partner_id,plan').all(), partnerBefore)
   assert.equal(s.db.prepare('SELECT version FROM partner_default_price_settings WHERE id=1').get()!.version, settings.version)
 })
 
@@ -1059,11 +1062,11 @@ test('opening and invitation retry report mail failures without losing or duplic
   assert.equal(s.db.prepare('SELECT slug FROM partners WHERE id=?').get(result.id)!.slug, result.slug)
   assert.doesNotMatch(mail.mails.at(-1)!.text, /\b\d{6}\b|10 分钟/)
   assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_login_codes').get()!.n, 0)
-  const { code } = await mail.send(payload.email)
-  assert.equal((await s.request('/api/partner/auth/verify', { email: 'other@example.test', code })).status, 401)
-  assert.equal((await s.request('/api/partner/auth/verify', { email: payload.email, code })).status, 200)
+  const { code, challenge } = await mail.send(payload.email)
+  assert.equal((await s.request('/api/partner/auth/verify', { email: 'other@example.test', code, challenge })).status, 401)
+  assert.equal((await s.request('/api/partner/auth/verify', { email: payload.email, code, challenge })).status, 200)
   s.db.exec('UPDATE partner_login_codes SET expires_at=0,used=0')
-  assert.equal((await s.request('/api/partner/auth/verify', { email: payload.email, code })).status, 401)
+  assert.equal((await s.request('/api/partner/auth/verify', { email: payload.email, code, challenge })).status, 401)
   s.db.exec('UPDATE partners SET active=0')
   assert.equal((await s.request(path, {}, admin)).status, 409)
 })
@@ -1161,7 +1164,7 @@ test('partner shops enforce prices, ownership, snapshots and idempotency without
   assert.equal((await s.request('/api/orders', { email: 'buyer@example.test', ...payload, partner: 'another-shop' }, buyer)).status, 409)
   assert.equal((await s.request('/api/orders', { email: 'buyer@example.test', ...payload, partner: undefined }, buyer)).status, 409)
   const stored = s.db.prepare('SELECT * FROM orders WHERE id=?').get(order.id)!; assert.equal(stored.partner_id, id); assert.equal(stored.cost_cents, 10000)
-  assert.equal((await s.request(`/api/admin/partners/${id}/prices/plus`, { costCents: 9500, version: 1 }, admin)).status, 200)
+  assert.equal((await s.request(`/api/admin/partners/${id}/prices/plus`, { costCents: 9500, version: 1 }, admin)).status, 409)
   assert.equal(s.db.prepare('SELECT cost_cents FROM orders WHERE id=?').get(order.id)!.cost_cents, 10000)
   const otherCookie = await mail.login('another-shop@example.test')
   assert.equal((await (await s.request('/api/partner/orders', undefined, otherCookie)).json()).total, 0)
@@ -1195,7 +1198,10 @@ test('settlement reserves real completed margins once, rejects demo earnings and
   const ps2 = s.db.prepare("SELECT * FROM partner_payouts WHERE status='pending'").get()!
   assert.equal((await s.request('/api/admin/partner-payouts/' + ps2.id, { action: 'paid', note: '已线下付款', reference: '', version: 0 }, admin)).status, 400)
   assert.equal((await s.request('/api/admin/partner-payouts/' + ps2.id, { action: 'approve', note: '审核通过', version: 0 }, admin)).status, 200)
-  const handled = await Promise.all([s.request('/api/admin/partner-payouts/' + ps2.id, { action: 'paid', note: '已线下付款', reference: 'test-reference', version: 1 }, admin), s.request('/api/admin/partner-payouts/' + ps2.id, { action: 'paid', note: '并发重复登记', reference: 'test-reference', version: 1 }, admin)])
+  const claimResponse = await s.request('/api/admin/partner-payouts/' + ps2.id, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, admin)
+  assert.equal(claimResponse.status, 200)
+  const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
+  const handled = await Promise.all([s.request('/api/admin/partner-payouts/' + ps2.id, { action: 'paid', note: '已线下付款', reference: 'test-reference', ...claim }, admin), s.request('/api/admin/partner-payouts/' + ps2.id, { action: 'paid', note: '并发重复登记', reference: 'test-reference', ...claim }, admin)])
   assert.deepEqual(handled.map(r => r.status).sort(), [200,409])
   assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(live)!.payout_id, ps2.id)
   const adminDetail = await (await s.request('/api/admin/orders/' + live, undefined, admin)).json()
@@ -1247,7 +1253,10 @@ test('concurrent approve and reject preserve exactly one settlement decision and
   assert.equal((await s.request('/api/partner/payouts', { recipient: 'test recipient', key: crypto.randomUUID() }, partner)).status, 201)
   const payout = s.db.prepare('SELECT * FROM partner_payouts').get()!
   assert.equal((await s.request('/api/admin/partner-payouts/' + payout.id, { action: 'approve', note: '审核通过', version: 0 }, admin)).status, 200)
-  const results = await Promise.all(['paid', 'rejected'].map(action => s.request('/api/admin/partner-payouts/' + payout.id, { action, note: 'race test', reference: 'test-only', version: 1 }, admin)))
+  const claimResponse = await s.request('/api/admin/partner-payouts/' + payout.id, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, admin)
+  assert.equal(claimResponse.status, 200)
+  const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
+  const results = await Promise.all(['paid', 'confirm-not-transferred'].map(action => s.request('/api/admin/partner-payouts/' + payout.id, { action, note: 'race test', reference: 'test-only', ...claim, confirmedNotTransferred: true, evidence: '本地模拟已核对账单未发生转账' }, admin)))
   assert.deepEqual(results.map(r => r.status).sort(), [200, 409])
   const stored = s.db.prepare('SELECT * FROM partner_payouts').get()!
   assert.equal(stored.status, results[0].status === 200 ? 'paid' : 'rejected')
@@ -1358,7 +1367,10 @@ test('unmatched refunds on paid commissions still block new payouts and approval
   const paid = s.db.prepare('SELECT * FROM partner_payouts').get()!
   const paidPath = '/api/admin/partner-payouts/' + paid.id
   assert.equal((await s.request(paidPath, { action: 'approve', version: 0, note: '测试审核' }, s.admin)).status, 200)
-  assert.equal((await s.request(paidPath, { action: 'paid', version: 1, note: '测试登记', reference: 'TEST-ONLY' }, s.admin)).status, 200)
+  const claimResponse = await s.request(paidPath, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, s.admin)
+  assert.equal(claimResponse.status, 200)
+  const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
+  assert.equal((await s.request(paidPath, { action: 'paid', ...claim, note: '测试登记', reference: 'TEST-ONLY' }, s.admin)).status, 200)
   s.db.prepare('UPDATE partner_payouts SET cooldown_exempt=1 WHERE id=?').run(paid.id)
   await s.create(); assert.equal((await s.payout()).status, 201)
   const pending = s.db.prepare("SELECT * FROM partner_payouts WHERE status='pending'").get()!
@@ -1424,7 +1436,10 @@ test('an explicit cooldown reset preserves payout history and the next request s
   const payout = s.db.prepare('SELECT * FROM partner_payouts').get()!
   const path = '/api/admin/partner-payouts/' + payout.id
   assert.equal((await s.request(path, { action: 'approve', note: '测试审核', version: 0 }, s.admin)).status, 200)
-  assert.equal((await s.request(path, { action: 'paid', note: '测试记账', reference: 'TEST-RESET', version: 1 }, s.admin)).status, 200)
+  const claimResponse = await s.request(path, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, s.admin)
+  assert.equal(claimResponse.status, 200)
+  const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
+  assert.equal((await s.request(path, { action: 'paid', note: '测试记账', reference: 'TEST-RESET', ...claim }, s.admin)).status, 200)
   await s.create()
   assert.equal((await s.payout()).status, 409)
   const original = s.db.prepare('SELECT * FROM partner_payouts WHERE id=?').get(payout.id)!
@@ -1548,9 +1563,12 @@ test('reviewed transfers must reconcile before refund, paid commissions become a
   const s=await financeFixture(t); const first=await s.create(); await s.payout(); const p=s.db.prepare('SELECT * FROM partner_payouts').get()!
   const path='/api/admin/partner-payouts/'+p.id
   assert.equal((await s.request(path,{action:'approve',note:'通过',version:0},s.admin)).status,200)
+  const claimResponse = await s.request(path, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, s.admin)
+  assert.equal(claimResponse.status, 200)
+  const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
   const c=await s.apply(first); await s.review(c.id,13900)
   assert.equal((await s.complete(c.id)).status,409)
-  assert.equal((await s.request(path,{action:'paid',note:'已转账',reference:'TEST-PAY',version:1},s.admin)).status,200)
+  assert.equal((await s.request(path,{action:'paid',note:'已转账',reference:'TEST-PAY',...claim},s.admin)).status,200)
   s.db.prepare('UPDATE partner_payouts SET created_at=? WHERE id=?').run(Date.now()-PAYOUT_COOLDOWN_MS, p.id)
   await s.create(); await s.create()
   assert.equal((await s.payout()).status,409)
@@ -1615,7 +1633,10 @@ test('cumulative proportional refunds deduct only remaining paid commission and 
   const p=s.db.prepare("SELECT * FROM partner_payouts WHERE status='pending'").get()!; assert.equal(p.amount_cents,5850)
   const path='/api/admin/partner-payouts/'+p.id
   assert.equal((await s.request(path,{action:'approve',note:'测试',version:0},s.admin)).status,200)
-  assert.equal((await s.request(path,{action:'paid',note:'测试',reference:'TEST',version:1},s.admin)).status,200)
+  const claimResponse = await s.request(path, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, s.admin)
+  assert.equal(claimResponse.status, 200)
+  const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
+  assert.equal((await s.request(path,{action:'paid',note:'测试',reference:'TEST',...claim},s.admin)).status,200)
   const second=await s.apply(id); assert.equal(second.requested_cents,6950); await s.review(second.id,6950)
   assert.equal((await s.complete(second.id)).status,200)
   assert.equal(s.db.prepare('SELECT SUM(amount_cents) amount FROM partner_debits').get()!.amount,1950)
@@ -1645,7 +1666,10 @@ test('Duolingo paid commission is deducted once even when further refunds arrive
   const pay = async (p: { id: unknown }) => {
     const path = '/api/admin/partner-payouts/' + p.id
     assert.equal((await s.request(path, { action: 'approve', note: 'fixture', version: 0 }, s.admin)).status, 200)
-    assert.equal((await s.request(path, { action: 'paid', note: 'fixture', reference: 'fixture', version: 1 }, s.admin)).status, 200)
+    const claimResponse = await s.request(path, { action: 'start-transfer', version: 1, note: '本地模拟领取转账处理权' }, s.admin)
+    assert.equal(claimResponse.status, 200)
+    const claim = { version: 2, attemptId: (await claimResponse.json()).attemptId, transferConfirmed: true }
+    assert.equal((await s.request(path, { action: 'paid', note: 'fixture', reference: 'fixture-' + p.id, ...claim }, s.admin)).status, 200)
     s.db.prepare('UPDATE partner_payouts SET created_at=? WHERE id=?').run(Date.now() - PAYOUT_COOLDOWN_MS, p.id as string)
   }
   await pay(s.db.prepare('SELECT id FROM partner_payouts').get() as { id: string })
@@ -1692,4 +1716,294 @@ test('admin mailbox comes from server configuration and rotation revokes session
   assert.equal((await (await s.request('/api/admin/session')).json()).configured, false)
   assert.equal((await mail.send()).status, 503)
   assert.equal(mail.mails.length, 1)
+})
+
+test('partner fixes: email-only guesses do not consume a legitimate login challenge', async t => {
+  const s = await setup(); t.after(() => s.db.close())
+  const mail = mockPartnerMail(t, s); await seedPartner(s, await s.login())
+  const login = await mail.send()
+  for (let i = 0; i < 5; i++) assert.equal((await s.request('/api/partner/auth/verify', { email: 'corn-shop@example.test', code: login.code === '000000' ? '000001' : '000000' })).status, 401)
+  assert.equal(s.db.prepare('SELECT attempts FROM partner_login_codes WHERE id=?').get(login.challenge)!.attempts, 0)
+  assert.equal((await s.request('/api/partner/auth/verify', login)).status, 200)
+})
+
+test('partner fixes: another sender cannot invalidate an existing login code', async t => {
+  const s = await setup(); t.after(() => s.db.close())
+  const mail = mockPartnerMail(t, s); await seedPartner(s, await s.login())
+  const first = await mail.send()
+  s.db.exec('UPDATE admin_login_limits SET reset_at=0')
+  const second = await mail.send()
+  for (let i = 0; i < 5; i++) assert.equal((await s.request('/api/partner/auth/verify', { ...second, code: second.code === '000000' ? '000001' : '000000' })).status, 401)
+  assert.equal((await s.request('/api/partner/auth/verify', first)).status, 200)
+  assert.equal((await s.request('/api/partner/auth/verify', first)).status, 401)
+  assert.equal((await s.request('/api/partner/auth/verify', second)).status, 401)
+})
+
+test('historical SMS test-price labels are presentation-only and preserve real test-order labels', async t => {
+  const s = await setup(); t.after(() => s.db.close())
+  const buyer = await s.buyer(), admin = await s.login(), order = await s.create(buyer)
+  s.db.prepare("UPDATE orders SET mode='live',payment_status='paid',status='success',plan_name='单次接码（测试价）' WHERE id=?").run(order.id)
+  const before = s.db.prepare('SELECT * FROM orders WHERE id=?').get(order.id)
+  for (const [path, cookie] of [[`/api/orders/${order.id}`, buyer], [`/api/admin/orders/${order.id}`, admin]]) {
+    const response = await s.request(path, undefined, cookie)
+    assert.equal(response.status, 200)
+    const shown = (await response.json()).order
+    assert.equal(shown.planName, '单次接码')
+    assert.equal(shown.price, order.price)
+    assert.equal(shown.paymentStatus, 'paid')
+    assert.equal(shown.status, 'success')
+  }
+  assert.deepEqual(s.db.prepare('SELECT * FROM orders WHERE id=?').get(order.id), before)
+  s.db.prepare('UPDATE orders SET is_test=1 WHERE id=?').run(order.id)
+  assert.equal((await (await s.request(`/api/admin/orders/${order.id}`, undefined, admin)).json()).order.planName, '单次接码（测试价）')
+  s.db.prepare("UPDATE orders SET is_test=0,plan_name='1元测试' WHERE id=?").run(order.id)
+  assert.equal((await (await s.request(`/api/orders/${order.id}`, undefined, buyer)).json()).order.planName, '1元测试')
+})
+
+test('admin overview reports actual SMS configuration without contacting supply or payment providers', async t => {
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login()
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('overview must not call suppliers') })
+  const read = async () => {
+    const r = await s.request('/api/admin/overview', undefined, admin)
+    assert.equal(r.status, 200)
+    return (await r.json()).integrations.codexSms
+  }
+  assert.deepEqual(await read(), { configured: false, checkoutReady: false })
+  Object.assign(s.env, { MUSE_KEY_ID: 'fixture-key', MUSE_API_SECRET: 'fixture-secret' })
+  assert.deepEqual(await read(), { configured: true, checkoutReady: false })
+  Object.assign(s.env, { GPTIBO_SUPPLY_ENABLED: 'codex-sms-once', SERVICE_CHECKOUT_ENABLED: 'true', ORDER_TESTING_ENABLED: 'false', SERVICE_PAYMENT_PROVIDER: 'zpay', ZPAY_PID: '10101', ZPAY_KEY: 'fixture-payment-secret', CDK_ENCRYPTION_KEY: Buffer.alloc(32, 37).toString('base64'), MAIL_PUBLIC_ORIGIN: 'https://shop.example.test', RESEND_API_KEY: 'fixture-mail', RESEND_FROM: 'Store <delivery@example.test>', PAYMENT_NOTIFY_ORIGIN: 'https://shop.example.invalid' })
+  assert.deepEqual(await read(), { configured: true, checkoutReady: true })
+  s.env.GPTIBO_SUPPLY_ENABLED = 'gpt-plus-account'
+  assert.deepEqual(await read(), { configured: true, checkoutReady: false })
+  s.env.GPTIBO_SUPPLY_ENABLED = 'codex-sms-once'; s.env.ZPAY_KEY = undefined
+  assert.deepEqual(await read(), { configured: true, checkoutReady: false })
+})
+
+test('payout safety: different request keys cannot reserve the same earnings twice', async t => {
+  const s = await financeFixture(t), order = await s.create()
+  const results = await Promise.all(Array.from({ length: 20 }, () => s.payout()))
+  assert.equal(results.filter(r => r.status === 201).length, 1)
+  assert.equal(results.filter(r => r.status === 409).length, 19)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_payouts').get()!.n, 1)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_payout_items WHERE order_id=?').get(order)!.n, 1)
+})
+
+test('payout safety: receipt reuse is blocked across payouts and concurrent registration is single use', async t => {
+  const s = await financeFixture(t)
+  const next = async () => {
+    await s.create(); assert.equal((await s.payout()).status, 201)
+    const p = s.db.prepare("SELECT * FROM partner_payouts WHERE status='pending'").get()!, path = '/api/admin/partner-payouts/' + p.id
+    assert.equal((await s.request(path, { action: 'approve', version: 0, note: '审核' }, s.admin)).status, 200)
+    const start = await s.request(path, { action: 'start-transfer', version: 1, note: '领取' }, s.admin)
+    assert.equal(start.status, 200)
+    return { id: p.id, path, claim: { version: 2, attemptId: (await start.json()).attemptId, transferConfirmed: true } }
+  }
+  const one = await next()
+  const payload = { action: 'paid', note: '模拟记录', reference: 'mock-transfer-01', ...one.claim }
+  const results = await Promise.all(Array.from({ length: 20 }, () => s.request(one.path, payload, s.admin)))
+  assert.equal(results.filter(r => r.status === 200).length, 1)
+  assert.equal(results.filter(r => r.status === 409).length, 19)
+  s.db.prepare('UPDATE partner_payouts SET cooldown_exempt=1 WHERE id=?').run(one.id)
+  const two = await next()
+  assert.equal((await s.request(two.path, { ...payload, ...two.claim, reference: ' MOCK-TRANSFER-01 ' }, s.admin)).status, 409)
+  assert.equal(s.db.prepare('SELECT status FROM partner_payouts WHERE id=?').get(two.id)!.status, 'pending')
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_transfer_receipts').get()!.n, 1)
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM admin_audit WHERE action='payout-handle'").get()!.n, 1)
+  assert.equal((await s.request(two.path, { ...payload, ...two.claim, reference: 'MOCK-TRANSFER-02', transferConfirmed: false }, s.admin)).status, 400)
+  assert.equal((await s.request(two.path, { ...payload, ...two.claim, reference: 'MOCK-TRANSFER-02' }, s.admin)).status, 200)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM orders WHERE payout_id IS NOT NULL').get()!.n, 2)
+})
+
+test('payout safety: batch failure rolls back receipt, audit, status and release of orders', async t => {
+  for (const action of ['paid', 'confirm-not-transferred']) {
+    const s = await financeFixture(t), order = await s.create()
+    await s.payout()
+    const p = s.db.prepare('SELECT * FROM partner_payouts').get()!, path = '/api/admin/partner-payouts/' + p.id
+    assert.equal((await s.request(path, { action: 'approve', version: 0, note: '审核' }, s.admin)).status, 200)
+    const start = await s.request(path, { action: 'start-transfer', version: 1, note: '领取' }, s.admin)
+    assert.equal(start.status, 200)
+    const payload = { action, version: 2, note: '本地模拟', reference: 'MOCK', attemptId: (await start.json()).attemptId, transferConfirmed: true, confirmedNotTransferred: true, evidence: '本地模拟已经核对付款记录没有转账' }
+    s.db.exec("CREATE TRIGGER fail_payout BEFORE UPDATE OF status ON partner_payouts BEGIN SELECT RAISE(FAIL,'test rollback'); END")
+    assert.equal((await s.request(path, payload, s.admin)).status, 503)
+    assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_transfer_receipts').get()!.n, 0)
+    assert.equal(s.db.prepare("SELECT COUNT(*) n FROM admin_audit WHERE action='payout-handle'").get()!.n, 0)
+    assert.equal(s.db.prepare('SELECT version FROM partner_payouts').get()!.version, 2)
+    assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order)!.payout_id, p.id)
+    s.db.exec('DROP TRIGGER fail_payout')
+    assert.equal((await s.request(path, payload, s.admin)).status, 200)
+    assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order)!.payout_id, action === 'paid' ? p.id : null)
+  }
+})
+
+test('payout safety: concurrent refund and transfer claim preserve reservations; unknown does not expire', async t => {
+  const s = await financeFixture(t), order = await s.create()
+  await s.payout()
+  const p = s.db.prepare('SELECT * FROM partner_payouts').get()!, path = '/api/admin/partner-payouts/' + p.id
+  assert.equal((await s.request(path, { action: 'approve', version: 0, note: '审核' }, s.admin)).status, 200)
+  const [start] = await Promise.all([s.request(path, { action: 'start-transfer', version: 1, note: '领取' }, s.admin), s.apply(order)])
+  assert.ok([200, 409].includes(start.status))
+  const state = s.db.prepare('SELECT * FROM partner_payouts').get()!
+  assert.equal(state.status, 'pending')
+  assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order)!.payout_id, p.id)
+  if (start.status === 200) {
+    assert.equal(state.transfer_state, 'transferring')
+    assert.equal((await s.request(path, { action: 'mark-unknown', version: 2, attemptId: state.transfer_id, note: '核对中' }, s.admin)).status, 200)
+    s.db.exec('UPDATE partner_payouts SET transfer_started_at=1,created_at=1,cooldown_exempt=1')
+    assert.equal((await s.request(path, { action: 'start-transfer', version: 3, note: '超时不能重试' }, s.admin)).status, 409)
+    assert.equal((await s.request(path, { action: 'rejected', version: 3, note: '不能解锁' }, s.admin)).status, 409)
+    assert.equal(s.db.prepare('SELECT payout_id FROM orders WHERE id=?').get(order)!.payout_id, p.id)
+    await s.create()
+    assert.equal((await s.payout()).status, 409)
+  } else assert.equal(state.transfer_state, 'idle')
+})
+
+test('payout safety: upgrade quarantines legacy reviewed payouts and preserves financial snapshots', t => {
+  const db = new DatabaseSync(':memory:'); t.after(() => db.close())
+  for (const file of readdirSync(new URL('../migrations/', import.meta.url)).filter(f => f.endsWith('.sql') && f < '0062_').sort()) db.exec(readFileSync(new URL('../migrations/' + file, import.meta.url), 'utf8'))
+  db.exec("INSERT INTO partners(id,slug,name,email,created_at,updated_at) VALUES ('legacy','LEGACY','local','legacy@example.test',1,1)")
+  for (const [id, status, reviewed, ref] of [['approved', 'pending', 2, ''], ['paid-a', 'paid', 2, 'mock-old'], ['paid-b', 'paid', 2, ' MOCK-OLD '], ['rejected', 'rejected', null, '']]) {
+    db.prepare('INSERT INTO partner_payouts(id,partner_id,amount_cents,gross_cents,deduction_cents,status,recipient,created_at,request_key,reviewed_at,reference) VALUES (?,\'legacy\',3900,4900,1000,?,\'local\',1,?,?,?)').run(id, status, id, reviewed, ref)
+  }
+  const fields = 'id,partner_id,amount_cents,gross_cents,deduction_cents,status,recipient,created_at,request_key,reviewed_at,reference'
+  const before = db.prepare('SELECT ' + fields + ' FROM partner_payouts ORDER BY id').all()
+  db.exec(readFileSync(new URL('../migrations/0062_payout_transfer_guard.sql', import.meta.url), 'utf8'))
+  assert.deepEqual(db.prepare('SELECT ' + fields + ' FROM partner_payouts ORDER BY id').all(), before)
+  const pending = db.prepare("SELECT * FROM partner_payouts WHERE id='approved'").get()!
+  assert.equal(pending.transfer_state, 'unknown'); assert.equal(pending.transfer_id, 'legacy-approved'); assert.equal(pending.version, 1)
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM partner_transfer_receipts').get()!.n, 1)
+  assert.equal(db.prepare('SELECT reference FROM partner_transfer_receipts').get()!.reference, 'MOCK-OLD')
+  assert.equal(db.prepare("SELECT transfer_state FROM partner_payouts WHERE id='paid-a'").get()!.transfer_state, 'succeeded')
+})
+
+test('payout safety: changed amount, items or reservations block transfer before any claim', async t => {
+  for (const mutation of ['amount', 'missing-item', 'lost-reservation', 'refund-hold']) {
+    const s = await financeFixture(t), order = await s.create()
+    await s.payout()
+    const p = s.db.prepare('SELECT * FROM partner_payouts').get()!, path = '/api/admin/partner-payouts/' + p.id
+    assert.equal((await s.request(path, { action: 'approve', version: 0, note: '审核' }, s.admin)).status, 200)
+    if (mutation === 'amount') s.db.exec('UPDATE partner_payouts SET amount_cents=amount_cents+1')
+    if (mutation === 'missing-item') s.db.exec('DELETE FROM partner_payout_items')
+    if (mutation === 'lost-reservation') s.db.prepare('UPDATE orders SET payout_id=NULL WHERE id=?').run(order)
+    if (mutation === 'refund-hold') s.db.prepare('UPDATE orders SET refund_hold=1 WHERE id=?').run(order)
+    assert.equal((await s.request(path, { action: 'start-transfer', version: 1, note: '禁止不一致的转账' }, s.admin)).status, 409, mutation)
+    const stored = s.db.prepare('SELECT * FROM partner_payouts').get()!
+    assert.equal(stored.transfer_state, 'idle', mutation); assert.equal(stored.transfer_id, null, mutation); assert.equal(stored.version, 1, mutation)
+    assert.equal(s.db.prepare("SELECT COUNT(*) n FROM admin_audit WHERE action='payout-transfer-start'").get()!.n, 0, mutation)
+  }
+})
+
+test('unified supply: updates all partners including disabled without touching retail or historical finance', async t => {
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login()
+  const first = await seedPartner(s, admin), second = await seedPartner(s, admin, 'another-shop'), buyer = await s.buyer()
+  s.db.prepare('UPDATE partners SET active=0 WHERE id=?').run(second)
+  const r = await s.request('/api/orders', { email: 'buyer@example.test', plan: 'plus', expectedPrice: 13900, partner: 'corn-shop', key: crypto.randomUUID() }, buyer)
+  assert.equal(r.status, 201)
+  const id = (await r.json()).order.id
+  const before = s.db.prepare('SELECT * FROM orders WHERE id=?').get(id)
+  const retail = s.db.prepare('SELECT partner_id,plan,price_cents FROM partner_prices ORDER BY partner_id,plan').all()
+  const settings = await (await s.request(defaultPricesPath, undefined, admin)).json()
+  const save = await s.request(defaultPricesPath, defaultPricesPayload(settings), admin)
+  assert.equal(save.status, 200, await save.clone().text())
+  for (const partner of [first, second]) assert.equal(s.db.prepare("SELECT cost_cents FROM partner_prices WHERE partner_id=? AND plan='plus'").get(partner)!.cost_cents, 11300)
+  assert.deepEqual(s.db.prepare('SELECT partner_id,plan,price_cents FROM partner_prices ORDER BY partner_id,plan').all(), retail)
+  assert.deepEqual(s.db.prepare('SELECT * FROM orders WHERE id=?').get(id), before)
+  assert.equal((await s.request(`/api/admin/partners/${first}/prices/plus`, { costCents: 9000, version: 1 }, admin)).status, 409)
+  const next = await s.request('/api/orders', { email: 'buyer@example.test', plan: 'plus', expectedPrice: 13900, partner: 'corn-shop', key: crypto.randomUUID() }, buyer)
+  assert.equal(next.status, 201)
+  assert.equal(s.db.prepare('SELECT cost_cents FROM orders WHERE id=?').get((await next.json()).order.id)!.cost_cents, 11300)
+})
+
+test('unified supply: raising above an existing retail price rejects the entire update', async t => {
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login(), id = await seedPartner(s, admin)
+  s.db.prepare("UPDATE partner_prices SET price_cents=11000 WHERE partner_id=? AND plan='plus'").run(id)
+  const snapshot = () => ({ defaults: s.db.prepare('SELECT * FROM partner_default_prices ORDER BY plan').all(), settings: s.db.prepare('SELECT * FROM partner_default_price_settings').all(), prices: s.db.prepare('SELECT * FROM partner_prices ORDER BY partner_id,plan').all() })
+  const before = snapshot(), settings = await (await s.request(defaultPricesPath, undefined, admin)).json()
+  const response = await s.request(defaultPricesPath, defaultPricesPayload(settings), admin)
+  assert.equal(response.status, 409)
+  assert.match((await response.json()).error, /代理售价/)
+  assert.deepEqual(snapshot(), before)
+})
+
+test('unified supply: concurrent retail decrease blocks synchronization atomically', async t => {
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login(), id = await seedPartner(s, admin)
+  const settings = await (await s.request(defaultPricesPath, undefined, admin)).json()
+  const before = s.db.prepare('SELECT * FROM partner_default_prices ORDER BY plan').all()
+  const costs = s.db.prepare('SELECT partner_id,plan,cost_cents FROM partner_prices ORDER BY partner_id,plan').all()
+  const batch = s.env.INTEREST_DB.batch.bind(s.env.INTEREST_DB)
+  t.mock.method(s.env.INTEREST_DB, 'batch', async statements => {
+    s.db.prepare("UPDATE partner_prices SET price_cents=11000,version=version+1 WHERE partner_id=? AND plan='plus'").run(id)
+    return batch(statements)
+  })
+  assert.equal((await s.request(defaultPricesPath, defaultPricesPayload(settings), admin)).status, 409)
+  assert.deepEqual(s.db.prepare('SELECT * FROM partner_default_prices ORDER BY plan').all(), before)
+  assert.deepEqual(s.db.prepare('SELECT partner_id,plan,cost_cents FROM partner_prices ORDER BY partner_id,plan').all(), costs)
+  assert.equal(s.db.prepare('SELECT version FROM partner_default_price_settings').get()!.version, settings.version)
+})
+
+test('unified supply: checkout racing synchronization must retry before capturing the new cost', async t => {
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login(); await seedPartner(s, admin)
+  const mail = mockPartnerMail(t, s), partner = await mail.login(), buyer = await s.buyer()
+  const settings = await (await s.request(defaultPricesPath, undefined, admin)).json()
+  const batch = s.env.INTEREST_DB.batch.bind(s.env.INTEREST_DB); let injected = false
+  t.mock.method(s.env.INTEREST_DB, 'batch', async statements => {
+    if (!injected) {
+      injected = true
+      assert.equal((await s.request(defaultPricesPath, defaultPricesPayload(settings), admin)).status, 200)
+    }
+    return batch(statements)
+  })
+  const payload = { email: 'buyer@example.test', plan: 'plus', partner: 'corn-shop', expectedPrice: 13900, key: crypto.randomUUID() }
+  assert.equal((await s.request('/api/orders', payload, buyer)).status, 409)
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM orders').get()!.n, 0)
+  assert.equal((await s.request('/api/partner/prices/plus', { priceCents: 12000, version: 0 }, partner)).status, 409)
+  const response = await s.request('/api/orders', payload, buyer); assert.equal(response.status, 201)
+  const order = s.db.prepare('SELECT * FROM orders WHERE id=?').get((await response.json()).order.id)!
+  assert.equal(order.cost_cents, 11300); assert.equal(order.price_cents, 13900)
+})
+
+test('unified supply: migration preserves retail, historical orders, payout snapshots and earnings', async t => {
+  const s = await setup('0063_'); t.after(() => s.db.close()); const admin = await s.login(), id = await seedPartner(s, admin), buyer = await s.buyer()
+  const response = await s.request('/api/orders', { email: 'buyer@example.test', plan: 'plus', expectedPrice: 13900, partner: 'corn-shop', key: crypto.randomUUID() }, buyer)
+  assert.equal(response.status, 201); const order = (await response.json()).order.id
+  s.db.prepare("UPDATE orders SET mode='live',payment_status='paid',status='success' WHERE id=?").run(order)
+  const mail = mockPartnerMail(t, s), partner = await mail.login()
+  assert.equal((await s.request('/api/partner/payouts', { recipient: 'local fixture', key: crypto.randomUUID() }, partner)).status, 201)
+  s.db.prepare("UPDATE partner_default_prices SET cost_cents=11500 WHERE plan='plus'").run()
+  const history = () => ({ orders: s.db.prepare('SELECT * FROM orders ORDER BY id').all(), payouts: s.db.prepare('SELECT * FROM partner_payouts ORDER BY id').all(), items: s.db.prepare('SELECT * FROM partner_payout_items ORDER BY payout_id,order_id').all(), debits: s.db.prepare('SELECT * FROM partner_debits ORDER BY id').all(), retail: s.db.prepare('SELECT partner_id,plan,price_cents FROM partner_prices ORDER BY partner_id,plan').all() })
+  const before = history(), beforeStats = (await (await s.request('/api/partner/dashboard', undefined, partner)).json()).totals
+  s.db.exec('BEGIN')
+  s.db.exec(readFileSync(new URL('../migrations/0063_unified_partner_supply.sql', import.meta.url), 'utf8'))
+  s.db.exec('COMMIT')
+  assert.deepEqual(history(), before)
+  assert.equal(s.db.prepare("SELECT cost_cents FROM partner_prices WHERE partner_id=? AND plan='plus'").get(id)!.cost_cents, 11500)
+  assert.deepEqual((await (await s.request('/api/partner/dashboard', undefined, partner)).json()).totals, beforeStats)
+  assert.equal(beforeStats.pending, 3900)
+})
+
+test('unified supply: incompatible legacy retail aborts migration without partial synchronization', async t => {
+  const s = await setup('0063_'); t.after(() => s.db.close()); const admin = await s.login(), id = await seedPartner(s, admin)
+  s.db.prepare("UPDATE partner_prices SET price_cents=11000 WHERE partner_id=? AND plan='plus'").run(id)
+  s.db.prepare("UPDATE partner_default_prices SET cost_cents=11500 WHERE plan='plus'").run()
+  const snapshot = () => ({ defaults: s.db.prepare('SELECT * FROM partner_default_prices ORDER BY plan').all(), settings: s.db.prepare('SELECT * FROM partner_default_price_settings').all(), prices: s.db.prepare('SELECT * FROM partner_prices ORDER BY partner_id,plan').all() })
+  const before = snapshot()
+  s.db.exec('BEGIN')
+  assert.throws(() => s.db.exec(readFileSync(new URL('../migrations/0063_unified_partner_supply.sql', import.meta.url), 'utf8')), /CHECK constraint/)
+  s.db.exec('ROLLBACK')
+  assert.deepEqual(snapshot(), before)
+})
+
+test('unified supply: large catalog stays within SQL parameter limits', async t => {
+  const s = await setup(); t.after(() => s.db.close()); const admin = await s.login()
+  for (let i = 0; i < 25; i++) s.db.prepare("INSERT INTO catalog_plans(id,product_id,name,price_cents,updated_at) VALUES (?,'chatgpt',?,13900,0)").run('extra-'+i,'Extra '+i)
+  await seedPartner(s, admin)
+  const settings = await (await s.request(defaultPricesPath, undefined, admin)).json()
+  const prepare = s.env.INTEREST_DB.prepare.bind(s.env.INTEREST_DB)
+  t.mock.method(s.env.INTEREST_DB, 'prepare', sql => {
+    const statement = prepare(sql), bind = statement.bind.bind(statement)
+    statement.bind = (...values) => { assert.ok(values.length <= 100, 'D1 bound parameter limit'); return bind(...values) }
+    return statement
+  })
+  const response = await s.request(defaultPricesPath, defaultPricesPayload(settings), admin)
+  assert.equal(response.status, 200, await response.clone().text())
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM partner_prices p JOIN partner_default_prices d ON d.plan=p.plan WHERE p.cost_cents<>d.cost_cents').get()!.n, 0)
 })

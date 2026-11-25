@@ -30,7 +30,7 @@ test('X price backfill reaches existing partners, preserves custom prices and ne
   assert.equal(s.db.prepare('SELECT version FROM partner_default_price_settings').get()!.version, beforeVersion + 1)
 })
 
-test('backfilled X plans allow admin supply and partner retail editing while disabled for sale', async t => {
+test('backfilled X plans use unified supply and independent retail while disabled for sale', async t => {
   const s = await customerFixture(); t.after(() => s.db.close())
   const a = await s.agent('existing'), b = await s.agent('other')
   s.db.exec("UPDATE catalog_plans SET enabled=0 WHERE product_id='x-premium'")
@@ -41,7 +41,10 @@ test('backfilled X plans allow admin supply and partner retail editing while dis
   const row = dashboard.plans.find((plan: { id: string }) => plan.id === 'x-premium-3m')
   const path = '/api/partner/prices/' + row.id
   assert.equal((await s.request(path, { priceCents: 6500, version: 0 })).status, 401)
-  assert.equal((await s.request(`/api/admin/partners/${a.id}/prices/${row.id}`, { costCents: 1500, version: 0 }, s.admin)).status, 200)
+  assert.equal((await s.request(`/api/admin/partners/${a.id}/prices/${row.id}`, { costCents: 1500, version: 0 }, s.admin)).status, 409)
+  const settings = await (await s.request('/api/admin/partners/default-prices', undefined, s.admin)).json()
+  assert.equal((await s.request('/api/admin/partners/default-prices', { version: settings.version, prices: settings.plans.map((p: { id: string; cost_cents: number; catalog_version: number }) => ({ plan: p.id, costCents: p.id === row.id ? 1500 : p.cost_cents, catalogVersion: p.catalog_version })) }, s.admin)).status, 200)
+  assert.equal(s.db.prepare('SELECT cost_cents FROM partner_prices WHERE partner_id=? AND plan=?').get(b.id, row.id)!.cost_cents, 1500)
   assert.equal((await s.request(path, { priceCents: 6500, version: 0 }, a.cookie)).status, 409)
   assert.equal((await s.request(path, { priceCents: 1499, version: 1 }, a.cookie)).status, 400)
   assert.equal((await s.request(path, { priceCents: 6500, version: 1 }, a.cookie)).status, 200)

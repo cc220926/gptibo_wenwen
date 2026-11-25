@@ -380,8 +380,8 @@ test('manual work queue isolates paid human tasks, keeps snapshots, and separate
   for (const query of ['?state=invalid', '?page=0', '?page=1.5', '?q=' + 'x'.repeat(321)]) assert.equal((await s.request('/api/admin/inventory/manual' + query, undefined, s.admin)).status, 400)
   const unpaid = await s.order()
   assert.equal((await queue('?state=all')).total, 0)
-  const queued = await s.order(), held = await s.order(), running = await s.order(), supplier = await s.order(), review = await s.order(), delivered = await s.order()
-  for (const order of [queued, held, running, supplier, review, delivered]) await s.pay(order.id)
+  const paidOrder = async () => { const order = await s.order(); await s.pay(order.id); return order }
+  const queued = await paidOrder(), held = await paidOrder(), running = await paidOrder(), supplier = await paidOrder(), review = await paidOrder(), delivered = await paidOrder()
   s.db.prepare("UPDATE orders SET created_at=1,customer_email='first-buyer@example.test' WHERE id=?").run(queued.id)
   s.db.prepare("UPDATE service_products SET name='新商品名称' WHERE id=?").run(s.productId)
   s.db.prepare("UPDATE catalog_plans SET name='新规格名称' WHERE id=?").run(s.plan)
@@ -512,8 +512,12 @@ test('overdue trades that keep failing rotate instead of holding every slot of t
   t.mock.method(globalThis, 'fetch', async (input: string) => Response.json({ code: 1, pid, out_trade_no: new URL(input).searchParams.get('out_trade_no'), type: 'alipay', money: '10.00', status: 0, trade_no: '2026000000009' }))
   const ids = [] as string[]
   for (let i = 0; i < 11; i++) {
-    const order = await s.order(); ids.push(order.id)
-    assert.equal((await s.request(`/api/orders/${order.id}/payment`, { action: 'create' }, s.buyer)).status, 200)
+    // Model independent customers rather than bypassing the unpaid-order cap.
+    const buyer = (await s.request('/api/orders/client', {})).headers.get('set-cookie')!.split(';')[0]
+    const response = await s.request('/api/orders', { plan: s.plan, key: crypto.randomUUID(), expectedPrice: 1000, email: `buyer${i}@example.test` }, buyer)
+    assert.equal(response.status, 201)
+    const order = (await response.json()).order; ids.push(order.id)
+    assert.equal((await s.request(`/api/orders/${order.id}/payment`, { action: 'create' }, buyer)).status, 200)
   }
   const target = ids.pop()!
   // Ten trades are bound to a merchant account that is no longer configured and
@@ -543,4 +547,59 @@ test('a ZPAY cashier link that was never opened closes after expiry and returns 
   assert.equal((await findPayment(s.env, order.id))!.state, 'closed')
   await reconcileServices(s.env)
   assert.equal(s.db.prepare('SELECT state FROM cdk_stock').get()!.state, 'available')
+})
+
+test('security fix: verified unpaid orders cannot exhaust inventory', async t=>{
+ const s=await setup(t,'stock',Array.from({length:20},(_,i)=>'SYNTHETIC-STOCK-'+i))
+ Object.assign(s.env,{TURNSTILE_ENABLED:'true',TURNSTILE_SITE_KEY:'test-site',TURNSTILE_SECRET_KEY:'test-secret',TURNSTILE_HOSTNAMES:'shop.example.invalid'})
+ let challenges=0
+ t.mock.method(globalThis,'fetch',async(input)=>{
+  assert.equal(String(input),'https://challenges.cloudflare.com/turnstile/v0/siteverify')
+  challenges++
+  return Response.json({success:true,hostname:'shop.example.invalid',action:'order_create',challenge_ts:new Date().toISOString()})
+ })
+ const counters=new Map<string,number>()
+ s.env.INTEREST_LIMITER={limit:async({key})=>{const count=(counters.get(key)??0)+1;counters.set(key,count);return {success:count<=30}}}
+ for(let i=0;i<20;i++){
+  const r=await s.request('/api/orders',{plan:s.plan,key:crypto.randomUUID(),expectedPrice:1000,email:'member@example.test',turnstileToken:'synthetic-unique-token-'+i},s.buyer)
+  assert.equal(r.status,i<3?201:409,await r.clone().text())
+ }
+ assert.equal(challenges,20)
+ assert.equal(s.db.prepare("SELECT COUNT(*) n FROM cdk_stock WHERE state='reserved'").get()!.n,3)
+ assert.equal(s.db.prepare("SELECT COUNT(*) n FROM orders WHERE payment_status='paid'").get()!.n,0)
+ const catalog=await (await s.request('/api/catalog')).json()
+ assert.equal(catalog.plans.find(p=>p.id===s.plan).enabled,1)
+})
+
+test('security fix: reservation cap preserves existing checkout, paid fulfillment and independent buyers', async t => {
+  const s = await setup(t, 'stock', Array.from({ length: 10 }, (_, i) => 'BOUNDARY-CODE-' + i))
+  const firstKey = crypto.randomUUID()
+  const first = await s.create(firstKey); assert.equal(first.status, 201)
+  const order = (await first.json()).order
+  await s.order(); await s.order()
+  assert.equal((await s.create()).status, 409)
+  const replay = await s.create(firstKey)
+  assert.equal(replay.status, 200); assert.equal((await replay.json()).order.id, order.id)
+  const other = (await s.request('/api/orders/client', {})).headers.get('set-cookie')!.split(';')[0]
+  const create = (cookie: string, email: string) => s.request('/api/orders', { plan: s.plan, key: crypto.randomUUID(), expectedPrice: 1000, email }, cookie)
+  assert.equal((await create(other, 'member@example.test')).status, 409)
+  assert.equal((await create(s.buyer, 'changed@example.test')).status, 409)
+  assert.equal((await create(other, 'other@example.test')).status, 201)
+  await s.pay(order.id)
+  await fulfillService(s.env, order.id)
+  assert.equal(s.db.prepare('SELECT state FROM fulfillment_tasks WHERE order_id=?').get(order.id)!.state, 'delivered')
+  assert.equal(s.db.prepare('SELECT status FROM orders WHERE id=?').get(order.id)!.status, 'success')
+  assert.equal((await s.create()).status, 201)
+})
+
+test('security fix: unpaid reservation cap is atomic across concurrent checkouts and expiry releases it', async t => {
+  const s = await setup(t, 'stock', Array.from({ length: 10 }, (_, i) => 'CONCURRENT-CODE-' + i))
+  const results = await Promise.all(Array.from({ length: 10 }, () => s.create()))
+  assert.equal(results.filter(r => r.status === 201).length, 3)
+  assert.equal(results.filter(r => r.status === 409).length, 7)
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM cdk_stock WHERE state='reserved'").get()!.n, 3)
+  s.db.prepare('UPDATE fulfillment_tasks SET expires_at=?').run(Date.now() - 1)
+  assert.equal((await s.create()).status, 201)
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM fulfillment_tasks WHERE state='expired'").get()!.n, 3)
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM cdk_stock WHERE state='reserved'").get()!.n, 1)
 })

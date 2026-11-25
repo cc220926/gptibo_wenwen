@@ -1,15 +1,17 @@
 import { fulfillMuse, museMapping, musePurchase, museSnapshot, prepareMuse } from '../muse/service.ts'
-import { isMuseCode } from '../muse/client.ts'
+import { isMuseCode, supplyKind } from '../muse/client.ts'
 import { ApiError, type Env, type Statement } from '../platform.ts'
 import { getOrder, type Order } from '../order-state.ts'
 import { deliveryMailReady } from '../email-delivery.ts'
 import { servicePaymentConfigured } from '../payments/providers.ts'
 import { emailPayload, mailBrand, sendFrozenEmail } from '../email.ts'
 import { isServicePlan, type DeliveryKind, type ServiceTask } from '../../shared/fulfillment.ts'
+import { CODEX_SMS_REDEEM_URL, updateCodexSmsRedeemAddress } from '../../shared/codex-sms-redemption.ts'
 import { seal, unseal, vaultReady } from './vault.ts'
 
 export type Task = { order_id: string; kind: DeliveryKind; state: string; product_id: string; product_name: string; instructions: string; stock_id: string | null; encrypted_value: string | null; expires_at: number; delivered_at: number | null; mail_state: string; encrypted_mail: string | null; mail_first_attempt_at: number | null; mail_next_attempt_at: number; lease_token: string | null; lease_until: number }
 export const taskFor = (env: Env, id: string) => env.INTEREST_DB.prepare('SELECT * FROM fulfillment_tasks WHERE order_id=?').bind(id).first<Task>()
+const isCodexSmsDelivery = (productId: string, supplierCode?: string) => productId === 'codex-sms' || supplyKind(supplierCode ?? null) === 'codex-sms'
 const eligible = "mode='live' AND is_test=0 AND payment_status='paid' AND refund_hold=0 AND refunded_cents=0 AND redemption_blocked=0"
 // A completed, partly refunded delivery remains the buyer's property. New
 // dispatches still require zero refunds, but its pending notice may be sent.
@@ -23,6 +25,14 @@ export async function serviceCatalog(env: Env) {
     FROM catalog_plans c JOIN service_products p ON p.id=c.product_id LEFT JOIN muse_plans m ON m.plan=c.id WHERE c.delivery_type<>'legacy' ORDER BY p.category,p.name,c.rowid`).all()).results
 }
 
+// Keep a few simultaneous checkouts available, without letting one buyer reserve
+// an entire SKU. Email supplements the browser identity; neither is a verified
+// identity by itself. Count unresolved payment reservations even after expiry.
+const MAX_UNPAID_RESERVATIONS = 3
+const pendingReservations = `SELECT COUNT(*) total FROM orders o JOIN fulfillment_tasks t ON t.order_id=o.id
+  WHERE o.plan=? AND (o.owner_hash=? OR o.customer_email=?) AND o.payment_status='unpaid' AND t.state='reserved'`
+const reservationLimitMessage = '该商品已有 3 笔待付款订单，请到“我的订单”继续支付，或等待未付款订单关闭后重试。'
+
 /** Order + immutable delivery snapshot + reservation commit in one transaction. */
 export async function createServiceOrder(env: Env, ownerHash: string, email: string, data: Record<string, unknown>) {
   if (data.partner) throw new ApiError('该商品暂仅支持平台直营购买。', 409)
@@ -33,13 +43,16 @@ export async function createServiceOrder(env: Env, ownerHash: string, email: str
   const mapping = await museMapping(env, plan.id)
   if (!await serviceCheckoutEnabled(env, Boolean(mapping && isMuseCode(mapping.product_code)))) throw new ApiError('该商品的支付服务暂未配置，请联系商家。', 409)
   if (data.expectedPrice !== plan.price_cents) throw new ApiError('价格已更新，请刷新后重新确认。', 409)
+  const pending = await env.INTEREST_DB.prepare(pendingReservations).bind(plan.id, ownerHash, email).first<{ total: number }>()
+  if (pending && pending.total >= MAX_UNPAID_RESERVATIONS) throw new ApiError(reservationLimitMessage, 409)
   const cost = mapping ? await prepareMuse(env, mapping, plan.price_cents) : 0
   const now = Date.now(), id = 'YMX-' + crypto.randomUUID().replaceAll('-', '').toUpperCase(), event = crypto.randomUUID()
   const statements: Statement[] = [
     env.INTEREST_DB.prepare(`INSERT INTO orders(id,owner_hash,idempotency_key,plan,plan_name,price_cents,mode,status,created_at,updated_at,last_event_id,customer_email,purchase_note)
       SELECT ?,?,?,c.id,c.name,c.price_cents,'live','pending',?,?,?,?,c.purchase_note FROM catalog_plans c
       WHERE c.id=? AND c.version=? AND c.enabled=1 AND c.delisted=0 AND EXISTS(SELECT 1 FROM service_products p WHERE p.id=c.product_id AND p.hidden=0) AND (c.delivery_type='manual' OR EXISTS(SELECT 1 FROM cdk_stock s WHERE s.plan=c.id AND s.state='available'))
-      ON CONFLICT(owner_hash,idempotency_key) DO NOTHING`).bind(id, ownerHash, String(data.key), now, now, event, email, plan.id, plan.version),
+      AND (${pendingReservations}) < ${MAX_UNPAID_RESERVATIONS}
+      ON CONFLICT(owner_hash,idempotency_key) DO NOTHING`).bind(id, ownerHash, String(data.key), now, now, event, email, plan.id, plan.version, plan.id, ownerHash, email),
   ]
   // Bind the first still-available unit while the order transaction owns the write lock.
   statements.push(env.INTEREST_DB.prepare(`INSERT INTO fulfillment_tasks(order_id,kind,state,product_id,product_name,instructions,stock_id,expires_at,updated_at)
@@ -52,7 +65,11 @@ export async function createServiceOrder(env: Env, ownerHash: string, email: str
   if (mapping) statements.push(museSnapshot(env, id, mapping, cost))
   await env.INTEREST_DB.batch(statements)
   const created = await env.INTEREST_DB.prepare('SELECT * FROM orders WHERE owner_hash=? AND idempotency_key=?').bind(ownerHash, String(data.key)).first<Order>()
-  if (!created) throw new ApiError('库存不足或商品已更新，请刷新后重试。', 409)
+  if (!created) {
+    const pending = await env.INTEREST_DB.prepare(pendingReservations).bind(plan.id, ownerHash, email).first<{ total: number }>()
+    if (pending && pending.total >= MAX_UNPAID_RESERVATIONS) throw new ApiError(reservationLimitMessage, 409)
+    throw new ApiError('库存不足或商品已更新，请刷新后重试。', 409)
+  }
   if (created.plan !== plan.id || created.customer_email !== email || created.partner_id) throw new ApiError('请求编号已被其他订单使用。', 409)
   return created
 }
@@ -89,7 +106,7 @@ export async function fulfillService(env: Env, id: string) {
     env.INTEREST_DB.prepare(`UPDATE orders SET status=CASE WHEN t.state='delivered' THEN 'success' WHEN t.state='review' THEN 'failed' ELSE 'processing' END,
       started_at=COALESCE(started_at,?),updated_at=?,version=version+1,last_event_id=? FROM fulfillment_tasks t
       WHERE orders.id=? AND t.order_id=orders.id AND ${eligible} AND orders.status IN ('session','pending','cancelled') AND t.state IN ('delivered','queued','review')`).bind(now, now, event, id),
-    env.INTEREST_DB.prepare("INSERT INTO order_events(id,order_id,actor,action,from_status,to_status,note,order_version,created_at) SELECT ?,id,'system','service-dispatch','session',status,CASE status WHEN 'success' THEN '自有库存已交付，可在原订单领取' WHEN 'failed' THEN '到期后确认收款，请人工核对原订单，未重复分配库存' WHEN EXISTS(SELECT 1 FROM muse_orders m WHERE m.order_id=orders.id) THEN '付款已确认，等待原订单自动采购' ELSE '付款已确认，等待人工交付' END,version,? FROM orders WHERE id=? AND last_event_id=?").bind(event, now, id, event),
+    env.INTEREST_DB.prepare("INSERT INTO order_events(id,order_id,actor,action,from_status,to_status,note,order_version,created_at) SELECT ?,id,'system','service-dispatch','session',status,CASE WHEN status='success' THEN '自有库存已交付，可在原订单领取' WHEN status='failed' THEN '到期后确认收款，请人工核对原订单，未重复分配库存' WHEN EXISTS(SELECT 1 FROM muse_orders m WHERE m.order_id=orders.id) THEN '付款已确认，等待原订单自动采购' ELSE '付款已确认，等待人工交付' END,version,? FROM orders WHERE id=? AND last_event_id=?").bind(event, now, id, event),
   ])
   if (await musePurchase(env, id)) await fulfillMuse(env, id)
 }
@@ -102,7 +119,8 @@ export async function serviceOrderSummary(env: Env, order: Order, reveal = true)
   const serviceDelivery: ServiceTask = { ...(supplier ? { provider: 'muse' as const, supplierState: supplier.state } : {}), kind: task.kind, state: task.state, productId: task.product_id, productName: task.product_name, expiresAt: task.expires_at, mailState: task.mail_state }
   const visible = reveal && task.state === 'delivered' && order.mode === 'live' && !order.is_test && order.payment_status === 'paid' && !order.refund_hold && order.refunded_cents < order.price_cents && !order.redemption_blocked
   const value = visible && task.encrypted_value ? await unseal(env, task.encrypted_value, task.stock_id ? 'stock:' + task.stock_id : 'task:' + order.id) : undefined
-  return { serviceDelivery, manualFulfillment: true, delivery: { kind: 'cdk' as const, automatic: task.kind === 'stock' || Boolean(supplier), status: task.mail_state === 'sent' ? 'sent' as const : task.mail_state === 'sending' ? 'sending' as const : 'waiting' as const, sentAt: null, ...(visible ? { value, instructions: task.instructions } : {}) } }
+  const redemptionUrl = value && isCodexSmsDelivery(task.product_id, supplier?.product_code) ? CODEX_SMS_REDEEM_URL : undefined
+  return { serviceDelivery, manualFulfillment: true, delivery: { kind: 'cdk' as const, automatic: task.kind === 'stock' || Boolean(supplier), status: task.mail_state === 'sent' ? 'sent' as const : task.mail_state === 'sending' ? 'sending' as const : 'waiting' as const, sentAt: null, ...(visible ? { value, instructions: task.instructions, redemptionUrl } : {}) } }
 }
 
 const escape = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!)
@@ -121,8 +139,15 @@ export async function sendServiceMail(env: Env, id: string) {
     const order = await getOrder(env, id)
     if (!task.encrypted_mail) {
       const value = await unseal(env, task.encrypted_value!, task.stock_id ? 'stock:' + task.stock_id : 'task:' + id), brand = mailBrand(env)
-      const text = `${brand.name} · ${task.product_name} · ${order.plan_name}\n订单号：${id}\n\n交付内容\n${value}\n\n${task.instructions}\n\n请妥善保管。已交付不代表已激活或兑换。\n订单查询：${brand.origin}/orders`
-      const payload = emailPayload(env, order.customer_email!, { subject: `${brand.name} · ${task.product_name}已交付`, text, html: `<div style="font-family:system-ui;max-width:600px;margin:auto"><h1>商品已交付</h1><p>${escape(task.product_name)} · ${escape(order.plan_name)}</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${escape(text)}</pre></div>` })
+      const codexSms = isCodexSmsDelivery(task.product_id, (await musePurchase(env, id))?.product_code)
+      const delivery = `${value}\n\n${task.instructions}`
+      const introduction = `${brand.name} · ${task.product_name} · ${order.plan_name}\n订单号：${id}\n\n交付内容\n${codexSms ? updateCodexSmsRedeemAddress(delivery) : delivery}\n\n`
+      const footer = `请妥善保管。已交付不代表已激活或兑换。\n订单查询：${brand.origin}/orders`
+      const redeemText = codexSms ? `接码兑换：${CODEX_SMS_REDEEM_URL}\n\n` : ''
+      const redeemLink = codexSms ? `接码兑换：<a href="${CODEX_SMS_REDEEM_URL}">${CODEX_SMS_REDEEM_URL}</a>\n\n` : ''
+      const text = introduction + redeemText + footer
+      const htmlBody = escape(introduction) + redeemLink + escape(footer)
+      const payload = emailPayload(env, order.customer_email!, { subject: `${brand.name} · ${task.product_name}已交付`, text, html: `<div style="font-family:system-ui;max-width:600px;margin:auto"><h1>商品已交付</h1><p>${escape(task.product_name)} · ${escape(order.plan_name)}</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${htmlBody}</pre></div>` })
       const encrypted = await seal(env, payload, 'mail:' + id)
       await env.INTEREST_DB.prepare('UPDATE fulfillment_tasks SET encrypted_mail=? WHERE order_id=? AND lease_token=? AND encrypted_mail IS NULL').bind(encrypted, id, lease).run()
       task = (await taskFor(env, id))!
