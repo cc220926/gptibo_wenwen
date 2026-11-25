@@ -19,8 +19,8 @@ async function setup(t: Context, paymentProvider = 'zpay', options: { productCod
     MAPAY_PID: '10101', MAPAY_KEY: 'private-mapay-test-secret', ZPAY_PID: '2026110800000000', ZPAY_KEY: 'fixture-payment-secret', CDK_ENCRYPTION_KEY: Buffer.alloc(32, 37).toString('base64'),
     MAIL_PUBLIC_ORIGIN: 'https://shop.example.test', RESEND_API_KEY: 'mail-test-key', RESEND_FROM: 'Store <delivery@example.test>', PAYMENT_NOTIFY_ORIGIN: 'https://shop.example.invalid',
     MUSE_KEY_ID: 'fixture-key', MUSE_API_SECRET: 'fixture-muse-secret', MUSE_CHECKOUT_ENABLED: 'true', MUSE_ACCOUNT_PAYMENT_APPROVED: 'true' })
-  const sale = paymentProvider === 'mapay' ? 6900 : 3500, cost = paymentProvider === 'mapay' ? 4900 : 800
   const productCode = options.productCode ?? (paymentProvider === 'mapay' ? 'muse-account-31b' : 'muse_1b_pro')
+  const sale = productCode === 'muse-account-31b' ? 6900 : 3500, cost = productCode === 'muse-account-31b' ? 4900 : 800
   const products = [{ code: productCode, name: 'Muse 供应商品', supply_minor: cost, enabled: true, available: true, fulfillment_type: 'account_delivery' }]
   const calls: { path: string; raw: string; headers: Headers }[] = []
   const emails: { html: string; text: string }[] = []
@@ -29,9 +29,22 @@ async function setup(t: Context, paymentProvider = 'zpay', options: { productCod
   let posted = 0, assigned = 0, mapayStatus = 0
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const url = new URL(String(input)), path = url.pathname.replace(/^\/v1/, ''), headers = new Headers(init?.headers), raw = String(init?.body ?? '')
+    if (url.href === 'https://challenges.cloudflare.com/turnstile/v0/siteverify') {
+      assert.equal(init?.method, 'POST')
+      assert.deepEqual(JSON.parse(raw), { secret: 'fixture-turnstile-secret', response: 'fixture-turnstile-token' })
+      return Response.json({ success: true, hostname: 'shop.example.invalid', action: 'order_create', challenge_ts: new Date().toISOString() })
+    }
     if (url.hostname === 'mzf.mapay.cn') {
       assert.equal(init?.redirect,'manual')
-      if(url.pathname==='/xpay/epay/mapi.php') return Response.json({code:1,trade_no:'mapay-fixture-trade',money:(sale / 100).toFixed(2),qrcode:'https://qr.alipay.com/mapayfixturepayment'})
+      if (url.pathname === '/xpay/epay/mapi.php') {
+        const params = new URLSearchParams(raw)
+        assert.equal(init?.method, 'POST')
+        assert.equal(params.get('money'), (sale / 100).toFixed(2))
+        assert.equal(params.get('pid'), s.env.MAPAY_PID)
+        assert.equal(params.get('sign'), signZpayParams(params, s.env.MAPAY_KEY!))
+        assert.equal(params.get('notify_url'), 'https://shop.example.invalid/api/payments/notify/mapay')
+        return Response.json({ code: 1, trade_no: 'mapay-fixture-trade', money: (sale / 100).toFixed(2), qrcode: 'https://qr.alipay.com/mapayfixturepayment' })
+      }
       assert.equal(url.pathname,'/xpay/epay/api.php')
       return Response.json({code:1,pid:Number(s.env.MAPAY_PID),type:'alipay',out_trade_no:url.searchParams.get('out_trade_no'),money:(sale / 100).toFixed(2),status:mapayStatus,trade_no:'mapay-fixture-trade'})
     }
@@ -327,30 +340,72 @@ test('rotated Muse keys cannot starve current-key paid recovery behind old-key t
 })
 
 
-test('Mapay verified callbacks purchase and deliver Muse once; unpaid and forged notices do not fulfill', async t => {
-  const s=await setup(t,'mapay'),o=await s.order()
-  const payment=await s.request(`/api/orders/${o.id}/payment`,{action:'create'},s.buyer)
-  assert.equal(payment.status,200,await payment.clone().text())
-  const p=(await payment.json()).payment;assert.equal(p.provider,'mapay');assert.equal(p.qr,'https://qr.alipay.com/mapayfixturepayment');assert.ok(p.expiresAt<=Date.now()+300000)
-  assert.equal(s.posted,0)
-  const url='https://shop.example.invalid/api/payments/notify/mapay'
-  const params=new URLSearchParams({pid:s.env.MAPAY_PID!,type:'alipay',out_trade_no:o.id.slice(4),trade_no:'mapay-fixture-trade',money:'69.00',trade_status:'TRADE_SUCCESS',sign_type:'MD5'})
-  params.set('sign',signZpayParams(params,s.env.MAPAY_KEY!))
-  const notify=()=>worker.fetch(new Request(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:params.toString()}),s.env)
-  assert.equal((await notify()).status,400);assert.equal(s.posted,0)
-  params.set('money','1.00');assert.equal((await notify()).status,400);params.set('money','69.00');assert.equal(s.posted,0)
-  s.controls.paymentStatus(1)
-  const replies=await Promise.all([notify(),notify()]);assert.deepEqual(replies.map(r=>r.status),[200,200])
-  assert.equal(s.posted,1);assert.equal(s.assigned,1)
-  assert.equal(s.db.prepare('SELECT actual_cost_cents FROM muse_orders WHERE order_id=?').get(o.id)!.actual_cost_cents,4900)
-  const delivered=await s.read(o.id);assert.equal(delivered.status,'success');assert.equal(delivered.delivery.value,content)
-  await sendServiceMail(s.env,o.id);assert.equal((await s.read(o.id)).serviceDelivery.mailState,'sent')
-  s.env.SERVICE_PAYMENT_PROVIDER='zpay'
-  assert.equal((await notify()).status,200);assert.equal(s.posted,1)
-  const current=s.db.prepare('SELECT * FROM orders WHERE id=?').get(o.id) as any
-  current.refund_hold=1
-  assert.equal(await refundThroughProvider(s.env,current,'fixture-refund',6900),null)
-})
+for (const [code, price, cost, asynchronous] of [['muse_1b_pro', 3500, 800, true], ['muse-account-31b', 6900, 4900, false]] as const) {
+  test(`Muse ${price / 100} CNY with Mapay: checkout, confirmed payment, one purchase and private delivery`, async t => {
+    const shop = await setup(t, 'mapay', { productCode: code })
+    Object.assign(shop.env, { SERVICE_PAYMENT_PROVIDER: 'zpay', MUSE_PAYMENT_PROVIDER: 'mapay', TURNSTILE_ENABLED: 'true', TURNSTILE_HOSTNAMES: 'shop.example.invalid', TURNSTILE_SITE_KEY: 'fixture-turnstile-site', TURNSTILE_SECRET_KEY: 'fixture-turnstile-secret' })
+    const draft = { plan: shop.plan, key: crypto.randomUUID(), expectedPrice: price, email: 'buyer@example.test' }
+    assert.equal((await shop.request('/api/orders', draft, shop.buyer)).status, 400)
+    assert.equal(shop.calls.length, 0)
+    const created = await shop.request('/api/orders', { ...draft, turnstileToken: 'fixture-turnstile-token' }, shop.buyer)
+    assert.equal(created.status, 201, await created.clone().text())
+    const { order } = await created.json()
+    assert.equal(shop.state(order.id).attempted, 0)
+    assert.equal(shop.state(order.id).expected_cost_cents, cost)
+    const payment = await shop.request(`/api/orders/${order.id}/payment`, { action: 'create' }, shop.buyer)
+    assert.equal(payment.status, 200, await payment.clone().text())
+    const { payment: entry } = await payment.json()
+    assert.equal(entry.provider, 'mapay')
+    assert.equal(entry.qr, 'https://qr.alipay.com/mapayfixturepayment')
+    assert.ok(entry.expiresAt <= Date.now() + 300000)
+    assert.equal(shop.posted, 0)
+    assert.equal(shop.state(order.id).attempted, 0)
+
+    const url = 'https://shop.example.invalid/api/payments/notify/mapay'
+    const amount = (price / 100).toFixed(2)
+    const notify = (money = amount, signValid = true) => {
+      const params = new URLSearchParams({ pid: shop.env.MAPAY_PID!, type: 'alipay', out_trade_no: order.id.slice(4), trade_no: 'mapay-fixture-trade', money, trade_status: 'TRADE_SUCCESS', sign_type: 'MD5' })
+      params.set('sign', signValid ? signZpayParams(params, shop.env.MAPAY_KEY!) : '0'.repeat(32))
+      return worker.fetch(new Request(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString() }), shop.env)
+    }
+    assert.equal((await notify()).status, 400)
+    shop.controls.paymentStatus(1)
+    assert.equal((await notify(amount, false)).status, 400)
+    assert.equal((await notify('1.00')).status, 400)
+    assert.equal(shop.posted, 0)
+    assert.equal(shop.state(order.id).attempted, 0)
+    if (asynchronous) shop.controls.status('queued')
+    const replies = await Promise.all([notify(), notify()])
+    assert.deepEqual(replies.map(reply => reply.status), [200, 200])
+    assert.equal(shop.posted, 1)
+    assert.deepEqual(JSON.parse(shop.calls.find(call => call.path === '/orders')!.raw), { merchant_order_no: order.id, product_code: code, expected_supply_minor: cost })
+
+    if (asynchronous) {
+      assert.ok(!shop.calls.some(call => call.path.endsWith('/delivery')))
+      shop.controls.status('succeeded')
+      shop.due(order.id)
+      await reconcileMuse(shop.env)
+      assert.ok(shop.calls.some(call => call.path === '/orders/' + shop.state(order.id).remote_id))
+    }
+    assert.equal(shop.posted, 1)
+    assert.equal(shop.assigned, 1)
+    assert.equal(shop.state(order.id).actual_cost_cents, cost)
+    const delivered = await shop.read(order.id)
+    assert.equal(delivered.status, 'success')
+    assert.equal(delivered.serviceDelivery.provider, 'muse')
+    assert.equal(delivered.delivery.value, content)
+    assert.doesNotMatch(JSON.stringify(shop.db.prepare('SELECT encrypted_value FROM fulfillment_tasks WHERE order_id=?').get(order.id)), /PRIVATE-PASSWORD/)
+    await sendServiceMail(shop.env, order.id)
+    assert.equal((await shop.read(order.id)).serviceDelivery.mailState, 'sent')
+    assert.equal(shop.emails.length, 1)
+    shop.env.MUSE_PAYMENT_PROVIDER = 'zpay'
+    assert.equal((await notify()).status, 200)
+    assert.equal(shop.posted, 1)
+    const current = shop.db.prepare('SELECT * FROM orders WHERE id=?').get(order.id) as any
+    current.refund_hold = 1
+    assert.equal(await refundThroughProvider(shop.env, current, 'fixture-refund', price), null)
+  })
+}
 
 test('extra GPTibo SKUs (接码 / ChatGPT 成品号) open only by exact code and never by the Muse gate', async t => {
   const s = await setup(t, 'zpay', { productCode: 'gpt-plus-account' })
