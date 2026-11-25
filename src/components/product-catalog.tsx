@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input'
 import { UPCOMING_PRODUCTS } from '@/lib/products'
 import { storefrontHref } from '@/lib/storefront-routing'
 import { catalogSubscriptionPlans, catalogStartingPrice, formatCatalogPrice } from '@/lib/catalog-display'
+import { placeMuseBelowSms } from '@/lib/catalog-layout'
 import type { CatalogPlan } from '@/lib/api'
 import '@/styles/storefront-home.css'
 
@@ -88,10 +89,13 @@ export function ProductCatalog({ onHelp, onOrders, onNavigate, offers, catalogRe
     const minimum = Math.min(...(available.length ? available : variants).map(p => p.price_cents))
     cards.push({ id, node: <article className="store-product"><div className="store-product-heading"><h3>{first.product_name}</h3>{!available.length && <span>暂不可购买</span>}</div><p className="store-spec">{first.category} · {variants.some(p => p.delivery_type === 'stock' || p.delivery_provider === 'muse') ? '自动交付' : '联系客服交付'}</p>{artwork}<div className="store-product-bottom"><span className="store-starting-price">¥{(minimum / 100).toFixed(2)}<small> 起</small></span><a className="store-detail-link" href={storefrontHref(route)} onClick={e => navigate(e, route)}>查看商品<ChevronRight size={15} /></a></div></article> })
   }
-  const groups: typeof cards[] = []
-  for (const id of [...normalizeProductOrder(productOrder), ...serviceOffers.map(p => p.product_id).filter((id, index, ids) => ids.indexOf(id) === index)]) {
+  const ordered = [...normalizeProductOrder(productOrder), ...new Set(serviceOffers.map(p => p.product_id))].flatMap(id => {
     const card = cards.find(item => item.id === id)
-    if (!card?.node || hiddenProductIds.includes(id)) continue
+    return card?.node && !hiddenProductIds.includes(id) ? [card] : []
+  })
+  const arranged = placeMuseBelowSms(ordered, serviceOffers.find(isMuseOffer)?.product_id)
+  const groups: typeof arranged[] = []
+  for (const card of arranged) {
     const last = groups.at(-1)
     if (last && Boolean(last[0].compact) === Boolean(card.compact)) last.push(card)
     else groups.push([card])
@@ -107,8 +111,8 @@ export function ProductCatalog({ onHelp, onOrders, onNavigate, offers, catalogRe
       {!catalogReady ? error ? <p className="store-empty" role="status">{t('商品暂时加载失败，请点击上方重试。')}</p> : <>
         <span className="sr-only" role="status">{t('正在加载商品')}</span><CatalogSkeleton />
       </> : <>
-        {groups.map(group => <div key={group[0].id} data-count={group.length} className={(group[0].compact ? 'store-compact-grid' : 'store-featured') + ' store-product-group'}>
-          {group.map(card => <div key={card.id} className="store-card-enter reveal-in" style={{ animationDelay: `${Math.min(visibleCards.indexOf(card), 6) * 40}ms` }}>
+        {groups.map(group => <div key={group[0].id} className={(group[0].compact ? 'store-compact-grid' : 'store-featured') + ' store-product-group'}>
+          {group.map(card => <div key={card.id} data-muse-column={card.museColumn} className="store-card-enter reveal-in" style={{ animationDelay: `${Math.min(visibleCards.indexOf(card), 6) * 40}ms` }}>
             {card.node}
           </div>)}
         </div>)}

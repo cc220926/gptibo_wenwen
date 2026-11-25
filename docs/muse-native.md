@@ -53,6 +53,14 @@ Cloudflare Workers 不支持 Node 示例使用的 `redirect:error`；适配器�
 
 `MUSE_PAYMENT_PROVIDER=mapay` 仅覆盖新 Muse 订单，普通自营商品继续使用 `SERVICE_PAYMENT_PROVIDER`，历史订单始终按 payments 中冻结的 provider/account 核对。参见 [码支付接入](mapay-integration.md)。
 
+## 2026-11-26 文文站待发布开售准备
+
+通过签名 `GET /v1/products` 核对，`muse_1b_pro`（800 分）和 `muse-account-31b`（4900 分）当时均由原生 API 返回为可售的 `account_delivery` 项。文文站已有同一商品下的两个原生规格，售价分别为 3500、6900 分，采购上限分别为 800、4900 分。保留这些绑定，不重复创建规格，也不转换原自有库存规格。
+
+本次只发布宣传图。供货改造和目录排序未发布；生产 Muse 收款开关和两个规格的销售状态保持关闭。正式开售时，由商家另行批准并重新核对只读供货目录、库存、渠道余额、成交毛利、Mapay 商户和现有邮件/加密配置，再只启用需要的两个规格与 `MUSE_CHECKOUT_ENABLED`。不改其他 GPTibo、充值或自有商品开关，不运行生产采购作为本次验收。
+
+本地模拟验证两个既有绑定在开关关闭时不可售，开放后可创建本站未付订单并完成供货预检。验收不会生成付款码、付款或发送真实 `POST /v1/orders`。真实交付材料仍须在商家授权的正式订单中另行核对。
+
 恢复队列只扫描当前已配置 Key 的任务，避免 10 条旧 Key 未完成意图堵塞新 Key 的已付款恢复。旧 Key 任务不迁移、不删除、不换 Key 重购；需恢复原 Key 后核对或联系供货平台处理，原不确定采购的退款冻结仍保留。
 
 ## 其他 GPTibo 成品号货源（接码 / ChatGPT 成品号）

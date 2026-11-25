@@ -98,6 +98,41 @@ test('Muse native discovery accepts actual underscore codes; checkout preflight 
   assert.throws(() => s.db.prepare("UPDATE muse_orders SET raw_body='{}'").run())
 })
 
+test('the two store Muse bindings are sale-ready behind the Muse gate without a purchase during checkout preparation', async t => {
+  const shop = await setup(t, 'mapay')
+  Object.assign(shop.env, { SERVICE_PAYMENT_PROVIDER: 'zpay', MUSE_PAYMENT_PROVIDER: 'mapay' })
+  const artisan = { code: 'muse_1b_pro', name: 'Muse 精品手搓', supply_minor: 800, enabled: true, available: true, fulfillment_type: 'account_delivery' }
+  shop.products.push(artisan)
+  const second = await shop.request('/api/admin/inventory/plans', { ...shop.spec, name: artisan.name, priceCents: 3500, supplierCode: artisan.code, maxCostCents: artisan.supply_minor }, shop.admin)
+  assert.equal(second.status, 200)
+  const artisanPlan = (await second.json()).id
+  const catalog = async () => (await (await shop.request('/api/catalog')).json()).plans.filter((plan: { product_id: string }) => plan.product_id === shop.productId)
+  shop.env.MUSE_CHECKOUT_ENABLED = 'false'
+  assert.deepEqual((await catalog()).map((plan: { enabled: number }) => plan.enabled), [0, 0])
+  assert.equal((await shop.create()).status, 409)
+  assert.equal(shop.calls.length, 0)
+
+  shop.env.MUSE_CHECKOUT_ENABLED = 'true'
+  const visible = await catalog()
+  assert.deepEqual(visible.map((plan: { enabled: number }) => plan.enabled), [1, 1])
+  assert.doesNotMatch(JSON.stringify(visible), /muse_product_code|muse_max_cost_cents|muse_1b_pro|muse-account-31b/)
+  for (const [plan, price, code, cost] of [[artisanPlan, 3500, 'muse_1b_pro', 800], [shop.plan, 6900, 'muse-account-31b', 4900]] as const) {
+    const result = await shop.request('/api/orders', { plan, expectedPrice: price, key: crypto.randomUUID(), email: 'buyer@example.test' }, shop.buyer)
+    assert.equal(result.status, 201, await result.clone().text())
+    const created = (await result.json()).order
+    assert.equal(shop.state(created.id).product_code, code)
+    assert.equal(shop.state(created.id).expected_cost_cents, cost)
+    assert.equal(shop.state(created.id).attempted, 0)
+    const options = await shop.request(`/api/orders/${created.id}/payment`, { action: 'options' }, shop.buyer)
+    assert.equal(options.status, 200)
+    assert.deepEqual(await options.json(), { payment: null, methods: [{ method: 'alipay', name: '支付宝', feeBps: 0 }] })
+  }
+  assert.deepEqual(shop.calls.map(call => call.path), ['/products', '/balance', '/preflight', '/products', '/balance', '/preflight'])
+  assert.equal(shop.posted, 0)
+  assert.equal(shop.db.prepare('SELECT COUNT(*) AS count FROM payments').get()!.count, 0)
+  assert.equal(shop.emails.length, 0)
+})
+
 test('confirmed payment buys once, encrypts original delivery, records actual cost and respects buyer access', async t => {
   const s = await setup(t), o = await s.order()
   await s.pay(o.id)

@@ -28,7 +28,7 @@ export function ServiceProductPage({ productId, offers, ready, busy, checkoutEna
   if (!plan) return <section className="empty-orders page-width"><h1>{ready ? '该商品已下架或暂不可用' : '正在读取商品'}</h1><p>已有订单仍可在「我的订单」查看。</p><Button onClick={() => onNavigate('store')}>返回商店</Button></section>
   const account = isGptAccountOffer(plan), muse = isMuseOffer(plan), stock = (plan.delivery_type === 'stock' || plan.delivery_provider === 'muse')
   const available = Boolean(ready && checkoutEnabled && plan.enabled)
-  const status = available ? '可购买' : stock && !plan.stock_available ? '暂时缺货' : '暂停售卖'
+  const status = available ? '可购买' : plan.delivery_type === 'stock' && !plan.stock_available ? '暂时缺货' : '暂停售卖'
   const noticeKey = JSON.stringify([plan.id, plan.version, plan.price_cents, plan.purchase_note, plan.delivery_instructions])
   const accepted = acceptedNotice === noticeKey
   const purchase = () => { if (available && !busy && accepted) onBuy(plan, true) }
@@ -36,7 +36,7 @@ export function ServiceProductPage({ productId, offers, ready, busy, checkoutEna
   const steps = [
     { icon: Mail, title: '确认规格与收件邮箱', copy: '先阅读购买说明，核对所选规格和金额，再填写能正常收件的邮箱。' },
     { icon: Package, title: stock ? '付款后领取交付内容' : '付款后等待服务处理', copy: stock ? plan.delivery_provider === 'muse' ? '付款确认后，系统采购所选规格；成功后可在原订单领取，邮件另行通知。' : '付款确认后，系统将本单库存交付至原订单；邮件通知会单独发送。' : '工作人员按照订单要求处理，进度与结果都保存在原订单。' },
-    { icon: ShieldCheck, title: muse ? '按说明完成首次登录' : '核对结果并按说明使用', copy: muse ? '查看账号邮箱与接码链接，核对登录结果。如遇异常，保留订单记录并申请售后。' : '收到内容后按交付说明使用或兑换。换设备时，可用下单邮箱验证找回订单。' },
+    { icon: ShieldCheck, title: '按说明完成首次登录', copy: plan.delivery_provider === 'muse' ? '领取账号资料后，按所选规格说明登录。如遇异常，保留订单记录并申请售后。' : '查看账号邮箱与接码链接，核对登录结果。如遇异常，保留订单记录并申请售后。' },
   ]
   return <section className={'page-width service-product-detail' + (muse ? ' service-product-muse' : '')}>
     <nav className="product-breadcrumb" aria-label="当前位置"><a href={storefrontHref('store')} onClick={event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onNavigate('store') }}>全部商品</a><ChevronRight size={13} /><span>{plan.product_name}</span></nav>
