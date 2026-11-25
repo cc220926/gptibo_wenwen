@@ -1,4 +1,5 @@
 import { GptAccountScene } from './gpt-account-scene'
+import { MusePromo } from './muse-promo'
 import { useState } from 'react'
 import { ArrowRight, Check, ChevronRight, FileText, LifeBuoy, LockKeyhole, Mail, Package, ShieldCheck, UserRound } from 'lucide-react'
 import type { CatalogPlan } from '@/lib/api'
@@ -11,8 +12,8 @@ import '@/styles/service-product.css'
 
 const price = (cents: number) => (cents / 100).toFixed(2)
 const paragraphs = (value?: string) => value?.split(/\n+/).map(line => line.trim()).filter(Boolean) ?? []
-function ProductSymbol({ muse, large = false }: { muse: boolean; large?: boolean }) {
-  return muse ? <span className={'service-muse-mark' + (large ? ' large' : '')} aria-hidden="true">M</span> : <Package size={large ? 104 : 36} strokeWidth={1.2} aria-hidden="true" />
+function ProductSymbol({ muse }: { muse: boolean }) {
+  return muse ? <span className="service-muse-mark" aria-hidden="true">M</span> : <Package size={36} strokeWidth={1.2} aria-hidden="true" />
 }
 
 export function ServiceProductPage({ productId, offers, ready, busy, checkoutEnabled, onBuy, onNavigate, onSupport }: {
@@ -44,7 +45,7 @@ export function ServiceProductPage({ productId, offers, ready, busy, checkoutEna
       <div className="service-product-selection">
         <div className="service-product-eyebrow"><span>{muse ? 'MUSE / 成品账号' : `${plan.category ?? '自有商品'} / ${stock ? '库存交付' : '人工服务'}`}</span><span className={available ? 'available' : ''}>{status}</span></div>
         <div className="service-product-identity"><ProductSymbol muse={muse} /><div><h2>{muse ? 'Muse' : plan.product_name}</h2><p>{muse ? '独立账号 · 每份 1 个' : '一次下单 · 每单一份'}</p></div></div>
-        <div className="service-product-visual" aria-hidden="true"><span className="service-visual-label">{muse ? 'MUSE ACCOUNT' : 'YOUR NEXT TOOL'}</span><ProductSymbol muse={muse} large /><span className="service-visual-caption">{muse ? museQuota(plan.name) : stock ? '选好规格，交付有迹可查。' : '从下单，到服务完成。'}</span></div>
+        <MusePromo />
         <div className="service-spec-heading"><h3>选择商品规格</h3><span>一次购买 · 一份</span></div>
         <div role="radiogroup" aria-label="商品规格" className="service-specs">{plans.map(offer => <label key={offer.id} className={'service-spec' + (offer.id === plan.id ? ' selected' : '')}>
           <div className="service-spec-title"><input type="radio" name="service-plan" value={offer.id} checked={offer.id === plan.id} onChange={() => setSelected(offer.id)} /><strong>{offer.name}</strong></div>

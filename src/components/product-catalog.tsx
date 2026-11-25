@@ -1,4 +1,5 @@
 import { GptAccountScene } from './gpt-account-scene'
+import { MusePromo } from './muse-promo'
 import { CodexCreditsScene } from './codex-credits-scene'
 import '@/styles/service-product.css'
 import { isGptAccountOffer, isMuseOffer, serviceProductRoute } from '../../shared/service-presentation'
@@ -82,9 +83,10 @@ export function ProductCatalog({ onHelp, onOrders, onNavigate, offers, catalogRe
     const first = variants[0]
     if (!matches(serviceCategory(first.category ?? '其他商品'), (first.product_name ?? '') + ' ' + (first.description ?? ''))) continue
     const route = serviceProductRoute(first)
+    const artwork = isGptAccountOffer(first) ? <GptAccountScene /> : isMuseOffer(first) ? <MusePromo lazy /> : <div className="service-catalog-visual" aria-hidden="true"><Package size={76} strokeWidth={1} /></div>
     const available = variants.filter(p => p.enabled)
     const minimum = Math.min(...(available.length ? available : variants).map(p => p.price_cents))
-    cards.push({ id, node: <article className="store-product"><div className="store-product-heading"><h3>{first.product_name}</h3>{!available.length && <span>暂不可购买</span>}</div><p className="store-spec">{first.category} · {variants.some(p => p.delivery_type === 'stock' || p.delivery_provider === 'muse') ? '自动交付' : '联系客服交付'}</p>{isGptAccountOffer(first) ? <GptAccountScene /> : <div className={'service-catalog-visual' + (isMuseOffer(first) ? ' muse' : '')}>{isMuseOffer(first) ? <span className="service-muse-mark large" aria-hidden="true">M</span> : <Package size={76} strokeWidth={1} />}</div>}<div className="store-product-bottom"><span className="store-starting-price">¥{(minimum / 100).toFixed(2)}<small> 起</small></span><a className="store-detail-link" href={storefrontHref(route)} onClick={e => navigate(e, route)}>查看商品<ChevronRight size={15} /></a></div></article> })
+    cards.push({ id, node: <article className="store-product"><div className="store-product-heading"><h3>{first.product_name}</h3>{!available.length && <span>暂不可购买</span>}</div><p className="store-spec">{first.category} · {variants.some(p => p.delivery_type === 'stock' || p.delivery_provider === 'muse') ? '自动交付' : '联系客服交付'}</p>{artwork}<div className="store-product-bottom"><span className="store-starting-price">¥{(minimum / 100).toFixed(2)}<small> 起</small></span><a className="store-detail-link" href={storefrontHref(route)} onClick={e => navigate(e, route)}>查看商品<ChevronRight size={15} /></a></div></article> })
   }
   const groups: typeof cards[] = []
   for (const id of [...normalizeProductOrder(productOrder), ...serviceOffers.map(p => p.product_id).filter((id, index, ids) => ids.indexOf(id) === index)]) {

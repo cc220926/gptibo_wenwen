@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1200" height="900" viewBox="0 0 1200 900" role="img" aria-labelledby="title description" xml:lang="zh-CN">
   <title id="title">Muse AI 成品账号 · 文文的AI充电站</title>
-  <desc id="description">浅色商品宣传图。蓝色笔画在叠放的卡片上逐渐成形，展示 Muse AI 成品账号的 10 亿规格。</desc>
+  <desc id="description">浅色商品宣传图。蓝色笔画在叠放的卡片上逐渐成形，展示 Muse AI 成品账号。</desc>
   <defs>
     <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
       <stop stop-color="#EDF7F7"/>
@@ -60,10 +60,9 @@
     <text x="53.5" y="28" text-anchor="middle" fill="#315FAC" font-size="18" font-weight="600">AI 工具</text>
     <text x="-4" y="151" fill="#202124" font-size="91" font-weight="700" letter-spacing="-4">Muse AI</text>
     <text x="0" y="227" fill="#202124" font-size="61" font-weight="700" letter-spacing="-1.5">成品账号</text>
-    <text x="2" y="286" fill="#575D66" font-size="26">独立账号 · 10 亿规格</text>
-    <rect x="0" y="334" width="166" height="56" rx="28" fill="#316BC9"/>
-    <text x="25" y="370" fill="#FFF" font-size="21" font-weight="600">联系支持</text>
-    <path d="M119 362h19m-7-7 7 7-7 7" fill="none" stroke="#FFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="2" y="286" fill="#575D66" font-size="26">独立账号</text>
+    <rect x="0" y="334" width="198" height="56" rx="28" fill="#EEF3FD"/>
+    <text x="99" y="370" text-anchor="middle" fill="#315FAC" font-size="21" font-weight="600">10 亿 / 310 亿</text>
   </g>
 
   <g aria-hidden="true">
@@ -86,6 +85,6 @@
     <path id="accent" d="M1012 270q2 17 19 19-17 2-19 19-2-17-19-19 17-2 19-19Z" fill="#6E9BE8"/>
   </g>
 
-  <text x="62" y="824" fill="#636871" font-size="20">规格与库存请以客服确认为准</text>
+  <text x="62" y="824" fill="#636871" font-size="20">规格与库存以商品页为准</text>
   <text x="1138" y="824" text-anchor="end" fill="#636871" font-size="20">AI 订阅与数字工具服务</text>
 </svg>
