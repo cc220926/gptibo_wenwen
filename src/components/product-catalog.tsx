@@ -1,4 +1,5 @@
 import { GptAccountScene } from './gpt-account-scene'
+import { GeminiContactCard } from './gemini-contact-card'
 import { MusePromo } from './muse-promo'
 import { CodexCreditsScene } from './codex-credits-scene'
 import '@/styles/service-product.css'
@@ -40,7 +41,7 @@ function CatalogSkeleton() {
   </div>
 }
 
-export function ProductCatalog({ onHelp, onOrders, onNavigate, offers, catalogReady, error, productOrder = [], hiddenProductIds = [] }: { catalogReady: boolean; error?: string; productOrder?: readonly string[]; hiddenProductIds?: readonly string[]; onHelp: () => void; onOrders: () => void; onNavigate: (page: string) => void; offers: CatalogPlan[] }) {
+export function ProductCatalog({ onHelp, onOrders, onNavigate, onGeminiContact, offers, catalogReady, error, productOrder = [], hiddenProductIds = [] }: { catalogReady: boolean; error?: string; productOrder?: readonly string[]; hiddenProductIds?: readonly string[]; onHelp: () => void; onOrders: () => void; onNavigate: (page: string) => void; onGeminiContact?: () => void; offers: CatalogPlan[] }) {
   const { t } = useStorefrontI18n()
   const [category, setCategory] = useState('all')
   const [query, setQuery] = useState('')
@@ -57,7 +58,7 @@ export function ProductCatalog({ onHelp, onOrders, onNavigate, offers, catalogRe
   const chatgpt = matches('ai', 'ChatGPT Plus Pro')
   const gmail = matches('mail', 'Gmail 邮箱账号 email accounts 2FA')
   const upcoming = UPCOMING_PRODUCTS.filter(p => matches('ai', p.name))
-  const memberships = Object.entries(EMAIL_PRODUCTS).filter(([, p]) => p.productId !== 'gmail' && matches(p.productId === 'gemini' ? 'ai' : 'learning', p.name + (p.productId === 'duolingo' ? ' Duolingo' : '')))
+  const memberships = Object.entries(EMAIL_PRODUCTS).filter(([, p]) => p.productId !== 'gmail' && !(p.productId === 'gemini' && onGeminiContact) && matches(p.productId === 'gemini' ? 'ai' : 'learning', p.name + (p.productId === 'duolingo' ? ' Duolingo' : '')))
   const xgift = matches('tool', 'X Premium 推特 Twitter 会员赠送')
   const xOffers = offers.filter(p => p.product_id === 'x-premium')
   const xAvailable = xOffers.some(p => p.enabled)
@@ -93,6 +94,7 @@ export function ProductCatalog({ onHelp, onOrders, onNavigate, offers, catalogRe
     const card = cards.find(item => item.id === id)
     return card?.node && !hiddenProductIds.includes(id) ? [card] : []
   })
+  if (onGeminiContact && matches('ai', 'Gemini Pro 谷歌 Google 人工交付')) ordered.push({ id: 'gemini-contact', node: <GeminiContactCard onContact={onGeminiContact} /> })
   const arranged = placeMuseBelowSms(ordered, serviceOffers.find(isMuseOffer)?.product_id)
   const groups: typeof arranged[] = []
   for (const card of arranged) {

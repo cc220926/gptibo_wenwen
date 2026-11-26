@@ -54,7 +54,7 @@ const smsFaq = [
 ]
 const generalFaq = [
   ['如何购买？', '选择服务，再进入详情页选择套餐。下单需填写可接收邮件的邮箱，服务开放情况以商品详情为准。'],
-  ['目前有哪些商品？', 'ChatGPT 提供 Plus、Pro 5×、Pro 10×、Pro 25× 四档订阅，Gemini Pro 提供 18 个月会员，多邻国提供 1 年会员，两者通过邮件发货；Gmail 提供美国个人白号，付款后自动邮件发货；Codex 提供按次接码。Claude 与 Grok 待上架，可登记上线提醒。'],
+  ['目前有哪些商品？', '可在商品目录查看各商品的价格、规格和交付方式，实际供应以当前商店的展示为准。'],
   ['在哪里查看结果？', '通过「我的订单」查看进度或继续服务。订单保存在服务器，也可通过下单邮箱验证找回。'],
   ['退款如何处理？', '在原订单申请售后，平台审核后安排退款。未交付或交付失败可申请全额退款，已完成订单按实际情况审核。'],
 ]
@@ -97,6 +97,7 @@ function App() {
   const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [checkingOut, setCheckingOut] = useState(false)
   const [supportOpen, setSupportOpen] = useState(false)
+  const [geminiSupport, setGeminiSupport] = useState(false)
   const [noticeOpen, setNoticeOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
@@ -157,7 +158,8 @@ function App() {
     if (section) section.scrollIntoView({ behavior: 'auto' })
     else setHelpOpen(true)
   }
-  const openSupport = () => { setSupportOpen(true); void store.refresh(true) }
+  const openSupport = () => { setGeminiSupport(false); setSupportOpen(true); void store.refresh(true) }
+  const openGeminiSupport = () => { setGeminiSupport(true); setSupportOpen(true) }
   const beginPurchase = () => { if (productHidden) return; if (product.id === 'codex-sms' && smsOffer) { beginServicePurchase(smsOffer, false); return } setPurchaseDraft({ plan: plan.id, price: plan.price, purchaseNote: store.catalog.find(item => item.id === plan.id)?.purchase_note, supportsWarranty: store.catalog.find(item => item.id === plan.id)?.supports_warranty !== false }); setAcceptedPlan(product.id === 'chatgpt' ? plan.id : null); setEmailOpen(true); setPurchaseNoticeOpen(product.id !== 'chatgpt'); setCheckoutOpen(true) }
   // Preserve the current step until the popup finishes its exit transition.
   const changeCheckoutOpen = (open: boolean) => { setCheckoutOpen(open) }
@@ -180,7 +182,7 @@ function App() {
       {page === 'store' ? <><section className="store-intro page-width reveal-in">
         <div><h1>{branding?.headline || t('找到适合你的服务。')}</h1><p>{description}</p></div>
         <div className="store-intro-support"><Button variant="ghost" onClick={() => navigate('orders')}><Clock3 size={15} />{t('继续我的订单')}<ArrowRight size={14} /></Button></div>
-        </section><HomeGuidance offers={store.catalog} helpHref={helpHref} onOrders={() => navigate('orders')} onSupport={openSupport} /><ProductCatalog catalogReady={store.catalogReady} error={store.error} hiddenProductIds={store.hiddenProductIds} productOrder={store.productOrder} offers={store.catalog} onHelp={help} onOrders={() => navigate('orders')} onNavigate={navigate} /></> : serviceProductId ? <ServiceProductPage key={serviceProductId} productId={serviceProductId} offers={store.catalog} ready={store.catalogReady} busy={store.busy} checkoutEnabled={store.checkoutEnabled} onBuy={beginServicePurchase} onNavigate={navigate} onSupport={openSupport} /> : isDetail && productHidden ? <section className="empty-orders page-width"><h1>{t('该商品已下架')}</h1><p>{t('商店暂不销售此商品，已有订单可在「我的订单」中继续处理。')}</p><Button onClick={() => navigate('store')}>{t('返回商店')}</Button></section> : isDetail ? <>
+        </section><HomeGuidance offers={store.catalog} helpHref={helpHref} onOrders={() => navigate('orders')} onSupport={openSupport} /><ProductCatalog catalogReady={store.catalogReady} error={store.error} hiddenProductIds={store.hiddenProductIds} productOrder={store.productOrder} offers={store.catalog} onHelp={help} onOrders={() => navigate('orders')} onNavigate={navigate} onGeminiContact={platformBrand ? openGeminiSupport : undefined} /></> : serviceProductId ? <ServiceProductPage key={serviceProductId} productId={serviceProductId} offers={store.catalog} ready={store.catalogReady} busy={store.busy} checkoutEnabled={store.checkoutEnabled} onBuy={beginServicePurchase} onNavigate={navigate} onSupport={openSupport} /> : isDetail && productHidden ? <section className="empty-orders page-width"><h1>{t('该商品已下架')}</h1><p>{t('商店暂不销售此商品，已有订单可在「我的订单」中继续处理。')}</p><Button onClick={() => navigate('store')}>{t('返回商店')}</Button></section> : isDetail ? <>
         <section className="detail-intro page-width reveal-in"><nav className="product-breadcrumb" aria-label="当前位置"><a href={storefrontHref('store')} onClick={event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigate('store') }}>全部商品</a><ChevronRight size={13} /><span aria-current="page">{product.name}</span></nav><h1>{product.name}</h1><p>{product.tagline}</p></section>
         {product.id === 'chatgpt' && showChatGPTActivity && <CustomerHistory key={partnerSlug} partner={partnerSlug} />}
         <PurchaseWorkspace marketingMetric={product.id === 'chatgpt' ? marketingMetric : null} presenceOthers={product.id === 'chatgpt' ? presenceOthers : null} product={product} plans={plans} plan={plan} selected={selected} store={store} setSelected={setSelected} beginPurchase={beginPurchase} help={help} onGuide={() => document.getElementById('how-it-works')?.scrollIntoView({ behavior: 'auto' })} />
@@ -197,7 +199,7 @@ function App() {
     <Dialog open={helpOpen} onOpenChange={setHelpOpen}><DialogContent className="info-dialog catalog-help motion-dialog"><DialogHeader><DialogTitle>{t('购买帮助')}</DialogTitle><DialogDescription>{t('先选择商品，再查看对应套餐和服务流程。')}</DialogDescription></DialogHeader><Accordion className="faq-list">{generalFaq.map(([q, a], i) => <AccordionItem key={t(q)} value={`general-${i}`}><AccordionTrigger>{t(q)}</AccordionTrigger><AccordionContent>{t(a)}</AccordionContent></AccordionItem>)}</Accordion></DialogContent></Dialog>
     <RecoveryDialog open={recoveryOpen} onClose={() => setRecoveryOpen(false)} onUpdated={() => void store.refresh(true)} />
     <PurchaseFlow marketingMetric={marketingMetric} presenceOthers={presenceOthers} onPresenceActivityChange={setCheckingOut} couponAvailable={store.catalog.find(item => item.id === purchaseDraft.plan)?.has_coupons === true} shopSlug={store.partner?.slug} notice={purchaseNoticeOpen ? { purchaseNote: purchaseDraft.purchaseNote, supportsWarranty: purchaseDraft.supportsWarranty, onContinue: () => { setAcceptedPlan(purchaseDraft.plan); setPurchaseNoticeOpen(false) } } : undefined} purchaseNote={purchaseDraft.purchaseNote} supportsWarranty={purchaseDraft.supportsWarranty} paymentMethods={store.paymentMethods} onOrderUpdated={store.acceptOrder} testingEnabled={store.testingEnabled} emailMode={emailOpen} draft={purchaseDraft} initialEmail={store.recoveryEmail} onSubmitEmail={create} pendingAction={store.pendingAction?.id === activeId ? store.pendingAction?.action : undefined} onUpdated={() => void store.refresh(true)} busy={store.busy} error={store.error} order={activeOrder} open={checkoutOpen} onOpenChange={changeCheckoutOpen} onCloseComplete={() => setPurchaseNoticeOpen(false)} onAction={onAction} onOrders={() => { changeCheckoutOpen(false); navigate('orders') }} />
-    <SupportContactsDialog open={supportOpen} onOpenChange={setSupportOpen} contacts={store.supportContacts} name={brandName} error={store.error} onHelp={help} onRetry={() => void store.refresh(true)} />
+    <SupportContactsDialog open={supportOpen} onOpenChange={setSupportOpen} contacts={store.supportContacts} name={brandName} description={geminiSupport ? t('Gemini Pro 由人工交付，不支持站内下单。请联系客服确认套餐与交付方式。') : undefined} error={store.error} onHelp={help} onRetry={() => void store.refresh(true)} />
     <StoreAnnouncement announcement={store.announcement} shop={partnerSlug ?? (platformBrand ? '@platform' : undefined)} page={isDetail ? page : page === 'store' ? 'store' : 'orders'} blocked={store.shopUnavailable || purchaseNoticeOpen || checkoutOpen || recoveryOpen || helpOpen || supportOpen || noticeOpen} />
     <Dialog open={noticeOpen} onOpenChange={setNoticeOpen}><DialogContent className="info-dialog motion-dialog"><DialogHeader><DialogTitle>{t('购买前，先了解。')}</DialogTitle><DialogDescription>{brandName} · {t('服务须知')}</DialogDescription></DialogHeader><ul className="notice-list"><li><Check />{t('选择所需服务，确认套餐、金额与适用范围。Pro 10× 支持新开与续费，Pro 25× 支持新开与自动充值。')}</li><li><ShieldCheck />{t('下单需填写可接收邮件的邮箱，付款与服务进度以订单记录为准。')}</li><li><Monitor />{t('订单可通过邮箱验证跨设备找回。遇到问题，请在原订单申请售后。')}</li></ul><Button onClick={() => setNoticeOpen(false)}>{t('了解了')}</Button></DialogContent></Dialog>
   </div>

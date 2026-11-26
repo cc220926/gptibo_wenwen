@@ -50,11 +50,11 @@ export function SupportContactsPanel({ endpoint, revision = 0, title = '平台�
   </section>
 }
 
-export function SupportContactsDialog({ open, onOpenChange, contacts, name, error, onHelp, onRetry }: { open: boolean; onOpenChange: (open: boolean) => void; contacts?: SupportContacts; name: string; error?: string; onHelp: () => void; onRetry: () => void }) {
+export function SupportContactsDialog({ open, onOpenChange, contacts, name, description, error, onHelp, onRetry }: { open: boolean; onOpenChange: (open: boolean) => void; contacts?: SupportContacts; name: string; description?: string; error?: string; onHelp: () => void; onRetry: () => void }) {
   const { t } = useStorefrontI18n()
   const channels = contacts ? [{ key: 'wechat', label: '微信', value: contacts.wechat }, { key: 'qq', label: 'QQ', value: contacts.qq }, { key: 'email', label: '邮箱', value: contacts.email }].filter(item => item.value) : []
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="support-contacts-dialog motion-dialog">
-    <DialogHeader><DialogTitle>{t('联系支持')}</DialogTitle><DialogDescription>{contacts ? name : t('正在读取商店联系方式…')}</DialogDescription></DialogHeader>
+    <DialogHeader><DialogTitle>{t('联系支持')}</DialogTitle><DialogDescription>{description ?? (contacts ? name : t('正在读取商店联系方式…'))}</DialogDescription></DialogHeader>
     <div className="support-contact-body">
       {!contacts ? <><Feedback error={error ? t(error) : undefined} loading={!error} shape="compact" />{error && <Button variant="outline" onClick={onRetry}>{t('重新读取')}</Button>}</> : channels.length ? <dl className="support-contact-list">{channels.map(item => <div className="support-contact-row" key={item.key}>
         <dt>{t(item.label)}</dt>

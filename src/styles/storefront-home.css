@@ -33,6 +33,13 @@
 .store-pending-price { font-size:12px; color:var(--muted-foreground); }
 .store-action { display:inline-flex; justify-content:center; align-items:center; min-height:34px; padding:0 15px; border-radius:22px; background:var(--primary); color:var(--primary-foreground); font-size:12px; transition:filter .2s; white-space:nowrap; }
 .store-action:hover { filter:brightness(.92); }
+.gemini-contact-art { display:grid; place-items:center; min-height:165px; margin:6px 0 2px; border-radius:16px; }
+.gemini-contact-art .gemini-art { width:92px; height:92px; }
+.gemini-contact-prices { display:flex; flex-wrap:wrap; gap:5px 14px; font-size:17px; font-weight:650; }
+.gemini-contact-prices small { color:var(--muted-foreground); font-size:11px; font-weight:400; }
+.gemini-contact-trigger { cursor:pointer; }
+.gemini-contact-trigger::after { content:''; position:absolute; inset:0; }
+.gemini-contact-card:focus-within { outline:2px solid var(--primary); outline-offset:3px; }
 .store-detail-link { display:inline-flex; align-items:center; gap:5px; min-height:36px; font-size:12px; white-space:nowrap; }
 .store-more { border-radius:22px; font-size:12px; padding-inline:15px; height:34px; }
 .store-deck { height:185px; margin:6px -9px 0; position:relative; isolation:isolate; }
