@@ -1,5 +1,12 @@
 type CatalogCard = { id: string; compact?: boolean }
 
+export function swapGeminiWithCodexCredits<Card extends CatalogCard>(cards: Card[]): Card[] {
+  const gemini = cards.find(card => card.id === 'gemini-contact')
+  const credits = cards.find(card => card.id === 'codex-credits')
+  if (!gemini || !credits) return cards
+  return cards.map(card => card === gemini ? credits : card === credits ? gemini : card)
+}
+
 export function placeMuseBelowSms<Card extends CatalogCard>(cards: Card[], museId?: string): Array<Card & { museColumn?: 1 | 2 }> {
   const muse = cards.find(card => card.id === museId && !card.compact)
   if (!muse || !cards.some(card => card.id === 'codex-sms' && !card.compact)) return cards

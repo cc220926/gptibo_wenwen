@@ -19,7 +19,7 @@ import { Input } from '@/components/ui/input'
 import { UPCOMING_PRODUCTS } from '@/lib/products'
 import { storefrontHref } from '@/lib/storefront-routing'
 import { catalogSubscriptionPlans, catalogStartingPrice, formatCatalogPrice } from '@/lib/catalog-display'
-import { placeMuseBelowSms } from '@/lib/catalog-layout'
+import { placeMuseBelowSms, swapGeminiWithCodexCredits } from '@/lib/catalog-layout'
 import type { CatalogPlan } from '@/lib/api'
 import '@/styles/storefront-home.css'
 
@@ -95,7 +95,7 @@ export function ProductCatalog({ onHelp, onOrders, onNavigate, onGeminiContact, 
     return card?.node && !hiddenProductIds.includes(id) ? [card] : []
   })
   if (onGeminiContact && matches('ai', 'Gemini Pro 谷歌 Google 人工交付')) ordered.push({ id: 'gemini-contact', node: <GeminiContactCard onContact={onGeminiContact} /> })
-  const arranged = placeMuseBelowSms(ordered, serviceOffers.find(isMuseOffer)?.product_id)
+  const arranged = swapGeminiWithCodexCredits(placeMuseBelowSms(ordered, serviceOffers.find(isMuseOffer)?.product_id))
   const groups: typeof arranged[] = []
   for (const card of arranged) {
     const last = groups.at(-1)
