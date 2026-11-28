@@ -70,9 +70,62 @@ ChatGPT Pro 档位对应：Pro 5× = 官方 Pro 100，Pro 10× = 官方 Pro 200�
 
 ## 常用页面
 
+- [价格表](${origin}${pricingPath})
 ${products.map(product => `- [${product.name}](${origin}${product.path})`).join('\n')}
 ${publicArticles.map(article => `- [${article.title}](${origin}/help/${article.slug})`).join('\n')}
 `
+}
+
+// Standalone, server-rendered price list for crawlers that do not run the
+// storefront bundle. Prices and availability come from the same read-only
+// catalog snapshot; ordering still happens on the unchanged product pages.
+const officialTiers: Record<string, string> = { plus: '官方 Plus（$20/月）', 'pro-5x': '官方 Pro 100（$100/月）', 'pro-20x': '官方 Pro 200（$200/月）', 'pro-25x': '官方 Pro 500（$500/月）' }
+const pricingFaq = [
+  { q: '充值需要提供 ChatGPT 账号密码吗？', a: '不需要。付款后在原订单提交要充值账号的 Session 即可，不需要密码或短信验证码。' },
+  { q: '付款后多久到账？', a: '多数订单 3 分钟内完成，进度可在原订单随时查看。' },
+  { q: '有质保吗？', a: '充值到自己账号的 ChatGPT Plus / Pro 订阅享有 30 天质保，从订单显示充值成功时起算。质保订阅本身，不质保封号；多人共享、反向代理、违规使用和主动拒付不在质保范围内。' },
+  { q: '可以开发票吗？', a: '可以开增值税普通发票，从原订单联系客服申请。' },
+  { q: '本站 Pro 各档对应官方哪一档？', a: 'Pro 5× 对应官方 Pro 100，Pro 10× 对应官方 Pro 200，Pro 25× 对应官方 Pro 500。各档额度由 OpenAI 决定，以官方说明为准。' },
+] as const
+export const pricingPath = '/pricing'
+function pricingPage(origin: string, catalog: PublicCatalog, products: PublicProduct[]) {
+  const brand = catalog.platformBranding?.name || '商店'
+  const purchasable = (catalog as { checkoutEnabled?: boolean }).checkoutEnabled !== false
+  const listed = products.map(product => ({ product, offers: product.offers.filter(offer => offer.enabled) })).filter(item => item.offers.length)
+  const tables = listed.map(({ product, offers }) => {
+    const tier = offers.some(offer => officialTiers[offer.id])
+    const rows = offers.map(offer => `<tr><td>${escape(offer.name)}</td>${tier ? `<td>${escape(officialTiers[offer.id] ?? '—')}</td>` : ''}<td class="pricing-price">¥${publicPrice(offer.price_cents)}</td></tr>`).join('')
+    return `<section class="pricing-product" aria-labelledby="pricing-${escape(product.id)}">
+      <h2 id="pricing-${escape(product.id)}">${escape(product.name)}<a href="${escape(product.path)}">查看详情与购买 ›</a></h2>
+      <p>${escape(product.description)}</p>
+      <div class="pricing-table-wrap"><table class="pricing-table"><thead><tr><th scope="col">规格</th>${tier ? '<th scope="col">对应档位</th>' : ''}<th scope="col">价格（人民币）</th></tr></thead><tbody>${rows}</tbody></table></div>
+    </section>`
+  }).join('')
+  const body = `<div class="help-article pricing-page">
+    <nav class="help-article-breadcrumb" aria-label="当前位置"><a href="/">${escape(brand)}</a><span aria-hidden="true">›</span><span aria-current="page">价格表</span></nav>
+    <h1 id="pricing-title">ChatGPT Plus / Pro 代充价格表</h1>
+    <p class="pricing-lead">以下为本站当前在售规格的实时价格，下单时以商品页显示的最终金额为准。</p>
+    ${purchasable ? '' : '<p class="pricing-notice" role="status">商店当前暂停下单，价格仅供参考。</p>'}
+    ${tables || '<p class="pricing-notice">当前没有在售商品。</p>'}
+    <section aria-labelledby="pricing-facts-title"><h2 id="pricing-facts-title">购买说明</h2><ul class="pricing-facts">
+      <li>会员充到你自己的 ChatGPT 账号，支付宝付款，不需要账号密码。</li>
+      <li>多数订单 3 分钟内完成，进度可在原订单查看。</li>
+      <li>充值到自己账号的 ChatGPT 订阅享有 30 天质保；质保订阅，不质保封号。成品号、Codex 点数和接码按各自商品的购买须知处理。</li>
+      <li>可开增值税普通发票。</li>
+    </ul></section>
+    <section class="pricing-faq" aria-labelledby="pricing-faq-title"><h2 id="pricing-faq-title">常见问题</h2>${pricingFaq.map(item => `<h3>${escape(item.q)}</h3><p>${escape(item.a)}</p>`).join('')}</section>
+    <div class="pricing-actions"><a class="pricing-primary" href="/">去商店选购</a><a href="/help/plus-vs-pro">Plus 和 Pro 怎么选</a><a href="/help/">帮助中心</a></div>
+    <p class="public-date">价格随商店实时更新 · 本站是独立服务商，与 OpenAI 没有授权、代理或合作关系。</p>
+  </div>`
+  const url = origin + pricingPath
+  const items: object[] = [
+    { '@type': 'BreadcrumbList', itemListElement: [{ '@type': 'ListItem', position: 1, name: brand, item: origin + '/' }, { '@type': 'ListItem', position: 2, name: '价格表', item: url }] },
+    { '@type': 'FAQPage', mainEntity: pricingFaq.map(item => ({ '@type': 'Question', name: item.q, acceptedAnswer: { '@type': 'Answer', text: item.a } })) },
+  ]
+  if (purchasable) items.push(...listed.map(({ product, offers }) => ({ '@type': 'Product', name: product.name, description: product.description, url: origin + product.path, brand: { '@type': 'Brand', name: brand }, offers: offers.map(offer => ({ '@type': 'Offer', name: offer.name, price: publicPrice(offer.price_cents), priceCurrency: 'CNY', availability: 'https://schema.org/InStock', url: origin + product.path })) })))
+  const title = 'ChatGPT Plus / Pro 代充价格表 · Codex 点数价格 · ' + brand
+  const description = (listed.length ? '实时价格：' + listed.flatMap(({ product, offers }) => offers.slice(0, 2).map(offer => `${product.name} ${offer.name} ¥${publicPrice(offer.price_cents)}`)).slice(0, 4).join('，') + '。' : '') + '支付宝付款，不需要密码，多数 3 分钟内到账，订阅质保 30 天，可开普票。'
+  return { brand, title, description, body, structured: { jsonLd: ld(...items), ogTags: og('website', url, title, description, brand) } }
 }
 
 export function seoOrigin(value?: string) {
@@ -245,7 +298,7 @@ function helpCenter(query: string, base: string) {
         <button type="submit">搜索</button>
       </form>
     </div>
-    <nav class="help-quick-links" aria-label="常用问题"><a href="${base}/help/order-recovery">找回订单</a><a href="${base}/help/session-expired">Session 过期</a><a href="${base}/help/completed-still-free">已完成但未显示会员</a></nav>
+    <nav class="help-quick-links" aria-label="常用问题">${base ? '' : `<a href="${pricingPath}">价格表</a>`}<a href="${base}/help/order-recovery">找回订单</a><a href="${base}/help/session-expired">Session 过期</a><a href="${base}/help/completed-still-free">已完成但未显示会员</a></nav>
     <p class="help-results" data-help-results role="status"${terms.length ? '' : ' hidden'}>${terms.length ? result : ''}</p>
     <div class="help-topics" id="help-topics">${groups}</div>
     <p class="help-order-action">已经下单？ <a href="${base}/orders">回到我的订单</a></p>
@@ -261,9 +314,9 @@ function htmlResponse(request: Request, body: string, status = 200, index = true
   } })
   return secureResponse(request, response)
 }
-function document(title: string, description: string, canonical: string, body: string, brand: string, index: boolean, articleLayout: boolean, base: string, structuredData?: StructuredData) {
+function document(title: string, description: string, canonical: string, body: string, brand: string, index: boolean, articleLayout: boolean, base: string, structuredData?: StructuredData, stylesheet?: string) {
   const structured = structuredData ? structuredData.jsonLd + structuredData.ogTags : ''
-  return `<!doctype html><html lang="zh-CN" data-public-document><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title><meta name="description" content="${escape(description)}"><meta name="robots" content="${index ? 'index, follow' : 'noindex, nofollow'}">${base ? '' : `<link rel="canonical" href="${escape(canonical)}">`}${structured}<link rel="icon" href="/brands/shop.svg"><link rel="stylesheet" href="/help-center-v2.css">${articleLayout ? '<link rel="stylesheet" href="/help-article-v2.css">' : ''}</head><body><header class="public-document-header"><a class="public-store-back" href="${base || '/'}"><span aria-hidden="true">‹</span>返回商店</a><nav aria-label="页面导航"><a href="${base}/orders">我的订单</a></nav></header><main class="public-document">${body}</main>${brand ? `<footer class="public-document-footer">${escape(brand)} · 独立服务商</footer>` : ''}</body></html>`
+  return `<!doctype html><html lang="zh-CN" data-public-document><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title><meta name="description" content="${escape(description)}"><meta name="robots" content="${index ? 'index, follow' : 'noindex, nofollow'}">${base ? '' : `<link rel="canonical" href="${escape(canonical)}">`}${structured}<link rel="icon" href="/brands/shop.svg"><link rel="stylesheet" href="/help-center-v2.css">${articleLayout ? '<link rel="stylesheet" href="/help-article-v2.css">' : ''}${stylesheet ? `<link rel="stylesheet" href="${stylesheet}">` : ''}</head><body><header class="public-document-header"><a class="public-store-back" href="${base || '/'}"><span aria-hidden="true">‹</span>返回商店</a><nav aria-label="页面导航"><a href="${base}/orders">我的订单</a></nav></header><main class="public-document">${body}</main>${brand ? `<footer class="public-document-footer">${escape(brand)} · 独立服务商</footer>` : ''}</body></html>`
 }
 function notFound(request: Request, base = '') {
   return htmlResponse(request, `<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="robots" content="noindex, nofollow"><title>页面不存在</title></head><body><main><h1>页面不存在</h1><p>商品可能已下架，或链接有误。</p><a href="${base || '/'}">返回商店</a> <a href="${base}/orders">查询已有订单</a></main></body></html>`, 404, false)
@@ -295,7 +348,7 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   const isHelp = path === '/help' || path.startsWith('/help/')
   const normalized = path.replace(/\/$/, '') || '/'
   const article = publicArticles.find(a => '/help/' + a.slug === normalized)
-  const validRoute = ['/', '/index.html', '/help', '/sitemap.xml'].includes(normalized) || article || /^\/product\/[a-z0-9_-]+$/i.test(normalized)
+  const validRoute = ['/', '/index.html', '/help', '/sitemap.xml', pricingPath].includes(normalized) || article || /^\/product\/[a-z0-9_-]+$/i.test(normalized)
   if (!validRoute) return notFound(request, base)
   if (isHelp) {
     const canonicalPath = base + (article ? '/help/' + article.slug : '/help/')
@@ -330,6 +383,17 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
     const structured = article && !scope ? structuredDataForHelpArticle(origin, brand, article) : undefined
     return htmlResponse(request, document(brand ? title + ' · ' + brand : title, article?.answer ?? '商品选择、付款后操作、订单找回及售后说明。', origin + canonicalPath, body, brand, index, Boolean(article), base, structured), 200, index)
   }
+  if (normalized === pricingPath && path !== pricingPath) return secureResponse(request, new Response(null, { status: 308, headers: { Location: pricingPath + url.search, 'Cache-Control': 'no-store' } }))
+  if (path === pricingPath) {
+    let page: ReturnType<typeof pricingPage>
+    try {
+      const { catalog } = await publicCatalog(env, origin)
+      page = pricingPage(origin, catalog, publicProducts(catalog))
+    } catch {
+      return secureResponse(request, new Response(request.method === 'HEAD' ? null : '价格表暂时无法读取，请稍后再试。', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow', 'Retry-After': '30' } }))
+    }
+    return htmlResponse(request, document(page.title, page.description, origin + pricingPath, page.body, page.brand, true, true, '', page.structured, '/pricing-v1.css'))
+  }
   const { catalog, fetchedAt, fresh } = await publicCatalog(env, origin)
   const branding = catalog.platformBranding!, products = publicProducts(catalog)
   const brand = branding.name || '商店'
@@ -346,7 +410,7 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   const canonicalPath = normalized === '/index.html' ? '/' : normalized === '/help' ? '/help/' : normalized
   if (path !== canonicalPath) return secureResponse(request, new Response(null, { status: 308, headers: { Location: canonicalPath + url.search, 'Cache-Control': 'no-store' } }))
   if (path === '/sitemap.xml') {
-    const paths = ['/', ...products.map(p => p.path), '/help/', ...publicArticles.map(a => '/help/' + a.slug)]
+    const paths = ['/', pricingPath, ...products.map(p => p.path), '/help/', ...publicArticles.map(a => '/help/' + a.slug)]
     const xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + paths.map(p => {
       const lastmod = p.startsWith('/help/') ? `<lastmod>${publicHelpUpdated}</lastmod>` : ''
       return `<url><loc>${escape(origin + p)}</loc>${lastmod}</url>`

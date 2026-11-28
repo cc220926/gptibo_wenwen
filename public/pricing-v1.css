@@ -1,0 +1,22 @@
+.pricing-page .help-article-breadcrumb [aria-current="page"] { font-size: .875rem; line-height: 30px; }
+.pricing-page h1 { margin-bottom: 12px; }
+.pricing-lead { margin: 0 0 8px; color: var(--help-muted); }
+.pricing-notice { margin: 16px 0 0; padding: 12px 16px; border: 1px solid var(--help-border); border-radius: 12px; background: var(--help-surface); }
+.pricing-product { margin-top: 32px; }
+.pricing-product h2 { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.pricing-product h2 a { font-size: .875rem; font-weight: 500; }
+.pricing-product > p { margin: 0 0 10px; color: var(--help-muted); }
+.pricing-table-wrap { overflow-x: auto; border: 1px solid var(--help-border); border-radius: 12px; background: var(--help-card); }
+.pricing-table { width: 100%; border-collapse: collapse; font-size: .9375rem; }
+.pricing-table th, .pricing-table td { padding: 11px 14px; text-align: left; border-bottom: 1px solid var(--help-border); vertical-align: top; }
+.pricing-table tr:last-child td { border-bottom: 0; }
+.pricing-table th { font-size: .8125rem; font-weight: 600; color: var(--help-muted); background: var(--help-surface); }
+.pricing-table td.pricing-price { white-space: nowrap; font-weight: 600; font-variant-numeric: tabular-nums; }
+.pricing-facts { margin: 8px 0 0; padding-left: 1.2em; }
+.pricing-facts li { margin: 6px 0; }
+.pricing-faq h3 { margin: 18px 0 4px; font-size: 1rem; }
+.pricing-faq p { margin: 0; }
+.pricing-actions { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 28px; }
+.pricing-actions a { display: inline-flex; align-items: center; min-height: 44px; }
+.pricing-actions a.pricing-primary { padding: 0 18px; border-radius: 999px; background: var(--help-action); color: var(--help-action-text); text-decoration: none; }
+@media (max-width: 560px) { .pricing-table th, .pricing-table td { padding: 10px; } }
