@@ -482,13 +482,18 @@ test('blog links appear only on the main store and only when a valid blog origin
   for (const path of ['/help/invoice', '/help/after-sales', '/help/order-recovery']) assert.doesNotMatch(await (await s.get(path)).text(), /延伸教程|blog\.example\.invalid/, path)
   assert.match(await (await s.get('/pricing')).text(), /<a href="https:\/\/blog\.example\.invalid\/">教程笔记<\/a>/)
   assert.match(await (await s.get('/llms.txt')).text(), /\[教程笔记\]\(https:\/\/blog\.example\.invalid\/\)/)
-  const organization = jsonLd(await (await s.get('/')).text()).find(item => item['@type'] === 'Organization')
+  const home = await (await s.get('/')).text()
+  assert.match(home, /<html data-public-seo="true" data-public-origin="https:\/\/shop\.example\.invalid" data-public-blog="https:\/\/blog\.example\.invalid\/"/)
+  assert.match(await (await s.get('/product/chatgpt')).text(), /data-public-blog="https:\/\/blog\.example\.invalid\/"/)
+  assert.doesNotMatch(await (await s.get('/orders')).text(), /data-public-blog/)
+  const organization = jsonLd(home).find(item => item['@type'] === 'Organization')
   assert.deepEqual(organization.sameAs, ['https://blog.example.invalid/'])
   for (const path of ['/r/ABC123/help/', '/s/ABC123/help/', '/r/ABC123/help/plus-vs-pro']) {
     const scoped = await s.get(path)
     assert.equal(scoped.status, 200, path)
     assert.doesNotMatch(await scoped.text(), /blog\.example\.invalid|教程笔记|延伸教程/, path)
   }
+  for (const path of ['/r/ABC123', '/s/ABC123']) assert.doesNotMatch(await (await s.get(path)).text(), /data-public-blog|blog\.example\.invalid/, path)
 
   s.env.STOREFRONT_BLOG_GUIDES = '{not json'
   assert.match(await (await s.get('/help/')).text(), /看教程笔记/)

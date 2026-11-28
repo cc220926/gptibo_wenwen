@@ -73,6 +73,7 @@ export const englishMessages: Readonly<Record<string, string>> = {
   '深色外观': 'Dark mode',
   '浅色外观': 'Light mode',
   '独立服务商': 'Independent service provider',
+  '教程笔记': 'Tutorials',
   '服务须知': 'Service terms',
   '先选择商品，再查看对应套餐和服务流程。': 'Choose a product to explore its plans and delivery process.',
   '如何购买？': 'How do I buy a service?',

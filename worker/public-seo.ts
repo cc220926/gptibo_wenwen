@@ -459,7 +459,7 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   if (!asset.ok) throw new Error('Storefront asset unavailable')
   let html = await asset.text()
   if (!/<div id="root"><\/div>/.test(html)) throw new Error('Unexpected storefront shell')
-  html = html.replace(/<html\b/, `<html data-public-seo="true" data-public-origin="${escape(origin)}"`)
+  html = html.replace(/<html\b/, `<html data-public-seo="true" data-public-origin="${escape(origin)}"${blog ? ` data-public-blog="${escape(blog.home)}"` : ''}`)
     .replace(/<title>[^]*?<\/title>/, () => `<title>${escape(title)}</title>`)
     .replace(/<meta name="description"[^>]*>/, () => `<meta name="description" content="${escape(description)}">`)
     .replace(/<meta name="robots"[^>]*>/, '<meta name="robots" content="index, follow">')
