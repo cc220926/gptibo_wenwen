@@ -33,3 +33,7 @@ html:lang(en) .store-starting-price>small:only-child { white-space:normal; }
 }
 
 .store-layout .header-inner .help-nav[href] { display:flex; text-decoration:none; white-space:nowrap; }
+/* Four header links on the narrowest phones (help + tutorials on the main store). */
+@media(max-width:380px) {
+  .store-layout .header-inner nav { gap:16px; }
+}

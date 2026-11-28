@@ -177,6 +177,7 @@ function App() {
       <nav aria-label={t('主导航')}><button aria-current={page === 'store' || isDetail ? 'page' : undefined} className={page === 'store' || isDetail ? 'nav-link selected' : 'nav-link'} onClick={() => navigate('store')}>{t('全部商品')}</button><button aria-current={page === 'orders' ? 'page' : undefined} className={page === 'orders' ? 'nav-link selected' : 'nav-link'} onClick={() => navigate('orders')}>{t('我的订单')}{orders.length > 0 && <span className="nav-count">{orders.length}</span>}</button>{helpHref
         ? <a className="nav-link help-nav" href={helpHref}>{t('帮助中心')}</a>
         : <button type="button" className="nav-link help-nav" onClick={help}>{t('帮助中心')}</button>}
+        {blogHref && <a className="nav-link help-nav" href={blogHref}>{t('教程笔记')}</a>}
       </nav>
       <div className="header-actions"><Button variant="ghost" className="language-button" lang={locale === 'en' ? 'zh-CN' : 'en'} aria-label={locale === 'en' ? '切换为简体中文' : 'Switch to English'} onClick={() => setLocale(locale === 'en' ? 'zh-CN' : 'en')}>{locale === 'en' ? '中文' : 'EN'}</Button><Button variant="ghost" size="icon" className="theme-button" aria-label={t(dark ? '切换亮色模式' : '切换暗色模式')} onClick={() => setDark(v => !v)}>{dark ? <Sun size={18} /> : <Moon size={18} />}</Button><span className="header-divider" /><Button variant="ghost" className="support-button" aria-label={t('联系支持')} aria-haspopup="dialog" aria-expanded={supportOpen} onClick={openSupport}><LifeBuoy data-icon="inline-start" /><span>{t('联系支持')}</span></Button></div>
     </div></header>
