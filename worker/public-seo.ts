@@ -88,7 +88,7 @@ const pricingFaq = [
   { q: '本站 Pro 各档对应官方哪一档？', a: 'Pro 5× 对应官方 Pro 100，Pro 10× 对应官方 Pro 200，Pro 25× 对应官方 Pro 500。各档额度由 OpenAI 决定，以官方说明为准。' },
 ] as const
 export const pricingPath = '/pricing'
-function pricingPage(origin: string, catalog: PublicCatalog, products: PublicProduct[]) {
+export function pricingPage(origin: string, catalog: PublicCatalog, products: PublicProduct[]) {
   const brand = catalog.platformBranding?.name || '商店'
   const purchasable = (catalog as { checkoutEnabled?: boolean }).checkoutEnabled !== false
   const listed = products.map(product => ({ product, offers: product.offers.filter(offer => offer.enabled) })).filter(item => item.offers.length)
