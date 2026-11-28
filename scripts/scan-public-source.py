@@ -31,8 +31,9 @@ PUBLIC_HOSTS = {
     'www.duolingo.com', 'www.duolingo.cn', 'd35aaqx5ub95lt.cloudfront.net',
 }
 BINARY_ASSETS = {'public/email-logo.png', 'public/email-shop.png', 'src/assets/hero.png'}
-# Reviewed testimonial pixels; changed files must be reviewed again.
+# Reviewed artwork bytes; changed files must be reviewed again.
 REVIEWED_BINARY_ASSETS = {
+    'public/products/claude-api-original-motion.webp': 'd5b7b558607e866f87312ef934296fe55f512fb441244e5833ca0fddc7382230',
     'public/feedback/service-feedback.png': '2bfb81c197fb9831c07cc6fad0637c94b60f9f5a371c3bdec32f0608f1e15505',
     'public/feedback/renewal-inquiry.png': '24ed5dbbfd311321edfabc5eea53c097c9345a8b3c298e040ce0e95045b1009e',
     'public/feedback/refund-conversation.png': 'd83f6e8d2baf5c77941036a8d5fbc4023ac6ea2018045fec1785891085ab7c75',
@@ -86,7 +87,8 @@ def scan(root, files):
             continue
         data = path.read_bytes()
         if name in REVIEWED_BINARY_ASSETS:
-            if hashlib.sha256(data).hexdigest() != REVIEWED_BINARY_ASSETS[name] or not data.startswith(b'\x89PNG\r\n\x1a\n'):
+            expected_format = (data[:4] == b'RIFF' and data[8:12] == b'WEBP') if path.suffix == '.webp' else data.startswith(b'\x89PNG\r\n\x1a\n')
+            if hashlib.sha256(data).hexdigest() != REVIEWED_BINARY_ASSETS[name] or not expected_format:
                 findings.append((name, 0, 'reviewed binary asset changed'))
             continue
         try:
@@ -124,7 +126,10 @@ def scan(root, files):
                     ('tests/muse-native.test.ts', 'ai.aikm.workers.dev', '/guide'),
                     ('tests/muse-native.test.ts', 'sms.llvi.de', '/'),
                 )
-                if not allowed_host(host) and not documented_storefront and not codex_redemption:
+                claude_card = parsed_url.scheme == 'https' and (name, parsed_url.netloc, parsed_url.path) == (
+                    'src/components/product-catalog.tsx', 'aisvip1688.com', '/products/Claude-100',
+                )
+                if not allowed_host(host) and not documented_storefront and not codex_redemption and not claude_card:
                     findings.append((name, line, 'unexpected external host'))
     return sorted(set(findings))
 

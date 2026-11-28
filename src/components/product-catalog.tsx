@@ -96,6 +96,9 @@ export function ProductCatalog({ onHelp, onOrders, onNavigate, onGeminiContact, 
   })
   if (onGeminiContact && matches('ai', 'Gemini Pro 谷歌 Google 人工交付')) ordered.push({ id: 'gemini-contact', node: <GeminiContactCard onContact={onGeminiContact} /> })
   const arranged = swapGeminiWithCodexCredits(placeMuseBelowSms(ordered, serviceOffers.find(isMuseOffer)?.product_id))
+  if (onGeminiContact && matches('tool', 'Claude API 中转')) {
+    arranged.splice(2, 0, { id: 'claude-api-card', node: <article id="claude-api-card" className="store-claude-api-card"><a href="https://aisvip1688.com/products/Claude-100"><img src="/products/claude-api-original-motion.webp" alt="Claude API 中转" width="576" height="384" loading="lazy" decoding="async" /></a></article> })
+  }
   const groups: typeof arranged[] = []
   for (const card of arranged) {
     const last = groups.at(-1)
