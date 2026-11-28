@@ -460,3 +460,41 @@ test('IndexNow ownership file exists only with a valid configured key on the mai
   s.env.INDEXNOW_KEY = 'bad key!'
   assert.notEqual(await (await s.get('/bad key!.txt')).text(), 'bad key!')
 })
+
+test('blog links appear only on the main store and only when a valid blog origin is configured', async t => {
+  const s = await fixture(); t.after(() => s.db.close())
+  const partner = await s.agent('Scoped Shop')
+  s.db.prepare("UPDATE partners SET slug='ABC123' WHERE id=?").run(partner.id)
+  s.env.PARTNER_PRODUCT_IDS = 'chatgpt,codex-credits'
+  const pages = ['/', '/help/', '/help/plus-vs-pro', '/help/invoice', '/pricing', '/llms.txt']
+  for (const path of pages) assert.doesNotMatch(await (await s.get(path)).text(), /blog\.example\.invalid|教程笔记|延伸教程/, path)
+
+  s.env.STOREFRONT_BLOG_ORIGIN = 'https://blog.example.invalid'
+  s.env.STOREFRONT_BLOG_GUIDES = JSON.stringify({
+    'plus-vs-pro': ['/posts/choose-plan', '套餐 <怎样> 选'],
+    invoice: ['//evil.example.invalid/x', '外部地址'],
+    'after-sales': ['/posts/support', ''],
+    'no-such-article': ['/posts/x', '不存在的文章'],
+  })
+  assert.match(await (await s.get('/help/')).text(), /<a href="https:\/\/blog\.example\.invalid\/">看教程笔记<\/a>/)
+  const article = await (await s.get('/help/plus-vs-pro')).text()
+  assert.match(article, /延伸教程<\/h2><ul><li><a href="https:\/\/blog\.example\.invalid\/posts\/choose-plan">套餐 &lt;怎样&gt; 选</)
+  for (const path of ['/help/invoice', '/help/after-sales', '/help/order-recovery']) assert.doesNotMatch(await (await s.get(path)).text(), /延伸教程|blog\.example\.invalid/, path)
+  assert.match(await (await s.get('/pricing')).text(), /<a href="https:\/\/blog\.example\.invalid\/">教程笔记<\/a>/)
+  assert.match(await (await s.get('/llms.txt')).text(), /\[教程笔记\]\(https:\/\/blog\.example\.invalid\/\)/)
+  const organization = jsonLd(await (await s.get('/')).text()).find(item => item['@type'] === 'Organization')
+  assert.deepEqual(organization.sameAs, ['https://blog.example.invalid/'])
+  for (const path of ['/r/ABC123/help/', '/s/ABC123/help/', '/r/ABC123/help/plus-vs-pro']) {
+    const scoped = await s.get(path)
+    assert.equal(scoped.status, 200, path)
+    assert.doesNotMatch(await scoped.text(), /blog\.example\.invalid|教程笔记|延伸教程/, path)
+  }
+
+  s.env.STOREFRONT_BLOG_GUIDES = '{not json'
+  assert.match(await (await s.get('/help/')).text(), /看教程笔记/)
+  assert.doesNotMatch(await (await s.get('/help/plus-vs-pro')).text(), /延伸教程/)
+  for (const bad of ['http://blog.example.invalid', 'https://blog.example.invalid/path', 'javascript:alert(1)', 'not a url']) {
+    s.env.STOREFRONT_BLOG_ORIGIN = bad
+    for (const path of pages) assert.doesNotMatch(await (await s.get(path)).text(), /blog\.example\.invalid|教程笔记|延伸教程/, bad + ' ' + path)
+  }
+})

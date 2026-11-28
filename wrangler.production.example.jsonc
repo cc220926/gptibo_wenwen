@@ -11,6 +11,10 @@
   "vars": {
     // Empty keeps SEO disabled. Set only the verified public main-store origin.
     "STOREFRONT_SEO_ORIGIN": "",
+    // Optional. HTTPS origin of your own tutorial site; empty shows no blog links.
+    "STOREFRONT_BLOG_ORIGIN": "",
+    // Optional JSON: help article slug -> [path on the blog, link title].
+    "STOREFRONT_BLOG_GUIDES": "{}",
     "PARTNER_PRODUCT_IDS": "chatgpt,codex-credits",
     "ORDER_TESTING_ENABLED": "false",
     "TURNSTILE_ENABLED": "false",

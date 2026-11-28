@@ -9,7 +9,7 @@ import { referralCodePattern } from '../shared/partner-link.ts'
 import { publicPrice, publicProductTitle, publicProducts, type PublicCatalog, type PublicProduct } from '../shared/public-storefront.ts'
 import { publicArticles, publicHelpCategories, publicHelpUpdated, type HelpParagraph, type PublicArticle } from '../shared/public-help.ts'
 
-export type SeoEnv = Env & { STOREFRONT_SEO_ORIGIN?: string; INDEXNOW_KEY?: string; SEO_CATALOG_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> } }
+export type SeoEnv = Env & { STOREFRONT_SEO_ORIGIN?: string; STOREFRONT_BLOG_ORIGIN?: string; STOREFRONT_BLOG_GUIDES?: string; INDEXNOW_KEY?: string; SEO_CATALOG_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> } }
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 
 type StructuredData = { jsonLd: string; ogTags: string }
@@ -17,9 +17,9 @@ type StructuredData = { jsonLd: string; ogTags: string }
 const ld = (...items: object[]) => items.map(item => `<script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', ...item }).replace(/</g, '\\u003c')}</script>`).join('')
 const og = (type: string, url: string, title: string, description: string, site: string) =>
   `<meta property="og:type" content="${type}"><meta property="og:url" content="${escape(url)}"><meta property="og:title" content="${escape(title)}"><meta property="og:description" content="${escape(description)}">${site ? `<meta property="og:site_name" content="${escape(site)}">` : ''}<meta property="og:locale" content="zh_CN"><meta name="twitter:card" content="summary">`
-function structuredDataForHome(origin: string, brand: string, title: string, description: string): StructuredData {
+function structuredDataForHome(origin: string, brand: string, title: string, description: string, blogHome?: string): StructuredData {
   return {
-    jsonLd: ld({ '@type': 'Organization', name: brand, url: origin + '/', description }, { '@type': 'WebSite', name: brand, url: origin + '/', inLanguage: 'zh-CN' }),
+    jsonLd: ld({ '@type': 'Organization', name: brand, url: origin + '/', description, ...(blogHome ? { sameAs: [blogHome] } : {}) }, { '@type': 'WebSite', name: brand, url: origin + '/', inLanguage: 'zh-CN' }),
     ogTags: og('website', origin + '/', title, description, brand),
   }
 }
@@ -48,7 +48,7 @@ function structuredDataForHelpArticle(origin: string, brand: string, article: Pu
   }
 }
 // Plain-text summary for AI search engines, generated from the live catalog.
-function llmsText(origin: string, catalog: PublicCatalog, products: PublicProduct[]) {
+function llmsText(origin: string, catalog: PublicCatalog, products: PublicProduct[], blogHome?: string) {
   const brand = catalog.platformBranding?.name || '商店'
   const lines = products.flatMap(product => product.offers.filter(offer => offer.enabled).map(offer => `- ${product.name} ${offer.name}：¥${publicPrice(offer.price_cents)}`))
   return `# ${brand}（${new URL(origin).host}）
@@ -73,7 +73,7 @@ ChatGPT Pro 档位对应：Pro 5× = 官方 Pro 100，Pro 10× = 官方 Pro 200�
 - [价格表](${origin}${pricingPath})
 ${products.map(product => `- [${product.name}](${origin}${product.path})`).join('\n')}
 ${publicArticles.map(article => `- [${article.title}](${origin}/help/${article.slug})`).join('\n')}
-`
+${blogHome ? `- [教程笔记](${blogHome})\n` : ''}`
 }
 
 // Standalone, server-rendered price list for crawlers that do not run the
@@ -92,7 +92,7 @@ export const pricingPath = '/pricing'
 // without a valid value the route does not exist. Submissions are sent by
 // scripts/seo/push-indexing.mjs, never by the Worker.
 export const indexNowKey = (value?: string) => value && /^[A-Za-z0-9-]{8,128}$/.test(value) ? value : null
-export function pricingPage(origin: string, catalog: PublicCatalog, products: PublicProduct[]) {
+export function pricingPage(origin: string, catalog: PublicCatalog, products: PublicProduct[], blogHome?: string) {
   const brand = catalog.platformBranding?.name || '商店'
   const purchasable = (catalog as { checkoutEnabled?: boolean }).checkoutEnabled !== false
   const listed = products.map(product => ({ product, offers: product.offers.filter(offer => offer.enabled) })).filter(item => item.offers.length)
@@ -118,7 +118,7 @@ export function pricingPage(origin: string, catalog: PublicCatalog, products: Pu
       <li>可开增值税普通发票。</li>
     </ul></section>
     <section class="pricing-faq" aria-labelledby="pricing-faq-title"><h2 id="pricing-faq-title">常见问题</h2>${pricingFaq.map(item => `<h3>${escape(item.q)}</h3><p>${escape(item.a)}</p>`).join('')}</section>
-    <div class="pricing-actions"><a class="pricing-primary" href="/">去商店选购</a><a href="/help/plus-vs-pro">Plus 和 Pro 怎么选</a><a href="/help/">帮助中心</a></div>
+    <div class="pricing-actions"><a class="pricing-primary" href="/">去商店选购</a><a href="/help/plus-vs-pro">Plus 和 Pro 怎么选</a><a href="/help/">帮助中心</a>${blogHome ? `<a href="${escape(blogHome)}">教程笔记</a>` : ''}</div>
     <p class="public-date">价格随商店实时更新 · 本站是独立服务商，与 OpenAI 没有授权、代理或合作关系。</p>
   </div>`
   const url = origin + pricingPath
@@ -130,6 +130,28 @@ export function pricingPage(origin: string, catalog: PublicCatalog, products: Pu
   const title = 'ChatGPT Plus / Pro 代充价格表 · Codex 点数价格 · ' + brand
   const description = (listed.length ? '实时价格：' + listed.flatMap(({ product, offers }) => offers.slice(0, 2).map(offer => `${product.name} ${offer.name} ¥${publicPrice(offer.price_cents)}`)).slice(0, 4).join('，') + '。' : '') + '支付宝付款，不需要密码，多数 3 分钟内到账，订阅质保 30 天，可开普票。'
   return { brand, title, description, body, structured: { jsonLd: ld(...items), ogTags: og('website', url, title, description, brand) } }
+}
+
+// Optional links to the operator's own tutorial site, shown on the main store
+// only. Both values are deployment variables: without a valid origin nothing is
+// rendered, and a malformed guide map only removes the per-article links.
+type BlogGuide = { href: string; title: string }
+export function blogLinks(env: SeoEnv) {
+  const origin = seoOrigin(env.STOREFRONT_BLOG_ORIGIN)
+  if (!origin) return null
+  const guides = new Map<string, BlogGuide>()
+  try {
+    const parsed: unknown = JSON.parse(env.STOREFRONT_BLOG_GUIDES || '{}')
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) for (const article of publicArticles) {
+      const entry = (parsed as Record<string, unknown>)[article.slug]
+      if (!Array.isArray(entry)) continue
+      const [path, title] = entry as unknown[]
+      if (typeof path !== 'string' || !/^\/[A-Za-z0-9/_-]{1,120}$/.test(path) || path.includes('//')) continue
+      if (typeof title !== 'string' || !title.trim() || title.length > 80) continue
+      guides.set(article.slug, { href: origin + path, title: title.trim() })
+    }
+  } catch { /* keep the blog home link */ }
+  return { home: origin + '/', guides }
 }
 
 export function seoOrigin(value?: string) {
@@ -227,7 +249,7 @@ function helpParagraph(paragraph: HelpParagraph) {
   const spans = typeof paragraph === 'string' ? [paragraph] : paragraph
   return spans.map(span => typeof span === 'string' ? escape(span) : `<code>${escape(span.code)}</code>`).join('')
 }
-function helpArticle(article: PublicArticle, base: string, productHref?: string) {
+function helpArticle(article: PublicArticle, base: string, productHref?: string, guide?: BlogGuide) {
   const category = publicHelpCategories.find(group => group.id === article.category)!
   const categoryArticles = publicArticles.filter(item => item.category === article.category)
   const position = categoryArticles.indexOf(article)
@@ -272,11 +294,12 @@ function helpArticle(article: PublicArticle, base: string, productHref?: string)
         <ul>${publicHelpCategories.map(group => `<li><a href="${base}/help/#help-${group.id}"${group.id === category.id ? ' aria-current="true"' : ''}>${escape(group.title)}<span aria-hidden="true">›</span></a></li>`).join('')}</ul>
       </nav>
       ${related.length ? `<section class="help-topic" aria-labelledby="related-help-title"><h2 id="related-help-title">相关问题</h2><ul>${related.map(item => `<li>${helpArticleLink(item, base)}</li>`).join('')}</ul></section>` : ''}
+      ${guide ? `<section class="help-topic" aria-labelledby="blog-guide-title"><h2 id="blog-guide-title">延伸教程</h2><ul><li><a href="${escape(guide.href)}">${escape(guide.title)}<span aria-hidden="true">›</span></a></li></ul></section>` : ''}
     </aside>
   </div>`
 }
 
-function helpCenter(query: string, base: string) {
+function helpCenter(query: string, base: string, blogHome?: string) {
   const normalize = (text: string) => text.normalize('NFKC').toLowerCase()
   const terms = normalize(query).split(/[\s,，、。？！?!：:]+/).filter(Boolean)
   let count = 0
@@ -307,6 +330,7 @@ function helpCenter(query: string, base: string) {
     <p class="help-results" data-help-results role="status"${terms.length ? '' : ' hidden'}>${terms.length ? result : ''}</p>
     <div class="help-topics" id="help-topics">${groups}</div>
     <p class="help-order-action">已经下单？ <a href="${base}/orders">回到我的订单</a></p>
+    ${blogHome ? `<p class="help-order-action">想先弄清怎么选、怎么用？ <a href="${escape(blogHome)}">看教程笔记</a></p>` : ''}
   </div><script src="/help-search.js" defer></script>`
 }
 function htmlResponse(request: Request, body: string, status = 200, index = true) {
@@ -335,6 +359,7 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   if (scopedHelp && !scope) return notFound(request)
   const base = scope?.base ?? ''
   const path = scope?.path ?? url.pathname
+  const blog = scope ? null : blogLinks(env)
   if (path === '/robots.txt') {
     const body = `User-agent: GPTBot\nDisallow: /\n\nUser-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /admin\nDisallow: /orders\nDisallow: /partner\nDisallow: /join\nDisallow: /r/\nDisallow: /s/\nDisallow: /__preview/\n\nSitemap: ${origin}/sitemap.xml\n`
     return secureResponse(request, new Response(request.method === 'HEAD' ? null : body, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } }))
@@ -343,7 +368,7 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
     let text: string
     try {
       const { catalog } = await publicCatalog(env, origin)
-      text = llmsText(origin, catalog, publicProducts(catalog))
+      text = llmsText(origin, catalog, publicProducts(catalog), blog?.home)
     } catch {
       return secureResponse(request, new Response('Temporarily unavailable', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'Retry-After': '30' } }))
     }
@@ -387,7 +412,7 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
       // The main-store help page remains available without loading a catalog.
       if (related) productHref = cached ? publicProducts(cached).find(product => product.path === related)?.path : `${related}?from=help`
     }
-    const body = article ? helpArticle(article, base, productHref) : helpCenter(query, base)
+    const body = article ? helpArticle(article, base, productHref, blog?.guides.get(article.slug)) : helpCenter(query, base, blog?.home)
     const title = article?.title ?? '帮助中心'
     const structured = article && !scope ? structuredDataForHelpArticle(origin, brand, article) : undefined
     return htmlResponse(request, document(brand ? title + ' · ' + brand : title, article?.answer ?? '商品选择、付款后操作、订单找回及售后说明。', origin + canonicalPath, body, brand, index, Boolean(article), base, structured), 200, index)
@@ -397,7 +422,7 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
     let page: ReturnType<typeof pricingPage>
     try {
       const { catalog } = await publicCatalog(env, origin)
-      page = pricingPage(origin, catalog, publicProducts(catalog))
+      page = pricingPage(origin, catalog, publicProducts(catalog), blog?.home)
     } catch {
       return secureResponse(request, new Response(request.method === 'HEAD' ? null : '价格表暂时无法读取，请稍后再试。', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow', 'Retry-After': '30' } }))
     }
@@ -428,7 +453,7 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
   }
   const title = product ? publicProductTitle(product, brand) : branding.pageTitle || brand
   const description = product?.description ?? branding.description
-  const structuredData = product ? structuredDataForProduct(origin, brand, product, title, (catalog as { checkoutEnabled?: boolean }).checkoutEnabled !== false) : structuredDataForHome(origin, brand, title, description)
+  const structuredData = product ? structuredDataForProduct(origin, brand, product, title, (catalog as { checkoutEnabled?: boolean }).checkoutEnabled !== false) : structuredDataForHome(origin, brand, title, description, blog?.home)
   const bootstrap = fresh ? `<script id="storefront-public-catalog" type="application/json">${serializePublicBootstrap(catalog, origin, fetchedAt)}</script>` : ''
   const asset = await env.ASSETS.fetch(new Request(origin + '/', { method: 'GET' }))
   if (!asset.ok) throw new Error('Storefront asset unavailable')
