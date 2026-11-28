@@ -9,7 +9,7 @@ import { referralCodePattern } from '../shared/partner-link.ts'
 import { publicPrice, publicProductTitle, publicProducts, type PublicCatalog, type PublicProduct } from '../shared/public-storefront.ts'
 import { publicArticles, publicHelpCategories, publicHelpUpdated, type HelpParagraph, type PublicArticle } from '../shared/public-help.ts'
 
-export type SeoEnv = Env & { STOREFRONT_SEO_ORIGIN?: string; SEO_CATALOG_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> } }
+export type SeoEnv = Env & { STOREFRONT_SEO_ORIGIN?: string; INDEXNOW_KEY?: string; SEO_CATALOG_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> } }
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 
 type StructuredData = { jsonLd: string; ogTags: string }
@@ -88,6 +88,10 @@ const pricingFaq = [
   { q: '本站 Pro 各档对应官方哪一档？', a: 'Pro 5× 对应官方 Pro 100，Pro 10× 对应官方 Pro 200，Pro 25× 对应官方 Pro 500。各档额度由 OpenAI 决定，以官方说明为准。' },
 ] as const
 export const pricingPath = '/pricing'
+// IndexNow ownership file. The key is a production variable, never committed;
+// without a valid value the route does not exist. Submissions are sent by
+// scripts/seo/push-indexing.mjs, never by the Worker.
+export const indexNowKey = (value?: string) => value && /^[A-Za-z0-9-]{8,128}$/.test(value) ? value : null
 export function pricingPage(origin: string, catalog: PublicCatalog, products: PublicProduct[]) {
   const brand = catalog.platformBranding?.name || '商店'
   const purchasable = (catalog as { checkoutEnabled?: boolean }).checkoutEnabled !== false
@@ -216,7 +220,8 @@ function shopScope(pathname: string) {
 // This is a loading view for everyone, not a second storefront or crawler-only
 // product document. The unchanged React entry replaces it when it commits.
 // Recovery links remain usable when the application bundle cannot execute.
-const startupShell = (brand: string) => `<main class="storefront-startup" data-storefront-startup aria-labelledby="storefront-startup-title"><p class="storefront-startup-brand">${escape(brand)}</p><p id="storefront-startup-title" class="storefront-startup-title" role="status">正在加载页面…</p><div class="storefront-startup-skeleton" aria-hidden="true"><span></span><div><i></i><i></i><i></i><i></i></div></div><p class="storefront-startup-recovery">如果页面没有继续打开，可以<a href="">重新加载</a>，或<a href="/help/">查看购买指南</a>。</p><noscript><p>当前浏览器未启用 JavaScript，启用后即可选购。</p></noscript></main>`
+// The price-list link carries no prices, so first paint stays a loading view.
+const startupShell = (brand: string) => `<main class="storefront-startup" data-storefront-startup aria-labelledby="storefront-startup-title"><p class="storefront-startup-brand">${escape(brand)}</p><p id="storefront-startup-title" class="storefront-startup-title" role="status">正在加载页面…</p><div class="storefront-startup-skeleton" aria-hidden="true"><span></span><div><i></i><i></i><i></i><i></i></div></div><p class="storefront-startup-recovery">如果页面没有继续打开，可以<a href="">重新加载</a>，或查看<a href="/help/">购买指南</a>和<a href="${pricingPath}">价格表</a>。</p><noscript><p>当前浏览器未启用 JavaScript，启用后即可选购。</p></noscript></main>`
 const helpArticleLink = ({ slug, title }: PublicArticle, base: string) => `<a href="${base}/help/${slug}">${escape(title)}<span aria-hidden="true">›</span></a>`
 function helpParagraph(paragraph: HelpParagraph) {
   const spans = typeof paragraph === 'string' ? [paragraph] : paragraph
@@ -343,6 +348,10 @@ export async function publicStorefront(request: Request, env: SeoEnv): Promise<R
       return secureResponse(request, new Response('Temporarily unavailable', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'Retry-After': '30' } }))
     }
     return secureResponse(request, new Response(request.method === 'HEAD' ? null : text, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } }))
+  }
+  const ownershipKey = indexNowKey(env.INDEXNOW_KEY)
+  if (ownershipKey && !scope && path === '/' + ownershipKey + '.txt') {
+    return secureResponse(request, new Response(request.method === 'HEAD' ? null : ownershipKey, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' } }))
   }
   if (path !== '/sitemap.xml' && path !== '/index.html' && assetPath(path)) return null
   const isHelp = path === '/help' || path.startsWith('/help/')

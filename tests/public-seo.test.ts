@@ -443,3 +443,20 @@ test('partner storefronts do not get the main-store pricing document', async t =
   for (const path of ['/r/ABC123/pricing', '/s/ABC123/pricing']) assert.doesNotMatch(await (await s.get(path)).text(), /代充价格表|pricing-v1\.css/)
   assert.doesNotMatch(await scopedHelp.text(), /href="\/pricing"/)
 })
+
+test('IndexNow ownership file exists only with a valid configured key on the main store', async t => {
+  const s = await fixture(); t.after(() => s.db.close())
+  const key = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'
+  assert.doesNotMatch(await (await s.get('/' + key + '.txt')).text(), new RegExp('^' + key + '$'))
+  s.env.INDEXNOW_KEY = key
+  const response = await s.get('/' + key + '.txt')
+  assert.equal(response.status, 200)
+  assert.match(response.headers.get('Content-Type')!, /text\/plain/)
+  assert.match(response.headers.get('X-Robots-Tag')!, /noindex/)
+  assert.equal(await response.text(), key)
+  assert.equal(await (await s.get('/' + key + '.txt', 'HEAD')).text(), '')
+  assert.notEqual(await (await s.get('/wrongkey123.txt')).text(), key)
+  assert.notEqual(await (await s.get('/r/ABC123/' + key + '.txt')).text(), key)
+  s.env.INDEXNOW_KEY = 'bad key!'
+  assert.notEqual(await (await s.get('/bad key!.txt')).text(), 'bad key!')
+})

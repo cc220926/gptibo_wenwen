@@ -25,6 +25,7 @@ for (const path of ['/', '/product/chatgpt']) {
       assert.match(root, /role="status"/)
       assert.match(root, /href=""[^>]*>重新加载<\/a>/, 'Reload works even when the application script fails')
       assert.match(root, /href="\/help\/"/)
+      assert.match(root, /<a href="\/pricing">价格表<\/a>/, 'Crawlers can reach the server-rendered price list from the loading view')
       assert.match(root, /<noscript>[\s\S]*JavaScript[\s\S]*<\/noscript>/)
       assert.doesNotMatch(root, /<script\b|on(?:click|load|error)=|style="[^"]*(?:display\s*:\s*none|visibility\s*:\s*hidden)/i)
       assert.match(html, /rel="canonical"/)

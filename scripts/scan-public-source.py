@@ -25,6 +25,8 @@ PUBLIC_HOSTS = {
     'www.sitemaps.org',
     # JSON-LD vocabulary identifier in public HTML, never fetched by the Worker.
     'schema.org',
+    # Operator-run indexing notifications (scripts/seo/push-indexing.mjs); the Worker never calls them.
+    'api.indexnow.org', 'data.zz.baidu.com',
     'www.w3.org', 'www.apache.org', 'ui.shadcn.com', 'transitions.dev', 'vite.dev',
     'www.duolingo.com', 'www.duolingo.cn', 'd35aaqx5ub95lt.cloudfront.net',
 }
